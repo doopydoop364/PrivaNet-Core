@@ -39,6 +39,10 @@ export interface Store {
   findSubmission(applicationId: string, key: string): JobRecord | undefined;
   saveJob(job: JobRecord): void;
   listPendingJobs(): JobRecord[];
+  /** QUEUED plus LEASED jobs of one application (used for its queue quota). */
+  countPendingJobs(applicationId: string): number;
+  /** Deletes COMPLETED/FAILED jobs finished at or before the cutoff and returns how many were removed. */
+  deleteTerminalJobs(completedBefore: number): number;
   prune(now: number): void;
   close(): void;
 }

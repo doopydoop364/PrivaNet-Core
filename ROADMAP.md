@@ -14,7 +14,7 @@ A local machine is just another PrivaNode. Early versions may run every componen
 - **Planned** — accepted direction, not yet implemented.
 - **Research** — promising idea that still needs design/measurement before implementation.
 
-## Phase 1 — Core Foundation — Current
+## Phase 1 — Core Foundation — Complete (v0.1.0; operational items closed in v0.2.1)
 
 Goal: establish a small, secure, testable PrivaNet control plane.
 
@@ -43,9 +43,9 @@ A local application can submit a strictly typed job using the PrivaNet SDK, the 
 
 PrivaNet must not provide arbitrary remote shell, arbitrary script execution, unrestricted anonymous proxying, or generic download-and-execute functionality.
 
-Status (audited; CI matrix of Linux/macOS/Windows on Node 24 and 26 passing as of PR #1): the deliverables above are **implemented** in code and covered by automated tests, with `system.echo.v1` as the only job type. Job types are defined by a single versioned registry that drives wire schemas, capabilities and node handlers. Phase 1 stays **Current** until the items in `docs/implementation-report.md` under "Remaining v0.1 work" are done: TLS/reverse-proxy deployment review, backup/recovery exercise, and independent security review. Not yet implemented within Phase 1's scope: node-key rotation (application credentials rotate in place), and a PostgreSQL store adapter (SQLite only).
+Status: **complete.** The deliverables above are implemented in code and covered by automated tests (CI matrix of Linux/macOS/Windows on Node 24 and 26), with a single versioned job registry driving wire schemas, capabilities and node handlers. The operational items originally left open were addressed in v0.2.1: the reverse-proxy/TLS deployment review and runbook ([docs/deployment.md](docs/deployment.md)), `npm run backup` with a restore test, and job retention plus a per-application queue quota. Explicitly **not** part of this phase and tracked later: in-place node-key rotation (revoke and re-enroll works; credential rotation is Phase 10), a PostgreSQL store adapter (a prerequisite for the Phase 8 ledger and for coordinator recovery work in Phase 10), and an **independent** security review, which needs people outside this project (Phase 11). A restore rehearsal on the operator's own infrastructure remains the operator's job.
 
-## Phase 2 — Adaptive Resource Engine — Current (core implemented in v0.2.0; remainder planned)
+## Phase 2 — Adaptive Resource Engine — Complete (v0.2.1)
 
 Goal: allow PrivaNode to use genuinely spare machine resources while keeping the computer owner in control.
 
@@ -53,9 +53,9 @@ Principle:
 
 > User workloads always take priority over PrivaNet workloads.
 
-Status: the memory/CPU core is **implemented** (operator policy, adaptive smoothed budgets with hysteresis, schedules, battery policy on Linux, heartbeat resource telemetry, job resource declarations, resource-aware scheduling, preemption and release of preemptible jobs, graceful draining with `DRAINING` and `OFFLINE_EXPECTED`). Still **planned** within this phase: disk-I/O and bandwidth/transfer limits, network-pressure awareness, checkpointing, schedule-aware placement of long jobs, battery detection beyond Linux, and tuning against real workloads. Details in `docs/RESOURCES.md`.
+Status: **complete as of v0.2.1.** v0.2.0 delivered the memory/CPU core (operator policy, adaptive smoothed budgets with hysteresis, schedules, battery policy, heartbeat resource telemetry, job resource declarations, resource-aware scheduling, preemption and release, graceful draining with `DRAINING` and `OFFLINE_EXPECTED`). v0.2.1 added disk-space and disk-I/O limits, bandwidth and monthly-transfer limits with network-pressure awareness, node-local checkpoint/resume, schedule-aware placement of long jobs, battery detection on macOS and Windows, a portable graceful-drain request for Windows, and a real long-running checkpointable workload (`system.hashchain.v1`). Known limits (node-local checkpoints only, disk/network load sampled on Linux only, measured per-job use deferred to Phase 7, thermal signals not collected, calibration from a single development machine) are listed in `docs/RESOURCES.md`; none is a phase requirement. Later tuning against real PrivaSearch and storage workloads belongs to those phases.
 
-Planned features (see status above for what is done):
+Features (all implemented as of v0.2.1):
 
 - adaptive CPU contribution
 - adaptive RAM contribution

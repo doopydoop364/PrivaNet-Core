@@ -87,8 +87,11 @@ Requests are ≤32 KiB and responses ≤512 KiB; transport timeout defaults to 1
 redirects are refused. Challenges expire in 60s (service policy), node sessions
 in 5min, and grants specify ≤24h validity. Challenge/invalid-auth attempts have
 bounded per-address limits; the control plane supports at most 1000 registered
-nodes/pending challenges in this initial implementation. Queues/results need
-operator retention and quotas before broader deployment.
+nodes/pending challenges in this initial implementation. Each application may hold at most
+`PRIVANET_MAX_PENDING_PER_APP` (default 10000) queued or leased jobs (further submissions get
+429 `QUEUE_LIMIT`), and finished jobs are deleted `PRIVANET_RETENTION_MS` (default 30 days; 0 keeps
+them) after completion. `PRIVANET_AUTH_REQUESTS_PER_MINUTE` (default 120) sets the per-address
+authentication limit. See [deployment](deployment.md) for TLS/reverse-proxy guidance.
 
 ## Owner resource policy (PrivaNode)
 
@@ -111,11 +114,19 @@ operator retention and quotas before broader deployment.
     { "days": [0, 6], "from": "00:00", "to": "00:00", "level": "ADAPTIVE" }
   ],
   "capabilityLimits": { "system.echo.v1": { "maxMemoryBytes": 16777216 } },
+  "maxDiskBytes": 1073741824,
+  "reserveDiskBytes": 5368709120,
+  "maxDiskIo": "medium",
+  "maxBandwidthBytesPerSec": 1048576,
+  "monthlyTransferBytes": 10737418240,
+  "linkBytesPerSec": 12500000,
   "preemptAfterMs": 10000
 }
 ```
 
-Days are 0 (Sunday) to 6, times are the machine's local time, first matching rule wins, and `to <= from` wraps past midnight (`from == to` is the whole day). `OFF` pauses contribution. Budgets never exceed the ceilings or the reserve; pressure states use enter/exit thresholds, so a momentary spike does not pause work while sustained pressure does (new work stops at once, preemptible running jobs are released after `preemptAfterMs`). SIGTERM/SIGINT drain the node: it stops taking work, finishes the current job, announces `DRAINING`, says goodbye and exits. After `PRIVANODE_DRAIN_TIMEOUT_MS` (default 30000) or on a second signal the running job is handed back instead. On Windows the process is normally terminated without a graceful signal, so the Coordinator sees an unexplained disappearance there. `PRIVANET_MAX_RELEASES` (Coordinator) bounds voluntary hand-backs per job.
+Days are 0 (Sunday) to 6, times are the machine's local time, first matching rule wins, and `to <= from` wraps past midnight (`from == to` is the whole day). `OFF` pauses contribution. Budgets never exceed the ceilings or the reserve; pressure states use enter/exit thresholds, so a momentary spike does not pause work while sustained pressure does (new work stops at once, preemptible running jobs are released after `preemptAfterMs`). SIGTERM/SIGINT drain the node: it stops taking work, finishes the current job, announces `DRAINING`, says goodbye and exits. After `PRIVANODE_DRAIN_TIMEOUT_MS` (default 30000) or on a second signal the running job is handed back instead. Windows never delivers SIGTERM; the node also drains on `SIGBREAK` (Ctrl+Break) and `SIGHUP` (console closed), and on every platform creating a file named `DRAIN` in `PRIVANODE_STATE_DIR` (for example `New-Item $env:PRIVANODE_STATE_DIR\DRAIN`) asks the running node to drain the same way; the file is consumed, and one left over from while the node was down is ignored. Anyone who can write the private state directory can drain the node, which is the owner's own trust boundary. Killing the process without either is still an unexplained disappearance.
+
+Disk and network keys: `maxDiskBytes`/`reserveDiskBytes` bound scratch disk (free space is measured on the state directory's volume), `maxDiskIo` caps the disk-I/O class offered, `maxBandwidthBytesPerSec` (null = unlimited) and `monthlyTransferBytes` (null = unlimited, UTC month, persisted in `transfer.json`) drive the transfer meter, and `linkBytesPerSec` enables network-pressure awareness. Checkpoints live in `checkpoints/` under the state directory and are pruned after 24 hours. To try the long-running job: `PRIVANET_JOB_TYPES=system.echo.v1,system.hashchain.v1 npm run admin -- application demo` (and `enrollment`), with `PRIVANODE_CAPABILITIES` including `system.hashchain.v1`. `PRIVANET_MAX_RELEASES` (Coordinator) bounds voluntary hand-backs per job.
 
 ## State, migrations and recovery
 
@@ -126,7 +137,8 @@ in `apps/coordinator/src/migrations.ts`; append a migration for changes. The
 adapter rejects edited history and newer unknown database schema. Never delete
 real data to fix a migration error. Build outputs are reproducible and ignored.
 
-Back up a consistent SQLite database using SQLite backup tooling or stop the
+Back up with `npm run backup -- <file>` (consistent online copy, verified, owner-only; see
+[deployment](deployment.md#backup) for the restore steps), or stop the
 service and copy the entire Coordinator directory (including WAL sidecars).
 Protect backups as sensitive job/node metadata. Back up node identity/binding
 separately and securely; sessions are not stored on the node. Restore to the

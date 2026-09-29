@@ -70,13 +70,15 @@ and on job reads/lease requests. Stale/offline nodes receive no new jobs.
 
 `resources` carries only the owner's *currently permitted* budget and coarse states: `contribution` (`FULL`, `ADAPTIVE`, `MINIMAL`, `PAUSED`), `pressure` (`NORMAL`, `ELEVATED`, `HIGH`), `power` (`AC`, `BATTERY`, `UNKNOWN`), `memoryBudgetBytes` (additional memory a new job may use now), `cpuBudgetPercent`, and optional per-capability budgets from operator limits. Raw memory, CPU or process measurements never leave the node. The Coordinator treats the report as an untrusted hint that can only *restrict* scheduling relative to what jobs declare; it cannot make a node do more than the owner's policy allows because the owner's limits are enforced on the node. A node that reports nothing gets a small fixed legacy budget (64 MiB, 10% CPU).
 
+v0.2.1 adds four optional fields, additive within protocol 1 (v0.2.0 nodes remain valid and are simply not limited by them): `diskBudgetBytes` (scratch disk a new job may use), `diskIo` (highest disk-I/O class a new job may have), `networkBudgetBytes` (remaining transfer allowance) and `availableForMs` (milliseconds until the owner's schedule next turns contribution off, at most 7 days, omitted if none). The scheduler requires a job's declared estimate to fit each reported limit, and does not place a job whose `expectedDurationMs` exceeds `availableForMs`. These are still untrusted node hints and never accounting evidence.
+
 ### Lifecycle and node states
 
 `ONLINE`, `STALE`, `OFFLINE` and `REVOKED` are as before. `DRAINING` is a node that reports `lifecycle: DRAINING` with fresh heartbeats: it is assigned nothing while it finishes work. `POST node/goodbye` (planned shutdown) returns the node's leased jobs to the queue without penalty and marks it `OFFLINE_EXPECTED` until it heartbeats again, so an announced exit is distinguishable from an unexplained disappearance (`OFFLINE`). A drain that goes silent becomes `OFFLINE`. Nothing here computes reputation yet; the states are recorded so a later reliability system can treat them differently.
 
 ## Typed jobs, idempotency and leases
 
-Only `system.echo.v1` exists: input/output `{message: string}` (≤1024 characters). Job types live in one registry (`JOB_TYPES` in `packages/protocol`); submit, lease, job and capability schemas derive from it, the Coordinator validates each result against the leased job's own registered output schema, and a test requires every registered type to have a node handler.
+Two job types exist. `system.echo.v1`: input/output `{message: string}` (≤1024 characters). `system.hashchain.v1` (v0.2.1): input `{seed: string ≤256, iterations: 1..5,000,000}`, output `{digest, iterations}` where the digest is SHA-256 applied `iterations` times to SHA-256(seed); a deterministic, verifiable, preemptible, checkpointable diagnostic workload, not an application feature. Job types live in one registry (`JOB_TYPES` in `packages/protocol`); submit, lease, job and capability schemas derive from it, the Coordinator validates each result against the leased job's own registered output schema, and a test requires every registered type to have a node handler.
 Both sides validate; node checks locally enabled capability and fixed handler.
 SDK submit requires a caller idempotency key. Same application/key/request
 returns same job, changed request is 409. Keep the key when retrying a submission. Read requests retry one transient
@@ -88,7 +90,7 @@ Lease expiry or revocation returns work to QUEUED unless configured maximum
 attempts is exhausted, then FAILED. Node-reported handler failure is terminal in
 v0.1; errors use bounded fixed codes without arbitrary exception text.
 
-Each job type declares a resource estimate in the registry (CPU class, memory, disk, disk I/O, network, expected duration, preemptible, checkpointable). The scheduler assigns a job only to an ACTIVE, non-PAUSED node whose permitted budget (or that capability's budget) covers the estimate. Estimates are scheduler hints, not permission to exceed node limits. `release` (reason `DRAINING`, `PREEMPTED` or `SHUTDOWN`) hands a leased job back: it is requeued, the attempt is refunded, and a per-job release counter (`PRIVANET_MAX_RELEASES`, default 20) fails the job with `RELEASE_LIMIT` so drain/preempt loops cannot run forever. Checkpointing is declared but not implemented: released jobs restart from the beginning.
+Each job type declares a resource estimate in the registry (CPU class, memory, disk, disk I/O, network, expected duration, preemptible, checkpointable). The scheduler assigns a job only to an ACTIVE, non-PAUSED node whose permitted budget (or that capability's budget) covers the estimate. Estimates are scheduler hints, not permission to exceed node limits. `release` (reason `DRAINING`, `PREEMPTED` or `SHUTDOWN`) hands a leased job back: it is requeued, the attempt is refunded, and a per-job release counter (`PRIVANET_MAX_RELEASES`, default 20) fails the job with `RELEASE_LIMIT` so drain/preempt loops cannot run forever. Checkpointing is node-local (v0.2.1): a released checkpointable job keeps its checkpoint on the node, and only that same node resumes it; if the Coordinator gives the job to another node it restarts from the beginning.
 
 Each assignment records node, attempt, random lease ID and expiry. Completion
 must match authenticated node and lease ID and arrive strictly before expiry.
@@ -96,6 +98,6 @@ All mutation checks occur inside a transaction. Old or superseded leases cannot
 commit results; repeated identical completion of the same successful lease is
 accepted, changed completion is a conflict. Expired completion is rejected even
 when nobody has yet acquired a replacement lease. There is no lease renewal in
-v0.1: only bounded echo runs. Execution is at-least-once; future handlers need
+v0.1: only bounded echo runs (plus, since v0.2.1, the bounded hash chain). Execution is at-least-once; future handlers need
 idempotency by job ID and cannot infer exactly-once side effects from fencing.
 Node restart may lose an unreported result; its lease expires and retries.

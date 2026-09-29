@@ -1,4 +1,4 @@
-import { CPU_CLASS_MIN_PERCENT, JOB_TYPES } from '@privanet/protocol';
+import { CPU_CLASS_MIN_PERCENT, INTENSITY_RANK, JOB_TYPES } from '@privanet/protocol';
 import type { ResourceEstimate, ResourceReport } from '@privanet/protocol';
 import type { JobRecord, NodeRecord } from './model.js';
 export interface Scheduler {
@@ -9,9 +9,24 @@ export interface Scheduler {
  * jobs whose declared needs fit inside it, so an old node is never trusted with heavy work.
  */
 export const LEGACY_BUDGET: Pick<ResourceReport, 'memoryBudgetBytes' | 'cpuBudgetPercent'> = Object.freeze({ memoryBudgetBytes: 64 * 1024 * 1024, cpuBudgetPercent: 10 });
-/** True when the node's currently permitted budget covers the job's declared estimate. */
-export function fitsBudget(estimate: ResourceEstimate, budget: Pick<ResourceReport, 'memoryBudgetBytes' | 'cpuBudgetPercent'>): boolean {
-  return estimate.memoryBytes <= budget.memoryBudgetBytes && CPU_CLASS_MIN_PERCENT[estimate.cpu] <= budget.cpuBudgetPercent;
+type Budget = Pick<ResourceReport, 'memoryBudgetBytes' | 'cpuBudgetPercent'> & Partial<Pick<ResourceReport, 'diskBudgetBytes' | 'diskIo' | 'networkBudgetBytes'>>;
+/**
+ * True when the node's currently permitted budget covers the job's declared estimate. Disk and
+ * network limits apply only when the node reports them; nodes that predate them are not blocked.
+ */
+export function fitsBudget(estimate: ResourceEstimate, budget: Budget): boolean {
+  return estimate.memoryBytes <= budget.memoryBudgetBytes && CPU_CLASS_MIN_PERCENT[estimate.cpu] <= budget.cpuBudgetPercent
+    && (budget.diskBudgetBytes === undefined || estimate.diskBytes <= budget.diskBudgetBytes)
+    && (budget.diskIo === undefined || INTENSITY_RANK[estimate.diskIo] <= INTENSITY_RANK[budget.diskIo])
+    && (budget.networkBudgetBytes === undefined || estimate.networkBytes <= budget.networkBudgetBytes);
+}
+/**
+ * Schedule-aware placement: a job with a known expected duration is not placed on a node whose owner
+ * schedule turns contribution OFF sooner than that. The node reports only a coarse hint; a job that
+ * still overruns is handled by ordinary preemption/release.
+ */
+export function outlastsAvailability(estimate: ResourceEstimate, availableForMs: number | undefined): boolean {
+  return availableForMs !== undefined && estimate.expectedDurationMs !== null && estimate.expectedDurationMs > availableForMs;
 }
 /**
  * Oldest-first among jobs the node may take now: capability, a free slot, an ACTIVE (not draining)
@@ -27,7 +42,10 @@ export class ResourceAwareScheduler implements Scheduler {
     return pending.find(job => {
       const definition = JOB_TYPES[job.type];
       if (job.status !== 'QUEUED' || !node.capabilities.includes(definition.capability)) return false;
-      return fitsBudget(definition.resources, node.resources?.perCapability?.[job.type] ?? general);
+      if (outlastsAvailability(definition.resources, node.resources?.availableForMs)) return false;
+      // Per-capability limits replace only memory/CPU; disk and network limits are node-wide.
+      const specific = node.resources?.perCapability?.[job.type];
+      return fitsBudget(definition.resources, specific ? { ...general, ...specific } : general);
     });
   }
 }

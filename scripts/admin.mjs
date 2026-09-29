@@ -6,9 +6,11 @@ async function main() {
   const token = process.env.PRIVANET_ADMIN_SECRET;
   if (!token || !/^[a-f0-9]{64}$/.test(token)) throw new Error('Admin credential required');
   const [operation, value] = process.argv.slice(2);
+  // Least privilege by default; PRIVANET_JOB_TYPES=system.echo.v1,system.hashchain.v1 grants more (the Coordinator validates every id).
+  const types = process.env.PRIVANET_JOB_TYPES ? process.env.PRIVANET_JOB_TYPES.split(',') : ['system.echo.v1'];
   let result;
-  if (operation === 'enrollment') result = await transport.request('POST', '/v1/admin/enrollment-tokens', EnrollmentTokenSchema, { expiresInMs: 60000, capabilities: ['system.echo.v1'] }, token);
-  else if (operation === 'application') result = await transport.request('POST', '/v1/admin/applications', AppCredentialSchema, { name: value ?? 'demo', allowedJobTypes: ['system.echo.v1'] }, token);
+  if (operation === 'enrollment') result = await transport.request('POST', '/v1/admin/enrollment-tokens', EnrollmentTokenSchema, { expiresInMs: 60000, capabilities: types }, token);
+  else if (operation === 'application') result = await transport.request('POST', '/v1/admin/applications', AppCredentialSchema, { name: value ?? 'demo', allowedJobTypes: types }, token);
   else if (operation === 'nodes') result = await transport.request('GET', '/v1/admin/nodes', NodesSchema, undefined, token);
   else if (operation === 'revoke-node') result = await transport.request('POST', `/v1/admin/nodes/${NodeIdSchema.parse(value)}/revoke`, AckSchema, {}, token);
   else if (operation === 'revoke-application') result = await transport.request('POST', `/v1/admin/applications/${IdSchema.parse(value)}/revoke`, AckSchema, {}, token);

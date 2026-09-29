@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { JobTypeSchema } from '@privanet/protocol';
+import { IntensitySchema, JobTypeSchema } from '@privanet/protocol';
 
 const GiB = 1024 ** 3;
 const bytes = z.number().int().min(0).max(2 ** 40);
@@ -33,6 +33,17 @@ export const ResourcePolicySchema = z.strictObject({
   schedule: z.array(ScheduleRuleSchema).max(64).default([]),
   /** Per-capability ceilings; they can only lower, never raise, the general budget. */
   capabilityLimits: z.partialRecord(JobTypeSchema, z.strictObject({ maxMemoryBytes: bytes.optional(), maxCpuPercent: percent.optional() })).default({}),
+  /** Scratch disk PrivaNet may use, and free space always left to the owner on top of it. */
+  maxDiskBytes: bytes.default(1 * GiB),
+  reserveDiskBytes: bytes.default(5 * GiB),
+  /** Highest disk-I/O intensity class ever offered; the offered class drops further while the owner is using the disk. */
+  maxDiskIo: IntensitySchema.default('medium'),
+  /** Metered transfer ceiling in bytes per second (null = unlimited). Enforced by the node's transfer meter. */
+  maxBandwidthBytesPerSec: z.number().int().min(1).max(2 ** 40).nullable().default(1024 * 1024),
+  /** Metered transfer allowance per calendar month, UTC (null = unlimited). */
+  monthlyTransferBytes: z.number().int().min(0).max(2 ** 50).nullable().default(10 * GiB),
+  /** Optional link speed; enables network-pressure awareness by comparing the host's traffic with it. */
+  linkBytesPerSec: z.number().int().min(1).max(2 ** 40).optional(),
   /** How long HIGH pressure must persist before running preemptible jobs are handed back. */
   preemptAfterMs: z.number().int().min(0).max(600000).default(10000),
 });

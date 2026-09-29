@@ -8,11 +8,17 @@ import type { Identity } from './identity.js';
 import { defaultHandlers, executeLease } from './handlers.js';
 import type { Handlers } from './handlers.js';
 import type { ResourceEngine } from './resource-engine.js';
+import type { CheckpointStore } from './checkpoint.js';
+import type { TransferMeter } from './transfer-meter.js';
 export interface NodeOptions extends TransportOptions {
   stateDir: string; capabilities: JobType[]; enrollmentToken?: string;
   heartbeatMs?: number; pollMs?: number;
   /** Owner-policy resource engine. Without one the node reports no resources and gets only the Coordinator's small legacy budget. */
-  engine?: ResourceEngine; handlers?: Handlers; drainTimeoutMs?: number; preemptCheckMs?: number; log?: (entry: { event: string; code?: string }) => void;
+  engine?: ResourceEngine; handlers?: Handlers;
+  /** Enforce the owner's bandwidth limit and monthly allowance for handlers, and account control-plane bytes. */
+  transfer?: TransferMeter;
+  /** Node-local resume state for checkpointable job types. */
+  checkpoints?: CheckpointStore; drainTimeoutMs?: number; preemptCheckMs?: number; log?: (entry: { event: string; code?: string }) => void;
 }
 export class PrivaNode {
   readonly capabilities: JobType[];
@@ -91,6 +97,9 @@ export class PrivaNode {
       if (!lease) return;
       if (lease.expiresAt <= Date.now()) { this.log({ event: 'job.lease_expired' }); return; }
       this.currentJobs = 1;
+      const meter = this.options.transfer; const checkpoints = this.options.checkpoints;
+      meter?.record(JSON.stringify(lease.input).length);
+      checkpoints?.prune();
       // Handler failure and result transport failure are separate: lost completion
       // acknowledgement must not be changed into a terminal handler failure.
       let result;
@@ -98,19 +107,24 @@ export class PrivaNode {
       // Only jobs declared preemptible are ever interrupted for resource pressure.
       const watcher = JOB_TYPES[lease.type].resources.preemptible && this.options.engine
         ? setInterval(() => { this.options.engine?.update(); if (this.options.engine?.shouldPreempt()) preempt.abort(); }, this.options.preemptCheckMs ?? 250) : undefined;
-      try { result = await executeLease(lease, this.capabilities, stop, this.options.handlers ?? defaultHandlers); }
+      try {
+        result = await executeLease(lease, this.capabilities, stop, this.options.handlers ?? defaultHandlers, {
+          ...(checkpoints ? { checkpoint: checkpoints.forJob(lease.jobId, lease.type) } : {}), ...(meter ? { transfer: (bytes: number) => meter.consume(bytes, stop) } : {}) });
+      }
       catch {
         if (stop.aborted) {
           await this.transport.request('POST', `/v1/node/jobs/${lease.jobId}/release`, AckSchema,
             { leaseId: lease.leaseId, reason: this.hardStop.signal.aborted ? 'SHUTDOWN' : 'PREEMPTED' }, session.token);
-          this.log({ event: 'job.released' }); return;
+          this.log({ event: 'job.released' }); return; // the checkpoint is kept so this node can resume the job if it is handed back
         }
+        checkpoints?.clear(lease.jobId);
         await this.transport.request('POST', `/v1/node/jobs/${lease.jobId}/fail`, AckSchema,
           { leaseId: lease.leaseId, error: { code: this.capabilities.includes(lease.type) ? 'HANDLER_FAILED' : 'CAPABILITY_DISABLED' } }, session.token);
         this.log({ event: 'job.handler_failed' }); return;
       } finally { if (watcher) clearInterval(watcher); }
+      meter?.record(JSON.stringify(result).length);
       await this.transport.request('POST', `/v1/node/jobs/${lease.jobId}/complete`, AckSchema, { leaseId: lease.leaseId, result }, session.token);
-      this.log({ event: 'job.completed' });
+      checkpoints?.clear(lease.jobId); this.log({ event: 'job.completed' });
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) this.session = undefined;
       throw error;

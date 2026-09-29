@@ -1,11 +1,11 @@
 {
   "name": "@privanet/coordinator",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "dependencies": {
-    "@privanet/protocol": "0.2.0",
-    "@privanet/shared": "0.2.0",
+    "@privanet/protocol": "0.2.1",
+    "@privanet/shared": "0.2.1",
     "zod": "^4.6.5"
   },
   "exports": {

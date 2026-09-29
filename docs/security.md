@@ -33,6 +33,10 @@ cannot prove Windows ACL safety). No private keys, grants, bearer values, reques
 bodies or headers are logged. Structured logs use fixed event/code fields.
 Public errors contain fixed messages, never raw validation/database exceptions.
 
+### Node-local state added in v0.2.1
+
+The node keeps three more owner-private items in its state directory: `transfer.json` (a month's transferred byte count), `checkpoints/` (bounded, typed, age-limited partial state for checkpointable jobs, never sent anywhere; job input can appear in it, so treat the directory like the identity file) and an optional `DRAIN` request file that any local writer can use to drain the node, which is the owner's own trust boundary. The macOS and Windows battery probes run fixed, argument-free system commands and read only their output. The bandwidth and disk limits are enforced by the node for the owner's benefit; a compromised node is not bound by them, and the Coordinator only ever sees the resulting budget.
+
 ## Coordinator knowledge
 
 The Coordinator learns node public key/stable ID, daemon/protocol version,
@@ -102,9 +106,7 @@ new enrollment. There is no administrator account/SSO system or key recovery.
 
 A node can lie about its budget or state (for example claim spare RAM it lacks, or claim `DRAINING`/goodbye to shed work); v0.2 does not verify or penalise this, and there is no reputation. The budget is a scheduling hint that protects honest owners, not a guarantee against a malicious node. Owner limits are enforced on the node, and a compromised node is not bound by them. Nothing forces a running handler to stop except its own cooperation with the abort signal; the echo handler is instantaneous and preemption is untested against real long-running work. A dishonest node can fabricate schema-valid echo output; no execution attestation
 or reputation. At-least-once execution can repeat future side effects. SQLite
-is a single-process prototype, not HA. Job queues/results persist without an
-automatic retention quota; authorized apps can consume storage. Production needs
-quotas, audit/retention policies, backup/recovery exercises and a security review.
+is a single-process prototype, not HA. Job queues are bounded per application and finished jobs are deleted after a configurable retention period (v0.2.1), but there is no per-application storage byte quota, audit log or per-tenant rate limit. Production still needs audit policies, a rehearsed restore on the operator's own infrastructure and an independent security review.
 No public/community enrollment, Sybil resistance, economic rewards, storage
 integrity/durability, malicious-worker isolation, filesystem sandbox, arbitrary
 compute or distributed trust guarantees are claimed. Future handlers require

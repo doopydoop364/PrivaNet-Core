@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const PROTOCOL_VERSION = 1 as const;
-export const SERVICE_VERSION = '0.2.0';
+export const SERVICE_VERSION = '0.2.1';
 export const MAX_BODY_BYTES = 32 * 1024;
 export const ProtocolSchema = z.literal(PROTOCOL_VERSION);
 export const IdSchema = z.uuid();
@@ -11,6 +11,8 @@ export const TimeSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INT
 export const EchoSchema = z.strictObject({ message: z.string().max(1024) });
 /** Coarse intensity classes shared by job estimates and node budgets. */
 export const IntensitySchema = z.enum(['none', 'low', 'medium', 'high']);
+/** Ordering of intensity classes, used to compare a job's disk-I/O need with a node's permitted level. */
+export const INTENSITY_RANK = Object.freeze({ none: 0, low: 1, medium: 2, high: 3 } as const);
 /** Minimum node CPU budget (percent of the machine) required to run a job of each CPU class. */
 export const CPU_CLASS_MIN_PERCENT = Object.freeze({ none: 0, low: 5, medium: 25, high: 50 } as const);
 const ByteCountSchema = z.number().int().min(0).max(2 ** 40);
@@ -28,8 +30,22 @@ const ECHO_RESOURCES: ResourceEstimate = Object.freeze({
   cpu: 'low', memoryBytes: 1024 * 1024, diskBytes: 0, diskIo: 'none', networkBytes: 4096,
   expectedDurationMs: 100, preemptible: true, checkpointable: false,
 });
+/** Longest hash chain a single job may request; sized so a job takes seconds to a few minutes on ordinary hardware. */
+export const HASHCHAIN_MAX_ITERATIONS = 5_000_000;
+export const HashChainInputSchema = z.strictObject({ seed: z.string().max(256), iterations: z.number().int().min(1).max(HASHCHAIN_MAX_ITERATIONS) });
+export const HashChainOutputSchema = z.strictObject({ digest: z.string().regex(/^[a-f0-9]{64}$/), iterations: z.number().int().min(1).max(HASHCHAIN_MAX_ITERATIONS) });
+/**
+ * A deterministic, verifiable, CPU-bound, preemptible and checkpointable diagnostic workload. It exists
+ * so preemption, checkpoint/resume and resource-aware placement are exercised by a real, slow job type
+ * (not only by instantaneous echo), and to calibrate resource declarations. Not an application feature.
+ */
+const HASHCHAIN_RESOURCES: ResourceEstimate = Object.freeze({
+  cpu: 'medium', memoryBytes: 16 * 1024 * 1024, diskBytes: 1024 * 1024, diskIo: 'low', networkBytes: 4096,
+  expectedDurationMs: 30000, preemptible: true, checkpointable: true,
+});
 export const JOB_TYPES = Object.freeze({
   'system.echo.v1': Object.freeze({ version: 1, capability: 'system.echo.v1', input: EchoSchema, output: EchoSchema, resources: ECHO_RESOURCES }),
+  'system.hashchain.v1': Object.freeze({ version: 1, capability: 'system.hashchain.v1', input: HashChainInputSchema, output: HashChainOutputSchema, resources: HASHCHAIN_RESOURCES }),
 });
 export type JobType = keyof typeof JOB_TYPES;
 export type JobInputMap = { [T in JobType]: z.infer<(typeof JOB_TYPES)[T]['input']> };
@@ -86,6 +102,15 @@ export const ResourceReportSchema = z.strictObject({
   memoryBudgetBytes: ByteCountSchema, cpuBudgetPercent: z.number().int().min(0).max(100),
   /** Operator-set capability-specific limits; a capability listed here uses this budget instead of the general one. */
   perCapability: z.partialRecord(JobTypeSchema, BudgetSchema).optional(),
+  // Additive within protocol 1 (v0.2.1): absent means "not reported", and the Coordinator then applies no limit of that kind.
+  /** Scratch disk a new job may use right now (owner limit and free space, less the owner's reserve). */
+  diskBudgetBytes: ByteCountSchema.optional(),
+  /** Highest disk-I/O intensity class a new job may have right now (lower while the owner is using the disk). */
+  diskIo: IntensitySchema.optional(),
+  /** Network transfer a new job may use (remaining monthly allowance, bounded by the owner's limit). */
+  networkBudgetBytes: ByteCountSchema.optional(),
+  /** Milliseconds until the owner's schedule next turns contribution OFF; absent when it does not within a week. Placement hint only. */
+  availableForMs: z.number().int().min(0).max(7 * 86400000).optional(),
 });
 export type ResourceReport = z.infer<typeof ResourceReportSchema>;
 /** ACTIVE accepts work; DRAINING finishes/releases work and asks for none. Departure is a separate goodbye. */
