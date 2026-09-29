@@ -162,6 +162,7 @@ needs CI validation; do not assume every platform was tested locally.
 
 A release is cut when a roadmap phase completes. Steps:
 
+0. **Run the whole suite first** (`npm run lint && npm run typecheck && npm test`, all green on Linux, macOS and Windows in CI). If a change has no test that would catch its failure, write the test before releasing. The suite includes release-readiness tests (`tests/release.test.ts`: version/lockfile/changelog consistency, doc links, staged-archive contents and secret hygiene, and a run of the packaged Coordinator, node, admin, demo, long job, backup and drain from outside the repository), a randomised lifecycle/fencing test (`tests/reliability.test.ts`) and upgrade-compatibility checks.
 1. Bump `version` in the root and workspace `package.json` files (keep `@privanet/*` dependency versions in step), move the `CHANGELOG.md` entries into a dated `## [x.y.z]` section, and merge through a green PR.
 2. Tag the merge commit (`git tag vX.Y.Z && git push origin vX.Y.Z`) or, when tags cannot be pushed, run the Release workflow manually (`workflow_dispatch`) with the tag name; it creates the tag at the built commit.
 3. `.github/workflows/release.yml` verifies the tag matches `package.json`, runs lint/typecheck/tests on Linux, macOS and Windows, stages a self-contained distribution per OS with `scripts/package-release.mjs` (built `dist/`, `zod`, launchers in `bin/`, docs), smoke-tests it, and publishes a GitHub release with `.tar.gz` (Linux, macOS) and `.zip` (Windows) archives, `SHA256SUMS.txt` and the changelog section as notes.
