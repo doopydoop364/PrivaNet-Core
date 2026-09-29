@@ -19,7 +19,7 @@ Version **0.2.1**: Phase 1 (Core Foundation) and Phase 2 (Adaptive Resource Engi
 | --- | --- |
 | Implemented and tested (CI on Linux, macOS, Windows; Node 24 and 26) | Coordinator, PrivaNode, SDK, Ed25519 identity and enrollment, scoped applications, typed jobs (`system.echo.v1`, `system.hashchain.v1`), scheduler, leases with fencing and renewal, retries, retention and queue quota, SQLite persistence, backup, owner resource policy, adaptive memory/CPU/disk/network budgets, schedules, preemption and release, node-local checkpoint/resume, graceful draining (`DRAINING` to `OFFLINE_EXPECTED`) |
 | Partially tested | Disk and network load sampling (Linux only, parsers unit-tested); macOS and Windows battery probes (parsers unit-tested, not run on real portable devices); Windows console-signal drain (the `DRAIN` file path is tested on all three OSes, the signals are not); preemption and checkpointing (proven with the cooperative hash-chain job, not real application workloads); backup restore (tested on one host) |
-| Planned, **not implemented** | PrivaSearch (Phase 3), storage (Phases 4-6), resource measurement (7), resource market and PrivaCredits (8), Network Treasury (9), community hardening (10), stable protocol (11) |
+| Planned, **not implemented** | PrivaSearch (Phase 3; a separate repository, not part of this one) and Core's generic web-fetch capability for it, storage (Phases 4-6), resource measurement (7), resource market and PrivaCredits (8), Network Treasury (9), community hardening (10), stable protocol (11) |
 | Deliberately unsupported | Arbitrary code, shell or script execution, downloading and running code, unrestricted proxying, public enrollment |
 
 Security caveats that remain: nodes and applications are untrusted and a node can fabricate schema-valid results (no execution attestation, no reputation); no public Sybil resistance; SQLite is a single-process prototype, not HA; no distributed-storage guarantees; no mTLS or per-message signatures; no independent security review; job data is plaintext. Details: [security](docs/security.md), [deployment](docs/deployment.md).
@@ -61,7 +61,8 @@ credential and allowed job types; applications receive no admin/node privileges.
 - [Threat model, privacy and security limits](docs/security.md)
 - [Development, configuration and recovery](docs/development.md)
 - [Deployment: TLS, reverse proxy, backup and recovery](docs/deployment.md)
-- [PrivaSearch integration specification (design only)](docs/PRIVASEARCH_INTEGRATION.md)
+- [Application boundary: what Core owns and what applications own (ADR 005, proposed)](docs/APPLICATION_BOUNDARY.md)
+- [PrivaSearch integration contract (design only)](docs/PRIVASEARCH_INTEGRATION.md)
 - [Roadmap](docs/roadmap.md)
 - [Resource market design (planned)](docs/RESOURCE_MARKET.md), [PrivaCredits (planned)](docs/CREDITS.md), [Network Treasury (planned)](docs/TREASURY.md), [adaptive resources](docs/RESOURCES.md)
 - [Implementation and verification report](docs/implementation-report.md)

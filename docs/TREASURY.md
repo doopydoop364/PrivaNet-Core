@@ -244,7 +244,7 @@ seasons or events, because it comes from prices and budgets rather than a
 ## PrivaSearch public crawling
 
 The strongest expected use. PrivaSearch (Phase 3) will have two queues, both
-using typed jobs such as `privasearch.crawl.v1` and `privasearch.parse.v1`, and
+using generic capabilities such as the constrained fetch job (provisionally `web.fetch.v1`; see [APPLICATION_BOUNDARY.md](APPLICATION_BOUNDARY.md)), and
 both obeying `robots.txt`, per-host rate limits, crawl politeness,
 bandwidth/resource limits, typed-job restrictions and verification/accounting
 rules.
