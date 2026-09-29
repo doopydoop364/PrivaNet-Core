@@ -14,5 +14,5 @@
 | v1.0 Stable PrivaNet | Compatibility guarantees, migrations, upgrade/recovery, operations, docs and independent security review |
 
 Only v0.1 is implemented here. No speculative storage/credits interfaces. Before
-production release of v0.1: test target Node/OS matrix, review TLS deployment and
+production release of v0.1: review TLS deployment and
 Windows ACL handling, exercise backup/recovery, review security independently.
