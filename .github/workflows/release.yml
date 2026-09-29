@@ -1,0 +1,71 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  package:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: ubuntu-latest, label: linux }
+          - { os: macos-latest, label: macos }
+          - { os: windows-latest, label: windows }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - name: Tag must match package.json version
+        shell: bash
+        run: test "${GITHUB_REF_NAME}" = "v$(node -p "require('./package.json').version")"
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Stage distribution
+        shell: bash
+        run: node scripts/package-release.mjs ${{ matrix.label }} dist-release
+      - name: Smoke-test staged distribution
+        shell: bash
+        working-directory: dist-release
+        run: |
+          cd privanet-*-${{ matrix.label }}
+          node --input-type=module -e "import('@privanet/protocol').then(p => { if (p.PROTOCOL_VERSION < 1) process.exit(1); }); import('@privanet/sdk'); import('@privanet/node/daemon'); import('@privanet/coordinator/service')"
+      - name: Archive
+        shell: bash
+        working-directory: dist-release
+        run: |
+          dir=$(ls -d privanet-*-${{ matrix.label }})
+          if [ "${{ matrix.label }}" = windows ]; then tar -a -cf "$dir.zip" "$dir"; else tar -czf "$dir.tar.gz" "$dir"; fi
+          rm -rf "$dir"; ls -l
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.label }}
+          path: dist-release/*
+          if-no-files-found: error
+  release:
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - uses: actions/download-artifact@v4
+        with: { path: assets, pattern: dist-*, merge-multiple: true }
+      - name: Checksums and release notes
+        run: |
+          (cd assets && sha256sum * > SHA256SUMS.txt)
+          node scripts/changelog-section.mjs "$GITHUB_REF_NAME" > notes.md
+          printf '\nRequires Node.js >= 24.4. Verify downloads against SHA256SUMS.txt. See docs/development.md to run.\n' >> notes.md
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=""; case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease";; esac
+          gh release create "$GITHUB_REF_NAME" assets/* --title "PrivaNet ${GITHUB_REF_NAME#v}" --notes-file notes.md --verify-tag $prerelease

@@ -118,3 +118,13 @@ POSIX state directories/files require 0700/0600 and owner checks. On Windows,
 use a private user-profile directory and restrict its ACLs to the node service
 account/operator; file mode alone cannot guarantee ACL privacy. Node/OS support
 needs CI validation; do not assume every platform was tested locally.
+
+## Releases
+
+A release is cut when a roadmap phase completes. Steps:
+
+1. Bump `version` in the root and workspace `package.json` files (keep `@privanet/*` dependency versions in step), move the `CHANGELOG.md` entries into a dated `## [x.y.z]` section, and merge through a green PR.
+2. Tag the merge commit: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+3. `.github/workflows/release.yml` verifies the tag matches `package.json`, runs lint/typecheck/tests on Linux, macOS and Windows, stages a self-contained distribution per OS with `scripts/package-release.mjs` (built `dist/`, `zod`, launchers in `bin/`, docs), smoke-tests it, and publishes a GitHub release with `.tar.gz` (Linux, macOS) and `.zip` (Windows) archives, `SHA256SUMS.txt` and the changelog section as notes.
+
+The archives are pure JavaScript and need Node.js 24.4+ on `PATH`; they contain no secrets, databases or identities.
