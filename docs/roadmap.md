@@ -4,7 +4,7 @@
 | --- | --- |
 | v0.1 Core Foundation | Coordinator/node/protocol/SDK, identity/enrollment/auth, scoped apps, capabilities/health, echo typed jobs, scheduler, leases, SQLite, tests/docs |
 | v0.2 Adaptive Resource Engine | Owner resource policy, adaptive memory/CPU/disk/network budgets, schedules, battery policy, resource-aware scheduling, preemption, checkpoint/resume, graceful draining (complete in v0.2.1) |
-| v0.3 PrivaSearch Integration | Separate search project consumes crawl/parse/index typed workers with resource controls |
+| v0.3 PrivaSearch on PrivaNet | PrivaSearch stays a separate repository consuming the SDK; Core adds only generic capabilities it needs (a constrained web-fetch capability, application client identity, cancellation, retention, concurrency keys) under resource controls; see APPLICATION_BOUNDARY.md |
 | v0.4 Storage Foundation | Generic object/chunk APIs; no Drive metadata |
 | v0.5 Distributed Storage | Placement, replication, repair, verification, actual physical accounting, failures |
 | v0.6 PrivaDrive Integration | Replace Drive physical storage adapter with PrivaNet SDK; Drive retains metadata/encryption/sharing |

@@ -83,31 +83,21 @@ Adaptive budgets are also the future *supply* side of the Phase 8 resource marke
 
 Future typed jobs should declare resource estimates such as CPU intensity, expected RAM, disk usage, network usage, whether the job can be preempted, and expected duration where known.
 
-## Phase 3 — PrivaSearch — Planned
+## Phase 3 — PrivaSearch on PrivaNet — Planned
 
-Goal: build the first major application on top of PrivaNet's real job architecture.
+Goal: prove PrivaNet's real job architecture with its first external application, **PrivaSearch, which is a separate repository and application** ([docs/APPLICATION_BOUNDARY.md](docs/APPLICATION_BOUNDARY.md)). PrivaSearch depends on `@privanet/sdk` and the wire protocol only; PrivaNet-Core never depends on PrivaSearch code, and the search application is never built inside this repository.
 
-PrivaSearch should work with a single local node and improve as more nodes join.
+**Owned by PrivaSearch (its own repository, roadmap and releases):** search UI and API, queries, URL frontier, crawl prioritisation, robots and crawl policy, recrawl policy, HTML parsing and document-extraction policy, URL normalisation, duplicate and near-duplicate detection, independent text index, ranking, metasearch fallback, public-versus-demand crawl policy, index health metrics.
 
-Initial components:
+**Owned by PrivaNet-Core in this phase (generic platform work only):**
 
-- search UI/API
-- metasearch fallback
-- URL frontier
-- polite crawler
-- robots.txt handling
-- per-host rate limiting
-- HTML parsing and content extraction
-- URL normalization
-- duplicate and near-duplicate detection
-- independent text index
-- ranking
-- recrawl scheduling
-- index health/status metrics
+- a generic, security-reviewed **constrained web-fetch capability** (provisionally `web.fetch.v1`, a function-named capability, not `privasearch.*`), with its SSRF guard, robots enforcement, redirect, size, time and decompression bounds, owner policy and test corpus, specified in [docs/PRIVASEARCH_INTEGRATION.md](docs/PRIVASEARCH_INTEGRATION.md);
+- generic extension points an application needs: application client identity in the lease, job cancellation, per-application or per-type retention, scheduler concurrency keys, per-application request budgets, batch status polling (see the boundary document, section 5);
+- the integration contract and the rules for adding capabilities to Core's first-party registry (the generic-capability test).
 
-PrivaSearch crawler/parser work should use typed PrivaNet jobs such as future `privasearch.crawl.v1` and `privasearch.parse.v1` capabilities.
+PrivaSearch should work with a single local node and improve as more nodes join. Every crawl uses the real path: PrivaSearch, SDK, Coordinator, authenticated PrivaNode, fetch capability, validated result.
 
-Initial scaling targets should be measured milestones rather than attempts to crawl the entire web immediately:
+Initial PrivaSearch scaling targets are measured milestones rather than attempts to crawl the entire web immediately:
 
 1. 1,000 pages
 2. 10,000 pages
@@ -115,11 +105,7 @@ Initial scaling targets should be measured milestones rather than attempts to cr
 4. 1 million pages
 5. 10 million pages if earlier measurements justify it
 
-Metasearch should fill gaps while PrivaSearch's own index grows. Searches may also help prioritize what the crawler indexes next.
-
-**Integration design ready (not implemented):** [docs/PRIVASEARCH_INTEGRATION.md](docs/PRIVASEARCH_INTEGRATION.md) specifies `privasearch.crawl.v1` (a constrained fetch job, not a proxy), the trust boundaries, application permissions, retry/checkpoint semantics, resource estimates, the PrivaNet-Core changes required (registry entry, guarded fetcher and handler with SSRF, robots and limits; later job cancellation, short retention and host-concurrency hints) and the MVP sequence for crawling with exactly one local PrivaNode. PrivaSearch stays a separate repository that depends on `@privanet/sdk` only. Phase 3 is complete only when PrivaSearch crawls and searches through the real PrivaNet path on a measured milestone; storage (Phase 4) is not part of it.
-
-Model two crawl queues from the start, even though no payer exists yet: a **demand-driven queue** (user searches, weak coverage, explicit refreshes; paid by the requester once the economy exists) and a **public queue** (new-domain discovery, recrawling and refreshing important pages, coverage and diversity; paid by the Network Treasury in Phase 9, see [docs/TREASURY.md](docs/TREASURY.md)). Until then both run on operator-provided capacity. Both must obey robots.txt, per-host rate limits, politeness and resource limits.
+**Status:** the integration contract and the boundary decision (ADR 005, proposed) are written; the Core capability is **not implemented** and no PrivaSearch code exists in this repository. The two crawl queues, a demand-driven queue paid by the requester and a public queue paid by the Network Treasury in Phase 9 ([docs/TREASURY.md](docs/TREASURY.md)), are PrivaSearch policy, modelled as two application credentials from the start; until the economy exists both run on operator-provided capacity and must obey robots.txt, per-host limits, politeness and resource limits. Phase 3 is complete when PrivaSearch crawls and searches through the real PrivaNet path at a measured milestone; storage (Phase 4) is not part of it.
 
 ## Phase 4 — Generic Storage Foundation — Planned
 
@@ -344,3 +330,4 @@ These applications should not distract from the Core Foundation, PrivaSearch, an
 15. The Network Treasury is an internal budgeting and redistribution mechanism funded primarily by a bounded, visible levy on existing credits. It never invests, speculates, yields returns or is externally tradable, and it never hides minting.
 16. Treasury-funded (public-good) work uses the same typed-job, market, scheduler, verification and settlement path as private work, inside explicit budgets and maximum prices; there is no privileged or unsafe path and no unlimited buyer.
 17. Do not activate a real resource market or treasury before PrivaNet can accurately measure and verify useful resource consumption.
+18. Applications (PrivaSearch, PrivaDrive, Privaproxy) live in their own repositories and depend on PrivaNet through the SDK and protocol only. PrivaNet-Core contains generic, function-named capabilities and never application code, policy or names in code paths.
