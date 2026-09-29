@@ -103,6 +103,29 @@ queued job when that node polls. Multiple nodes compete transactionally; no
 special preference/bypass for localhost. Advertised resources are untrusted
 hints, not accounting evidence. Job lifecycle/fencing is in [protocol](protocol.md).
 
+## Future resource market (planned, not implemented)
+
+The long-term direction is an internal market for verified useful resources, with PrivaCredits as the internal accounting unit; see [RESOURCE_MARKET.md](RESOURCE_MARKET.md) and [CREDITS.md](CREDITS.md). Architecturally it sits *in front of* the scheduler and *behind* usage measurement:
+
+```text
+Application -> SDK -> Coordinator
+                        |  resource request (class, amount, max price, constraints)
+                        v
+                  Resource market   (planned, Phase 8: eligible supply + clearing price)
+                        v
+                  Scheduler         (exists: operational choice among eligible nodes)
+                        v
+                  PrivaNodes        (exists: adaptive budget, ask later)
+                        |
+                        v  verified usage records (planned, Phase 7) -> ledger (planned, Phase 8)
+```
+
+Design consequences already reflected in the code: stable versioned job identities, per-job resource estimates, dynamic node budgets in heartbeats, a replaceable scheduler behind an interface, additive-only protocol evolution and explicit versions. Not present, deliberately: any price, ask, credit or ledger field, node-to-account binding, per-attempt usage history. Market and scheduler remain separate so that economic eligibility never replaces durability, reliability or owner-limit checks, and so a single-node deployment can run the scheduler alone.
+
+### ADR 002: market design is documentation-first
+
+**Problem:** the credits design used fixed conversion rates and manual demand multipliers, which would need hand tuning and would push economics into scheduler and job code. **Decision:** plan a resource market with explicit versioned units per class, keep it separate from scheduling, settle only verified consumption, and build measurement (Phase 7) before any market (Phase 8). Do not add speculative market code now. **Alternatives:** fixed rates plus multipliers (simple, but scarcity signals are manual and easy to misprice); a single universal credit-per-work rate (ignores that storage, bandwidth and compute have different economics); implementing credits first and measurement later (would reward unverified claims). **Security:** rewards create incentives to lie, so measurement and verification come first and are documented in the [market threat model](security.md#market-specific-threats-planned). **Consequences:** clearing mechanism, units, reference prices and reliability formulas stay open research questions until simulated; Phase 1 and 2 interfaces needed no changes, and gaps (per-attempt usage records, node-to-account binding) are listed as Phase 7 and 8 prerequisites.
+
 ## Future control/data plane
 
 This API carries bounded JSON control messages only. Future direct node data

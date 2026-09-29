@@ -113,7 +113,7 @@ checkpointable: yes/no
 expected duration (when known)
 ```
 
-These declarations are scheduler hints and policy inputs, not permission to exceed node limits.
+These declarations are scheduler hints and policy inputs, not permission to exceed node limits. A future market will additionally need each job type to name a versioned billing/measurement unit (for example a crawl or indexing unit); that is a later additive registry field, not part of the estimate.
 
 Scheduling should eventually require both:
 
@@ -158,6 +158,24 @@ Possible future telemetry includes:
 - planned availability
 
 Telemetry should collect only what the scheduler genuinely needs and should avoid unnecessary privacy-sensitive host information.
+
+## Supply, pricing and the future market
+
+Status: **planned / research** (Phase 8). See [the resource market design](RESOURCE_MARKET.md).
+
+The budget this engine computes is the raw material for a node's *supply* of each resource class in a future market. The relationship is one-directional: the engine decides what the owner allows right now; a market can only price and match capacity inside that limit.
+
+```text
+Idle:    available RAM 12 GiB -> PrivaNet budget 8 GiB,  CPU budget 50 %
+Gaming:  available RAM  3 GiB -> PrivaNet budget 0.5 GiB, CPU budget 5 %
+```
+
+- Supply is **dynamic**. A node is never required to honour previously advertised capacity if that would break hard operator limits or resource-safety rules, and releasing work under pressure is expected behaviour, not failure.
+- **Advertised capacity earns nothing.** Only verified consumption is settled.
+- Owners will eventually be able to state a minimum price (an *ask*) per class, or use automatic, competitive, premium or custom pricing modes, plus pricing conditions such as "day: contribute if price ≥ reference; evening: only if price ≥ 1.4 × reference". These build on the schedule levels above; a condition simply evaluates to an effective ask or "unavailable" at a given time.
+- The market and the scheduler stay separate: the market decides which supply is economically eligible and at what clearing price; the scheduler (which already uses budgets and pressure, and later reliability and planned availability) chooses among them. Price never overrides an owner's limits.
+- Per-class supply and ask reporting, when added, will be **additive optional heartbeat fields**; the current `ResourceReport` and job `ResourceEstimate` are deliberately class-neutral and need no change.
+- Resource telemetry remains minimal. A market does not justify collecting detailed host information; verifying claimed supply is a measurement-phase problem (challenges, spot checks, two-ended accounting), not something to solve by reading more from the host.
 
 ## Planned availability
 
