@@ -313,14 +313,14 @@ test('a preempted checkpointable job is released, then resumed from its checkpoi
 });
 
 test('a job that outlasts many leases finishes on its first attempt because the node renews the lease', async t => {
-  const f = await fixture(t, 120, { leaseMs: 300 }); const app = await f.app(['system.hashchain.v1']); const rig = engineRig();
+  const f = await fixture(t, 120, { leaseMs: 1000 }); const app = await f.app(['system.hashchain.v1']); const rig = engineRig();
   rig.host.freeDiskBytes = 100 * GiB;
-  const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token }); const iterations = 2_000_000;
+  const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token }); const iterations = 3_000_000;
   const grant = await f.grant(['system.hashchain.v1']);
   const node = new PrivaNode({ url: f.url, allowInsecureLoopback: true, stateDir: join(f.dir, 'node'), capabilities: ['system.hashchain.v1'], enrollmentToken: grant.token, log: e => f.logs.push(e), engine: rig.engine });
   const job = await sdk.submit('system.hashchain.v1', { seed: 'lease', iterations }, 'lease');
   const started = Date.now(); await node.tick(); const took = Date.now() - started;
-  assert.ok(took > 900, `the job must span several 300 ms leases (took ${took} ms)`);
+  assert.ok(took > 1200, `the job must outlast a 1000 ms lease (took ${took} ms)`);
   const done = await sdk.getJob(job.id); assert.equal(done.status, 'COMPLETED'); assert.equal(done.attempts, 1);
   let h = createHash('sha256').update('lease').digest(); for (let i = 0; i < iterations; i++) h = createHash('sha256').update(h).digest();
   assert.deepEqual(done.result, { digest: h.toString('hex'), iterations });

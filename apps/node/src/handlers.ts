@@ -14,7 +14,8 @@ export type Handlers = { [T in JobType]: (input: JobInputMap[T], context: Handle
 
 const sha256 = (data: Buffer | string) => createHash('sha256').update(data).digest();
 const ResumeSchema = z.strictObject({ seed: z.string(), iterations: z.number().int(), done: z.number().int().min(0), hash: z.string().regex(/^[a-f0-9]{64}$/) });
-const SLICE = 20_000; const SAVE_EVERY_MS = 200;
+// Small slices keep the event loop responsive on slow machines, so lease renewals and heartbeats are never starved.
+const SLICE = 5_000; const SAVE_EVERY_MS = 200;
 /** h0 = sha256(seed); h(i+1) = sha256(h(i)); the digest is h(iterations). Slices yield to the event loop, checkpoint and honour `signal`. */
 async function hashChain(input: JobInputMap['system.hashchain.v1'], { signal, checkpoint }: HandlerContext): Promise<JobOutputMap['system.hashchain.v1']> {
   let done = 0; let hash = sha256(input.seed);
