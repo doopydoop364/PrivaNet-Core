@@ -163,20 +163,9 @@ Not every operation can be checkpointed. Job definitions must explicitly describ
 
 ## Heartbeat telemetry
 
-The Core Foundation should leave room for future heartbeat/resource fields without requiring the complete adaptive scheduler now.
+**Implemented** (v0.2 and v0.2.1): the heartbeat carries only the *currently permitted* budget and coarse states, never raw measurements: `contribution` level, `pressure`, `power` source, permitted memory and CPU, optional per-capability memory/CPU budgets, permitted scratch disk and disk-I/O class, remaining transfer allowance, and `availableForMs` (time until the owner's schedule next turns contribution off). Configured limits, raw memory/CPU/disk/network samples and host identifiers stay on the node. The Coordinator treats all of it as an untrusted scheduling hint. See [protocol](protocol.md#resource-report-v02).
 
-Possible future telemetry includes:
-
-- configured limits
-- currently permitted budget
-- available memory / memory pressure
-- CPU pressure
-- disk capacity and pressure
-- network policy/state
-- power state
-- planned availability
-
-Telemetry should collect only what the scheduler genuinely needs and should avoid unnecessary privacy-sensitive host information.
+**Not collected:** raw memory or CPU figures, disk capacity, process or host inventory, thermal state, and measured per-job resource use (the last belongs to Phase 7). Telemetry should keep collecting only what the scheduler genuinely needs and avoid privacy-sensitive host information.
 
 ## Supply, pricing and the future market
 
@@ -233,6 +222,8 @@ When entering `DRAINING`, the Coordinator should:
 Graceful planned shutdown should not be treated like an unexpected node disappearance when reliability is calculated.
 
 ## Implementation staging
+
+(Design-time staging, kept for context. Core Foundation and the Adaptive Resource Engine are done as of v0.2.1; measurement against real workloads continues in Phases 3-7, and "later optimization" is not built.)
 
 ### Core Foundation
 

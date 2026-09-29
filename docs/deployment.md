@@ -1,6 +1,6 @@
 # Deployment: TLS, reverse proxy, backup and recovery
 
-Status: operator guidance for the v0.2 Coordinator. The Coordinator is a single-process service with a SQLite store; this is a small-deployment runbook, not a high-availability design. The configuration examples are starting points that were reviewed against the code but **not** load-tested or exercised against a real internet-facing proxy in this repository's CI.
+Status: operator guidance for the v0.2.1 Coordinator. The Coordinator is a single-process service with a SQLite store; this is a small-deployment runbook, not a high-availability design. The configuration examples are starting points that were reviewed against the code but **not** load-tested or exercised against a real internet-facing proxy in this repository's CI.
 
 ## What the Coordinator does and does not do
 

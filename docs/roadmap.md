@@ -14,6 +14,4 @@
 | v0.10 Community Hardening | Public enrollment, abuse/Sybil resistance, reputation, security and tooling |
 | v1.0 Stable PrivaNet | Compatibility guarantees, migrations, upgrade/recovery, operations, docs and independent security review |
 
-v0.1 and v0.2 (Phase 2, adaptive resources; complete in v0.2.1) are implemented here. No speculative storage/credits interfaces. Before
-production release of v0.1: review TLS deployment and
-Windows ACL handling, exercise backup/recovery, review security independently.
+Implemented here: v0.1 (Phase 1) and v0.2 (Phase 2, complete in v0.2.1). Nothing from v0.3 onward exists, and there are no speculative storage, credit, market or treasury interfaces. This is not a production or community-ready release: an independent security review has not been done (Phase 11), Windows ACL handling and some OS-specific behaviour have not been validated on real hardware, and a restore rehearsal on the operator's own infrastructure is still needed. See [deployment](deployment.md) and [security](security.md).

@@ -3,8 +3,8 @@
 ## Implemented boundaries
 
 Nodes and applications are untrusted. Strict allowlists and exact schemas bound
-inputs. Node code contains one fixed echo handler, never a shell or interpreter.
-Echo strings remain data even when they look like commands. Both Coordinator
+inputs. Node code contains fixed, compiled-in handlers for exactly two registered job types (`system.echo.v1` and the CPU-bound `system.hashchain.v1`), never a shell or interpreter.
+Echo strings remain data even when they look like commands; the hash-chain handler only computes SHA-256 over bounded input. Both Coordinator
 and worker validate input/output. Validation proves shape, not honest results.
 Admin, app and node bearers have separate namespaces and role checks; job reads
 check application ownership and submit checks allowed type. Unknown capability
@@ -41,11 +41,11 @@ The node keeps three more owner-private items in its state directory: `transfer.
 
 The Coordinator learns node public key/stable ID, daemon/protocol version,
 capabilities, heartbeat receipt times, workload/slot counts, job payloads/results
-and app ownership, plus (v0.2) the node's lifecycle and its resource report: coarse contribution/pressure/power states and the permitted memory/CPU budget. Network peers/reverse proxies inherently see addresses and
+and app ownership, plus (v0.2) the node's lifecycle and its resource report: coarse contribution/pressure/power states and the permitted memory/CPU budget, and (v0.2.1) the permitted scratch-disk budget, disk-I/O class, remaining transfer allowance and `availableForMs`, which reveals roughly how long until the owner's schedule turns contribution off (a coarse hint about the owner's routine). Network peers/reverse proxies inherently see addresses and
 timing. SQLite grants/sessions contain hashes, not originals. No telemetry,
-third-party analytics, host inventory or raw resource metrics. Raw memory/CPU samples are read locally to compute the budget and are never transmitted or stored. Power state is read from the OS power-supply files on Linux only.
-Echo input/output is plaintext and retained with job state. Use synthetic data;
-this milestone supplies neither job encryption nor retention automation.
+third-party analytics, host inventory or raw resource metrics. Raw memory/CPU samples are read locally to compute the budget and are never transmitted or stored. Power state is read from the Linux power-supply files, or on macOS and Windows from a fixed OS command (see below); free disk space of the state directory's volume and, on Linux, disk and network activity counters are also read locally and only ever reduced to the budget.
+Job input and output (echo messages, hash-chain seeds and digests) are plaintext and retained with job state. Use synthetic data;
+there is no job encryption. Finished jobs are deleted after the configurable retention period (default 30 days; 0 keeps them), but there is no audit log or per-tenant storage quota.
 Application and enrollment secrets are returned once to authorized operators;
 the operator must deliver them securely and must not paste them into logs.
 
@@ -104,9 +104,10 @@ admin bootstrap rotated/restarted. This is not mTLS or per-message signatures.
 Credential rotation uses session refresh, in-place app credential rotation, app revoke/reissue and node revoke/
 new enrollment. There is no administrator account/SSO system or key recovery.
 
-A node can lie about its budget or state (for example claim spare RAM it lacks, or claim `DRAINING`/goodbye to shed work); v0.2 does not verify or penalise this, and there is no reputation. The budget is a scheduling hint that protects honest owners, not a guarantee against a malicious node. Owner limits are enforced on the node, and a compromised node is not bound by them. Nothing forces a running handler to stop except its own cooperation with the abort signal; the echo handler is instantaneous and preemption is untested against real long-running work. A dishonest node can fabricate schema-valid echo output; no execution attestation
-or reputation. At-least-once execution can repeat future side effects. SQLite
+A node can lie about its budget or state (for example claim spare RAM it lacks, or claim `DRAINING`/goodbye to shed work); v0.2 does not verify or penalise this, and there is no reputation. The budget is a scheduling hint that protects honest owners, not a guarantee against a malicious node. Owner limits are enforced on the node, and a compromised node is not bound by them. Nothing forces a running handler to stop except its own cooperation with the abort signal; preemption and checkpoint/resume are exercised only with the cooperative `system.hashchain.v1` diagnostic job (tested in-process on Linux, macOS and Windows CI, not against real application workloads, not under memory-hungry or uncooperative handlers, and not on real hardware under owner load). A dishonest node can fabricate schema-valid results for any job type (a hash-chain digest is verifiable by recomputation, but the Coordinator does not recompute it); there is no execution attestation
+or reputation. A holder of a live lease can also keep it alive by renewing until `PRIVANET_MAX_LEASE_MS` (default one hour) even if it is not doing the work, so a malicious node can stall a job for that long per attempt. At-least-once execution can repeat future side effects. SQLite
 is a single-process prototype, not HA. Job queues are bounded per application and finished jobs are deleted after a configurable retention period (v0.2.1), but there is no per-application storage byte quota, audit log or per-tenant rate limit. Production still needs audit policies, a rehearsed restore on the operator's own infrastructure and an independent security review.
+Passing the automated tests is evidence that specific behaviours work on the CI platforms; it is not a security review and does not make the system production-ready. No independent security review has been done. Checkpoints hold job-derived state on the node's disk in plaintext. The macOS and Windows battery probes and the Windows console-signal handlers have not been exercised on real hardware.
 No public/community enrollment, Sybil resistance, economic rewards, storage
 integrity/durability, malicious-worker isolation, filesystem sandbox, arbitrary
 compute or distributed trust guarantees are claimed. Future handlers require

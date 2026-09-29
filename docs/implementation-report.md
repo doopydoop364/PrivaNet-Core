@@ -1,4 +1,6 @@
-# v0.1 implementation report
+# Implementation report (v0.1 delivery, updated for v0.2.1)
+
+**Current status (v0.2.1):** Phase 1 (Core Foundation) and Phase 2 (Adaptive Resource Engine) are implemented and released; nothing later is. Two job types exist: `system.echo.v1` and `system.hashchain.v1`. The sections below describe the **original v0.1 delivery** and are kept as history; where they say "the only registered job is `system.echo.v1`" or describe one-slot echo-only behaviour, read them together with this note, [the changelog](../CHANGELOG.md), [resources](RESOURCES.md) and [security](security.md), which describe the current behaviour. The status matrix in the [README](../README.md#status-and-limits) lists what is implemented, tested, partially tested, planned and deliberately unsupported.
 
 ## Repository inspection
 
@@ -48,8 +50,7 @@ execution, or anonymous proxying was added.
 Every request and response carries protocol version 1. Incompatible versions
 fail with `426 PROTOCOL_MISMATCH`. Strict schemas reject unknown fields and
 unsupported job types/capabilities. The only registered job is
-`system.echo.v1`; its handler is compiled into the node and accepts only a
-bounded string.
+`system.echo.v1` (v0.1; `system.hashchain.v1` was added in v0.2.1); handlers are compiled into the node and accept only bounded, schema-validated input.
 
 Nodes generate persistent Ed25519 keys locally. Their stable ID is derived from
 the canonical public key. Enrollment requires an expiring one-use administrator
@@ -69,27 +70,31 @@ can be authorized separately and need not pass through it. Local nodes use the
 same SDK and authenticated protocol as remote nodes. SQLite is a development
 adapter behind a persistence port; PostgreSQL remains a future adapter choice.
 
-Known limitations are documented explicitly: no mTLS or per-message signatures,
+Known limitations at v0.1 (still true unless the current documents say otherwise): no mTLS or per-message signatures,
 no key-recovery wizard, no execution attestation, no malicious-worker isolation,
 no public enrollment, no Sybil/reputation/accounting system, and no production
 HA or distributed storage guarantees.
 
 ## Verification
 
-The final checks were run on Node `v26.10.0`:
+v0.1 was verified on Node `v26.10.0` (39 tests at the time). For v0.2.1 the release
+gate is `npm ci`, `npm run lint`, `npm run typecheck` and `npm test` (build plus **94
+tests**, including the release-readiness tests in `tests/release.test.ts`, the
+seeded randomised lifecycle test in `tests/reliability.test.ts` and the
+upgrade-compatibility checks), green on Linux, macOS and Windows with Node 24 and 26
+in CI, and re-run by the release workflow before packaging. The final local run for
+this documentation pass was on Node 22 in a Linux sandbox; the Node 24.4+ requirement
+is enforced by CI, not by that local run.
 
-- `npm ci --ignore-scripts` — passed with the committed lockfile; audit reported
-  no vulnerabilities.
-- `npm run build` — passed.
-- `npm run test:unit` — 3 test files, 26 tests passed.
-- `npm run test:integration` — 13 HTTP/process integration tests passed.
-- `npm test` — 39 tests passed when run with loopback networking permitted.
-- `npm run lint` — passed.
-- `npm run typecheck` — passed.
+What this does **not** show: real-hardware behaviour of the macOS and Windows battery
+probes and Windows console signals, behaviour under real application workloads or
+adversarial nodes, restore on other hosts, or any independent security review.
 
 The process integration test starts the real Coordinator and PrivaNode, obtains
 credentials through the admin command, runs the SDK demo, restarts both services,
-and verifies the same node identity and persisted application/job behavior.
+verifies the same node identity and persisted application/job behaviour, and drains
+the node through the portable `DRAIN` file (and SIGTERM on POSIX). A further test runs
+the staged release distribution from outside the repository.
 
 ## Git handoff
 
@@ -99,6 +104,6 @@ schemas, capability lists and result validation derive from `JOB_TYPES`, and a
 test keeps node handlers in lockstep with the registry. Generated `dist/`,
 SQLite state, logs, identities, and secrets are ignored.
 
-## Remaining v0.1 work
+## Open items carried out of v0.1
 
 Update (v0.2.1): the reverse-proxy/TLS review is written up in [deployment](deployment.md) (it found that per-address authentication limits collapse onto the proxy's address, so the limit is now configurable and per-client limiting belongs at the proxy), `npm run backup` and a restore test exist, and job retention and a per-application queue quota were added. Node-key rotation (revoke and re-enroll works today) and the PostgreSQL adapter moved to later phases. An **independent** security review still needs people outside this project and is tracked in Phase 11.

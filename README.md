@@ -11,6 +11,19 @@ Every job, including on one machine, follows:
 No search engine, distributed storage, credits, generic compute or remote shell
 is implemented. No application/local execution bypass exists.
 
+## Status and limits
+
+Version **0.2.1**: Phase 1 (Core Foundation) and Phase 2 (Adaptive Resource Engine) are complete; see the [roadmap](ROADMAP.md). This is a small, operator-run control plane, **not** a production-ready or community-ready network.
+
+| State | What |
+| --- | --- |
+| Implemented and tested (CI on Linux, macOS, Windows; Node 24 and 26) | Coordinator, PrivaNode, SDK, Ed25519 identity and enrollment, scoped applications, typed jobs (`system.echo.v1`, `system.hashchain.v1`), scheduler, leases with fencing and renewal, retries, retention and queue quota, SQLite persistence, backup, owner resource policy, adaptive memory/CPU/disk/network budgets, schedules, preemption and release, node-local checkpoint/resume, graceful draining (`DRAINING` to `OFFLINE_EXPECTED`) |
+| Partially tested | Disk and network load sampling (Linux only, parsers unit-tested); macOS and Windows battery probes (parsers unit-tested, not run on real portable devices); Windows console-signal drain (the `DRAIN` file path is tested on all three OSes, the signals are not); preemption and checkpointing (proven with the cooperative hash-chain job, not real application workloads); backup restore (tested on one host) |
+| Planned, **not implemented** | PrivaSearch (Phase 3), storage (Phases 4-6), resource measurement (7), resource market and PrivaCredits (8), Network Treasury (9), community hardening (10), stable protocol (11) |
+| Deliberately unsupported | Arbitrary code, shell or script execution, downloading and running code, unrestricted proxying, public enrollment |
+
+Security caveats that remain: nodes and applications are untrusted and a node can fabricate schema-valid results (no execution attestation, no reputation); no public Sybil resistance; SQLite is a single-process prototype, not HA; no distributed-storage guarantees; no mTLS or per-message signatures; no independent security review; job data is plaintext. Details: [security](docs/security.md), [deployment](docs/deployment.md).
+
 ## Development
 
 Node **24.4+**, npm. Current validation environment is recorded in
