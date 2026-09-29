@@ -54,9 +54,10 @@ it proves possession of its persisted identity. The Coordinator may restart
 with the same data directory/admin secret; jobs, node identity, grants, application
 permissions and revocation survive. `npm run admin -- nodes` shows node state;
 `revoke-node ID` or `revoke-application ID` disables that credential's role.
-App revocation does not cancel already accepted jobs; cancellation is v0.2.
-Ctrl+C/SIGTERM stop the services. Node finishes its current bounded request
-before stopping; leases recover any lost work.
+App revocation does not cancel already accepted jobs, and there is no job
+cancellation. Ctrl+C/SIGTERM stop the Coordinator; on the node they start a
+graceful drain (see the owner resource policy section): it finishes or hands
+back its current job, says goodbye and exits. Leases recover any lost work.
 
 ## Configuration
 

@@ -7,6 +7,9 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 
 ## [Unreleased]
 
+### Documentation
+- Reconciled the documentation with the v0.2.1 implementation: security model (two handlers, lease renewal risk, plaintext job data and checkpoints, `availableForMs` disclosure, OS-specific and test-coverage caveats), architecture, protocol (rotate route, renew, no job cancellation), development guide (graceful node drain), resources (implemented telemetry), roadmap summary, deployment status, implementation report (marked as v0.1 history with a v0.2.1 status note and current verification), `.env.example` (four missing variables) and a README status matrix (implemented, tested, partially tested, planned, unsupported). No code or behaviour changes.
+
 ## [0.2.1] - 2026-09-29
 
 Completes Phase 2 (Adaptive Resource Engine) and closes the operational items left open in Phase 1. Protocol version 1; all wire changes are additive and optional, so v0.2.0 nodes still work.

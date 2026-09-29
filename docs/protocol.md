@@ -5,9 +5,9 @@ that header. Strict schemas reject extra fields, malformed identifiers,
 unsupported capabilities/types and payloads. Version mismatch is HTTP 426 with
 `PROTOCOL_MISMATCH`; no silent fallback. Health exchanges protocol/service version
 and persisted coordinator ID; heartbeat/enrollment carry daemon version and
-capabilities. Schema job version is in the identifier `system.echo.v1`.
+capabilities. Schema job version is in the identifier (for example `system.echo.v1`).
 
-Compatibility policy: within protocol 1, wire changes are **additive and optional** (v0.2 added optional heartbeat `lifecycle`/`resources`, the `release` and `goodbye` routes, and new node statuses). Older nodes keep working against a newer Coordinator; a newer node's extra fields are rejected by an older Coordinator's strict schema with a clear 400, and anything non-additive bumps the protocol number and fails with 426.
+Compatibility policy: within protocol 1, wire changes are **additive and optional** (v0.2 added optional heartbeat `lifecycle`/`resources`, the `release` and `goodbye` routes, and new node statuses; v0.2.1 added optional resource-report fields, the `renew` route and the `system.hashchain.v1` job type). Older nodes keep working against a newer Coordinator; a newer node's extra fields are rejected by an older Coordinator's strict schema with a clear 400, and anything non-additive bumps the protocol number and fails with 426.
 
 HTTPS is required except explicit opt-in HTTP to literal loopback addresses for
 local development. No credential URLs, redirects, caller-supplied paths or
@@ -19,7 +19,7 @@ cookies/CORS are not part of this machine-client API.
 | Role | Routes |
 | --- | --- |
 | Public | GET health; POST enrollment challenge/proof, node auth challenge/proof |
-| Admin bearer | POST admin/enrollment-tokens, admin/applications; GET admin/nodes; POST admin/nodes/:id/revoke, admin/applications/:id/revoke |
+| Admin bearer | POST admin/enrollment-tokens, admin/applications; GET admin/nodes; POST admin/nodes/:id/revoke, admin/applications/:id/revoke, admin/applications/:id/rotate |
 | Scoped application bearer | GET capabilities; POST jobs; GET jobs/:id (own jobs only) |
 | Node session bearer | POST node/heartbeat, node/goodbye, node/jobs/lease, node/jobs/:id/complete, node/jobs/:id/fail, node/jobs/:id/release, node/jobs/:id/renew |
 
@@ -87,8 +87,8 @@ Applications cannot select nodes or provide policy, retry counts or lease times.
 
 `QUEUED → LEASED → COMPLETED | FAILED`, plus `LEASED → QUEUED` on lease expiry, revocation or a voluntary release.
 Lease expiry or revocation returns work to QUEUED unless configured maximum
-attempts is exhausted, then FAILED. Node-reported handler failure is terminal in
-v0.1; errors use bounded fixed codes without arbitrary exception text.
+attempts is exhausted, then FAILED. Node-reported handler failure is terminal
+(since v0.1); there is no job cancellation. Errors use bounded fixed codes without arbitrary exception text.
 
 Each job type declares a resource estimate in the registry (CPU class, memory, disk, disk I/O, network, expected duration, preemptible, checkpointable). The scheduler assigns a job only to an ACTIVE, non-PAUSED node whose permitted budget (or that capability's budget) covers the estimate. Estimates are scheduler hints, not permission to exceed node limits. `release` (reason `DRAINING`, `PREEMPTED` or `SHUTDOWN`) hands a leased job back: it is requeued, the attempt is refunded, and a per-job release counter (`PRIVANET_MAX_RELEASES`, default 20) fails the job with `RELEASE_LIMIT` so drain/preempt loops cannot run forever. Checkpointing is node-local (v0.2.1): a released checkpointable job keeps its checkpoint on the node, and only that same node resumes it; if the Coordinator gives the job to another node it restarts from the beginning.
 

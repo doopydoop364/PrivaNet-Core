@@ -1,4 +1,4 @@
-# Core Foundation architecture (v0.1)
+# Architecture (Core Foundation v0.1, extended through v0.2.1)
 
 PrivaNet is application-neutral infrastructure. Every application submits work
 through SDK → Coordinator → authenticated PrivaNode, including on one machine.
@@ -18,7 +18,7 @@ scheduler policy and persistence adapter separated. It manages enrollment,
 node sessions, capabilities, health, scoped applications and leased jobs.
 PrivaNode has no listener. It persists a private Ed25519 identity and coordinator
 binding, polls for work, and invokes only locally installed registered handlers.
-`system.echo.v1` returns a bounded string unchanged. No shell, fetched executable,
+`system.echo.v1` returns a bounded string unchanged; `system.hashchain.v1` (v0.2.1) computes a bounded SHA-256 chain, is preemptible and checkpointable, and exists to exercise long-running behaviour. No shell, fetched executable,
 script, container or arbitrary network request operation exists.
 
 ## Inspection and boundaries
@@ -93,12 +93,12 @@ Store is a domain persistence port, separate from transport and scheduling.
 SQLite uses transactions, foreign keys, WAL, FULL synchronization and checksummed
 migrations. Registered nodes, revocations, grants, one-use challenges, hashed
 sessions, scoped app identities, jobs/results/leases and coordinator ID survive
-restart. Runtime state is private and ignored. Small validated echo payloads
-are retained; future bulk objects belong in a data plane, never job rows.
+restart. Runtime state is private and ignored. Small validated job payloads
+are retained until the retention period ends; future bulk objects belong in a data plane, never job rows.
 
 An injectable scheduler policy filters for authenticated ONLINE non-revoked
 nodes, permitted capabilities and coordinator-counted active leases below the
-operator's advertised slot limit (v0.1: one slot). It chooses the oldest eligible
+operator's advertised slot limit (currently always one slot), a permitted resource budget that covers the job's declared estimate (v0.2), and a schedule that does not end before the job's declared duration (v0.2.1). A node keeps a running job's lease alive by renewing it (v0.2.1), so jobs may outlast one lease period. It chooses the oldest eligible
 queued job when that node polls. Multiple nodes compete transactionally; no
 special preference/bypass for localhost. Advertised resources are untrusted
 hints, not accounting evidence. Job lifecycle/fencing is in [protocol](protocol.md).
