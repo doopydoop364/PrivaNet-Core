@@ -15,6 +15,10 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { SqliteStore } from '@privanet/coordinator/store';
 import { createCoordinatorServer } from '@privanet/coordinator/server';
 import { PrivaNode } from '@privanet/node/daemon';
+import { ResourceEngine } from '@privanet/node/resource-engine';
+import { ResourcePolicySchema } from '@privanet/node/resource-policy';
+import type { HostSample } from '@privanet/node/resource-sampler';
+import type { Handlers } from '@privanet/node/handlers';
 import { identity, heartbeat } from './helpers.js';
 async function listen(server: Server, port = 0): Promise<string> {
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
@@ -202,4 +206,81 @@ test('application credential rotation keeps identity and job ownership, kills th
   await f.transport.request('POST', `/v1/admin/applications/${app.applicationId}/revoke`, AckSchema, {}, f.admin);
   await assert.rejects(f.transport.request('POST', `/v1/admin/applications/${app.applicationId}/rotate`, AppCredentialSchema, {}, f.admin), errorCode('NOT_FOUND'));
   assert.equal(JSON.stringify(f.logs).includes(rotated.token), false);
+});
+
+const GiB = 1024 ** 3;
+function engineRig(overrides: Record<string, unknown> = {}) {
+  const host: HostSample = { availableMemoryBytes: 12 * GiB, ownerCpuPercent: 5, power: 'AC' };
+  let now = Date.now();
+  // Each read moves the fake clock forward so smoothing settles within a couple of samples.
+  const engine = new ResourceEngine(ResourcePolicySchema.parse({ maxMemoryBytes: 8 * GiB, preemptAfterMs: 0, ...overrides }), { sample: () => ({ ...host }) }, () => (now += 20000));
+  return { engine, host };
+}
+async function enrolled(f: Awaited<ReturnType<typeof fixture>>, extra: Partial<ConstructorParameters<typeof PrivaNode>[0]> = {}, name = 'node') {
+  const grant = await f.grant();
+  return new PrivaNode({ url: f.url, allowInsecureLoopback: true, stateDir: join(f.dir, name), capabilities: ['system.echo.v1'], enrollmentToken: grant.token, log: e => f.logs.push(e), ...extra });
+}
+
+test('node reports its permitted budget; the owner pausing contribution stops new work, resuming restarts it', async t => {
+  const f = await fixture(t); const app = await f.app(); const rig = engineRig({ onBattery: 'disable' });
+  const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token });
+  const node = await enrolled(f, { engine: rig.engine }); const job = await sdk.submit('system.echo.v1', { message: 'owner first' }, 'owner');
+  rig.host.power = 'BATTERY'; await node.tick();
+  assert.equal((await sdk.getJob(job.id)).status, 'QUEUED');
+  const paused = (await f.transport.request('GET', '/v1/admin/nodes', NodesSchema, undefined, f.admin)).nodes[0];
+  assert.equal(paused?.resources?.contribution, 'PAUSED'); assert.equal(paused?.resources?.memoryBudgetBytes, 0); assert.equal(paused?.status, 'ONLINE');
+  rig.host.power = 'AC'; await node.tick(); await node.tick();
+  assert.deepEqual(await sdk.waitForResult(job.id), { message: 'owner first' });
+  const running = (await f.transport.request('GET', '/v1/admin/nodes', NodesSchema, undefined, f.admin)).nodes[0];
+  assert.equal(running?.resources?.contribution, 'ADAPTIVE'); assert.equal(running?.resources?.memoryBudgetBytes, 8 * GiB);
+  assert.equal(JSON.stringify(f.logs).includes('owner first'), false);
+});
+
+test('draining node announces DRAINING and receives no work; graceful stop says goodbye (OFFLINE_EXPECTED)', async t => {
+  const f = await fixture(t); const app = await f.app();
+  const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token });
+  const node = await enrolled(f, { heartbeatMs: 1, pollMs: 5 }); await node.tick();
+  node.drain(); const job = await sdk.submit('system.echo.v1', { message: 'later' }, 'drain');
+  await node.tick(); assert.equal((await sdk.getJob(job.id)).status, 'QUEUED');
+  assert.equal((await f.transport.request('GET', '/v1/admin/nodes', NodesSchema, undefined, f.admin)).nodes[0]?.status, 'DRAINING');
+  assert.equal((await sdk.capabilities()).capabilities[0]?.onlineNodes, 0);
+  const stopper = new AbortController(); const other = await enrolled(f, { heartbeatMs: 1, pollMs: 5 }, 'second');
+  const running = other.run(stopper.signal); await delay(100); stopper.abort(); await running;
+  const states = (await f.transport.request('GET', '/v1/admin/nodes', NodesSchema, undefined, f.admin)).nodes.map(n => n.status).sort();
+  assert.deepEqual(states, ['DRAINING', 'OFFLINE_EXPECTED']);
+  assert.equal(f.logs.some(e => (e as { event: string }).event === 'node.departed'), true);
+});
+
+test('sustained pressure preempts a preemptible job: it is released, not failed, and another node finishes it', async t => {
+  const f = await fixture(t); const app = await f.app(); const rig = engineRig();
+  const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token });
+  let started!: () => void; const begun = new Promise<void>(resolve => { started = resolve; });
+  const blocking: Handlers = { 'system.echo.v1': (_input, { signal }) => new Promise((_resolve, reject) => { started(); signal.addEventListener('abort', () => reject(new Error('aborted'))); }) };
+  const first = await enrolled(f, { engine: rig.engine, handlers: blocking, preemptCheckMs: 5 }, 'first');
+  const job = await sdk.submit('system.echo.v1', { message: 'squeezed' }, 'preempt');
+  const ticking = first.tick(); await begun;
+  assert.equal((await sdk.getJob(job.id)).status, 'LEASED');
+  rig.host.availableMemoryBytes = 1 * GiB; await ticking;
+  const released = await sdk.getJob(job.id);
+  assert.equal(released.status, 'QUEUED'); assert.equal(released.attempts, 0); assert.equal(released.error, null);
+  assert.equal(f.logs.some(e => (e as { event: string }).event === 'job.released'), true);
+  const second = await enrolled(f, {}, 'second'); await second.tick();
+  assert.deepEqual(await sdk.waitForResult(job.id), { message: 'squeezed' });
+});
+
+test('forced shutdown hands the running job back with reason SHUTDOWN instead of failing it', async t => {
+  const f = await fixture(t); const app = await f.app();
+  const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token });
+  let started!: () => void; const begun = new Promise<void>(resolve => { started = resolve; });
+  const blocking: Handlers = { 'system.echo.v1': (_input, { signal }) => new Promise((_resolve, reject) => { started(); signal.addEventListener('abort', () => reject(new Error('aborted'))); }) };
+  const node = await enrolled(f, { handlers: blocking }); const job = await sdk.submit('system.echo.v1', { message: 'stop' }, 'shutdown');
+  const ticking = node.tick(); await begun; node.abortNow(); await ticking;
+  const after = await sdk.getJob(job.id); assert.equal(after.status, 'QUEUED'); assert.equal(after.attempts, 0);
+});
+
+test('node HTTP: release and goodbye need node credentials and reject malformed bodies', async t => {
+  const f = await fixture(t); const app = await f.app();
+  await assert.rejects(f.transport.request('POST', '/v1/node/goodbye', AckSchema, { reason: 'SHUTDOWN' }, app.token), errorCode('UNAUTHORIZED_NODE'));
+  await assert.rejects(f.transport.request('POST', `/v1/node/jobs/${'0'.repeat(8)}-0000-4000-8000-000000000000/release`, AckSchema, { leaseId: 'x', reason: 'DRAINING' }, app.token), errorCode('UNAUTHORIZED_NODE'));
+  await assert.rejects(f.transport.request('POST', '/v1/node/goodbye', AckSchema, { reason: 'SHUTDOWN' }, f.admin), errorCode('UNAUTHORIZED_NODE'));
 });

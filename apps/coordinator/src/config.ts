@@ -6,7 +6,7 @@ const schema = z.object({
   PRIVANET_HOST: z.string().default('127.0.0.1'), PRIVANET_PORT: positive(4010, 65535),
   PRIVANET_DATA_DIR: z.string().min(1).default('./var/coordinator'),
   PRIVANET_STALE_MS: positive(15000), PRIVANET_OFFLINE_MS: positive(60000),
-  PRIVANET_LEASE_MS: positive(10000), PRIVANET_MAX_ATTEMPTS: positive(3, 100),
+  PRIVANET_LEASE_MS: positive(10000), PRIVANET_MAX_ATTEMPTS: positive(3, 100), PRIVANET_MAX_RELEASES: positive(20, 1000),
   PRIVANET_SESSION_MS: positive(300000), PRIVANET_MAINTENANCE_MS: positive(1000, 60000),
   PRIVANET_TLS_TERMINATED: boolean,
 });
@@ -16,5 +16,5 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   return { adminSecret: c.PRIVANET_ADMIN_SECRET, host: c.PRIVANET_HOST, port: c.PRIVANET_PORT,
     dataDir: c.PRIVANET_DATA_DIR, maintenanceMs: c.PRIVANET_MAINTENANCE_MS,
     policy: { staleMs: c.PRIVANET_STALE_MS, offlineMs: c.PRIVANET_OFFLINE_MS, leaseMs: c.PRIVANET_LEASE_MS,
-      maxAttempts: c.PRIVANET_MAX_ATTEMPTS, sessionMs: c.PRIVANET_SESSION_MS } };
+      maxAttempts: c.PRIVANET_MAX_ATTEMPTS, maxReleases: c.PRIVANET_MAX_RELEASES, sessionMs: c.PRIVANET_SESSION_MS } };
 }

@@ -1,6 +1,12 @@
 # PrivaNet Resource Management
 
-Status: **design / planned**. The complete adaptive resource engine is not part of the initial Core Foundation milestone.
+Status: **the v0.2 core is implemented; the rest is planned.**
+
+Implemented in v0.2: operator policy file (hard memory/CPU ceilings, owner RAM/CPU reserve, safety margin, per-capability ceilings), an adaptive memory/CPU budget with fast-down/slow-up smoothing and enter/exit hysteresis, pressure states, weekly schedules (`FULL`/`ADAPTIVE`/`MINIMAL`/`OFF`), battery policy (Linux power detection only; other systems report `UNKNOWN` and are treated as mains), minimal budget telemetry in heartbeats, job resource declarations, a resource-aware scheduler, preemption of preemptible jobs after sustained pressure, voluntary release with refund, graceful draining and a goodbye that records an expected departure.
+
+Not yet implemented: disk capacity/disk-I/O awareness, bandwidth and monthly transfer limits, network-pressure awareness, checkpoint/resume, thermal signals, using the schedule to plan long-running placement (the Coordinator sees only the current level), measured job resource use, and calibration on real workloads. Only `system.echo.v1` exists, so preemption is proven with test handlers, not real workloads. The `FULL` level differs from `ADAPTIVE` only in ignoring the owner's current CPU load (the owner's RAM reserve and pressure pausing still apply).
+
+The sections below describe the design, including parts not yet built.
 
 ## Principle
 

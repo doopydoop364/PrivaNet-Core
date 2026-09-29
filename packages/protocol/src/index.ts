@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const PROTOCOL_VERSION = 1 as const;
-export const SERVICE_VERSION = '0.1.0';
+export const SERVICE_VERSION = '0.2.0';
 export const MAX_BODY_BYTES = 32 * 1024;
 export const ProtocolSchema = z.literal(PROTOCOL_VERSION);
 export const IdSchema = z.uuid();
@@ -9,8 +9,27 @@ export const NodeIdSchema = z.string().regex(/^node_[a-f0-9]{64}$/);
 export const SecretSchema = z.string().regex(/^[a-f0-9]{64}$/);
 export const TimeSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 export const EchoSchema = z.strictObject({ message: z.string().max(1024) });
+/** Coarse intensity classes shared by job estimates and node budgets. */
+export const IntensitySchema = z.enum(['none', 'low', 'medium', 'high']);
+/** Minimum node CPU budget (percent of the machine) required to run a job of each CPU class. */
+export const CPU_CLASS_MIN_PERCENT = Object.freeze({ none: 0, low: 5, medium: 25, high: 50 } as const);
+const ByteCountSchema = z.number().int().min(0).max(2 ** 40);
+/**
+ * Scheduler hints and policy inputs, never permission to exceed a node's own limits. Every
+ * registered job type must declare them so future job types cannot be scheduled blind.
+ */
+export const ResourceEstimateSchema = z.strictObject({
+  cpu: IntensitySchema, memoryBytes: ByteCountSchema, diskBytes: ByteCountSchema, diskIo: IntensitySchema,
+  networkBytes: ByteCountSchema, expectedDurationMs: z.number().int().min(1).max(86400000).nullable(),
+  preemptible: z.boolean(), checkpointable: z.boolean(),
+});
+export type ResourceEstimate = z.infer<typeof ResourceEstimateSchema>;
+const ECHO_RESOURCES: ResourceEstimate = Object.freeze({
+  cpu: 'low', memoryBytes: 1024 * 1024, diskBytes: 0, diskIo: 'none', networkBytes: 4096,
+  expectedDurationMs: 100, preemptible: true, checkpointable: false,
+});
 export const JOB_TYPES = Object.freeze({
-  'system.echo.v1': Object.freeze({ version: 1, capability: 'system.echo.v1', input: EchoSchema, output: EchoSchema }),
+  'system.echo.v1': Object.freeze({ version: 1, capability: 'system.echo.v1', input: EchoSchema, output: EchoSchema, resources: ECHO_RESOURCES }),
 });
 export type JobType = keyof typeof JOB_TYPES;
 export type JobInputMap = { [T in JobType]: z.infer<(typeof JOB_TYPES)[T]['input']> };
@@ -53,16 +72,41 @@ export const ChallengeSchema = z.strictObject({
 });
 export const ProofSchema = z.strictObject({ challengeId: IdSchema, signature: z.string().regex(/^[a-f0-9]{128}$/) });
 export const SessionSchema = z.strictObject({ nodeId: NodeIdSchema, token: SecretSchema, expiresAt: TimeSchema, coordinatorId: IdSchema });
+/** What the owner's policy currently lets PrivaNet use. PAUSED means: assign this node no new work. */
+export const ContributionSchema = z.enum(['FULL', 'ADAPTIVE', 'MINIMAL', 'PAUSED']);
+export const PressureSchema = z.enum(['NORMAL', 'ELEVATED', 'HIGH']);
+export const PowerSchema = z.enum(['AC', 'BATTERY', 'UNKNOWN']);
+/**
+ * Deliberately minimal telemetry: the current permitted budget and coarse states, not raw host
+ * measurements. `memoryBudgetBytes` is the additional memory a new job may use right now.
+ */
+const BudgetSchema = z.strictObject({ memoryBudgetBytes: ByteCountSchema, cpuBudgetPercent: z.number().int().min(0).max(100) });
+export const ResourceReportSchema = z.strictObject({
+  contribution: ContributionSchema, pressure: PressureSchema, power: PowerSchema,
+  memoryBudgetBytes: ByteCountSchema, cpuBudgetPercent: z.number().int().min(0).max(100),
+  /** Operator-set capability-specific limits; a capability listed here uses this budget instead of the general one. */
+  perCapability: z.partialRecord(JobTypeSchema, BudgetSchema).optional(),
+});
+export type ResourceReport = z.infer<typeof ResourceReportSchema>;
+/** ACTIVE accepts work; DRAINING finishes/releases work and asks for none. Departure is a separate goodbye. */
+export const LifecycleSchema = z.enum(['ACTIVE', 'DRAINING']);
+// Additive within protocol 1: both fields are optional, so nodes that predate them keep working.
 export const HeartbeatSchema = z.strictObject({
   protocolVersion: ProtocolSchema, daemonVersion: VersionSchema, capabilities: CapabilitiesSchema,
   jobSlots: z.literal(1), currentJobs: z.number().int().min(0).max(1),
+  lifecycle: LifecycleSchema.optional(), resources: ResourceReportSchema.optional(),
 });
+export const ReleaseReasonSchema = z.enum(['DRAINING', 'PREEMPTED', 'SHUTDOWN']);
+/** A node hands a leased job back without failing it; the job is requeued and the attempt is refunded. */
+export const ReleaseSchema = z.strictObject({ leaseId: IdSchema, reason: ReleaseReasonSchema });
+/** Planned departure: the node leaves on purpose, so this is not an unexplained disappearance. */
+export const GoodbyeSchema = z.strictObject({ reason: z.literal('SHUTDOWN') });
 export const AckSchema = z.strictObject({ ok: z.literal(true) });
-export const NodeStatusSchema = z.enum(['ONLINE', 'STALE', 'OFFLINE', 'REVOKED']);
+export const NodeStatusSchema = z.enum(['ONLINE', 'STALE', 'OFFLINE', 'DRAINING', 'OFFLINE_EXPECTED', 'REVOKED']);
 export const NodeViewSchema = z.strictObject({
   nodeId: NodeIdSchema, capabilities: CapabilitiesSchema, daemonVersion: VersionSchema,
   protocolVersion: ProtocolSchema, lastHeartbeatAt: TimeSchema.nullable(), status: NodeStatusSchema,
-  currentJobs: z.number().int().min(0).max(1), jobSlots: z.literal(1),
+  currentJobs: z.number().int().min(0).max(1), jobSlots: z.literal(1), resources: ResourceReportSchema.optional(),
 });
 export const NodesSchema = z.strictObject({ nodes: z.array(NodeViewSchema).max(1000) });
 export const AppCreateSchema = z.strictObject({ name: z.string().min(1).max(80), allowedJobTypes: z.array(JobTypeSchema).max(JOB_TYPE_IDS.length) });
@@ -70,7 +114,7 @@ export const AppCredentialSchema = z.strictObject({ applicationId: IdSchema, tok
 export const SubmitSchema = registered(z.strictObject({
   type: JobTypeSchema, input: z.unknown(), idempotencyKey: z.string().min(1).max(128).regex(/^[a-zA-Z0-9_.:-]+$/),
 }));
-export const JobErrorSchema = z.strictObject({ code: z.enum(['HANDLER_FAILED', 'LEASE_EXPIRED', 'NODE_REVOKED', 'CAPABILITY_DISABLED', 'INVALID_RESULT']) });
+export const JobErrorSchema = z.strictObject({ code: z.enum(['HANDLER_FAILED', 'LEASE_EXPIRED', 'NODE_REVOKED', 'CAPABILITY_DISABLED', 'INVALID_RESULT', 'RELEASE_LIMIT']) });
 export const JobStatusSchema = z.enum(['QUEUED', 'LEASED', 'COMPLETED', 'FAILED']);
 export const JobSchema = registered(z.strictObject({
   id: IdSchema, type: JobTypeSchema, protocolVersion: ProtocolSchema, input: z.unknown(),

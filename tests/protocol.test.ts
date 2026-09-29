@@ -8,11 +8,11 @@ import { loadConfig as coordinatorConfig } from '@privanet/coordinator/config';
 import { loadConfig as nodeConfig } from '@privanet/node/config';
 import { randomUUID } from 'node:crypto';
 
-test('strict typed schema accepts echo data including shell-looking strings', () => {
+test('strict typed schema accepts echo data including shell-looking strings', async () => {
   const message = '$(touch /tmp/do-not-execute); rm -rf /';
   const lease = LeaseSchema.parse({ jobId: randomUUID(), leaseId: randomUUID(), type: 'system.echo.v1', input: { message }, protocolVersion: 1, expiresAt: Date.now() + 10000, attempt: 1 });
-  assert.deepEqual(executeLease(lease, ['system.echo.v1']), { message });
-  assert.throws(() => executeLease(lease, []));
+  assert.deepEqual(await executeLease(lease, ['system.echo.v1']), { message });
+  await assert.rejects(executeLease(lease, []));
 });
 test('unknown type, unknown fields, malformed input and oversized values fail closed', () => {
   const valid = { type: 'system.echo.v1', input: { message: 'ok' }, idempotencyKey: 'request-1' };

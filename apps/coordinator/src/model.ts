@@ -1,6 +1,8 @@
 import type { Challenge, EnrollmentStart, Job, JobType, NodeView } from '@privanet/protocol';
 export interface NodeRecord extends Omit<NodeView, 'status'> {
   publicKey: string; allowedCapabilities: JobType[]; enrolledAt: number; revoked: boolean;
+  /** Absent in records written before Phase 2; treated as ACTIVE. DEPARTED = announced planned departure. */
+  lifecycle?: 'ACTIVE' | 'DRAINING' | 'DEPARTED';
 }
 export interface ApplicationRecord { id: string; tokenHash: string; name: string; allowedJobTypes: JobType[]; revoked: boolean }
 export interface Grant { tokenHash: string; expiresAt: number; capabilities: JobType[]; used: boolean }
@@ -12,6 +14,8 @@ export interface NodeSession { tokenHash: string; nodeId: string; expiresAt: num
 export interface JobRecord extends Job {
   applicationId: string; idempotencyKey: string;
   assignedNodeId: string | null; leaseId: string | null; leaseExpiresAt: number | null;
+  /** Graceful hand-backs (drain/preemption); absent in older records. Bounded by policy.maxReleases. */
+  releases?: number;
 }
 export interface Store {
   readonly coordinatorId: string;

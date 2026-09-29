@@ -90,6 +90,33 @@ bounded per-address limits; the control plane supports at most 1000 registered
 nodes/pending challenges in this initial implementation. Queues/results need
 operator retention and quotas before broader deployment.
 
+## Owner resource policy (PrivaNode)
+
+`PRIVANODE_POLICY_FILE` points to an optional strict JSON file; without it conservative defaults apply (1 GiB memory ceiling, 2 GiB reserved for the owner, 512 MiB safety margin, 25% CPU ceiling, 20% CPU reserve, reduced contribution on battery). Unknown keys are rejected. Example:
+
+```json
+{
+  "maxMemoryBytes": 4294967296,
+  "reserveMemoryBytes": 4294967296,
+  "safetyMarginBytes": 536870912,
+  "maxCpuPercent": 40,
+  "reserveCpuPercent": 20,
+  "onBattery": "reduce",
+  "minimalFraction": 0.1,
+  "defaultLevel": "ADAPTIVE",
+  "schedule": [
+    { "days": [1, 2, 3, 4, 5], "from": "00:00", "to": "07:00", "level": "FULL" },
+    { "days": [1, 2, 3, 4, 5], "from": "07:00", "to": "16:00", "level": "ADAPTIVE" },
+    { "days": [1, 2, 3, 4, 5], "from": "16:00", "to": "23:00", "level": "MINIMAL" },
+    { "days": [0, 6], "from": "00:00", "to": "00:00", "level": "ADAPTIVE" }
+  ],
+  "capabilityLimits": { "system.echo.v1": { "maxMemoryBytes": 16777216 } },
+  "preemptAfterMs": 10000
+}
+```
+
+Days are 0 (Sunday) to 6, times are the machine's local time, first matching rule wins, and `to <= from` wraps past midnight (`from == to` is the whole day). `OFF` pauses contribution. Budgets never exceed the ceilings or the reserve; pressure states use enter/exit thresholds, so a momentary spike does not pause work while sustained pressure does (new work stops at once, preemptible running jobs are released after `preemptAfterMs`). SIGTERM/SIGINT drain the node: it stops taking work, finishes the current job, announces `DRAINING`, says goodbye and exits. After `PRIVANODE_DRAIN_TIMEOUT_MS` (default 30000) or on a second signal the running job is handed back instead. On Windows the process is normally terminated without a graceful signal, so the Coordinator sees an unexplained disappearance there. `PRIVANET_MAX_RELEASES` (Coordinator) bounds voluntary hand-backs per job.
+
 ## State, migrations and recovery
 
 Use one Coordinator process and a private operator-owned local state directory.

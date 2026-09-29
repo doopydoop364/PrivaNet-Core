@@ -45,7 +45,7 @@ PrivaNet must not provide arbitrary remote shell, arbitrary script execution, un
 
 Status (audited; CI matrix of Linux/macOS/Windows on Node 24 and 26 passing as of PR #1): the deliverables above are **implemented** in code and covered by automated tests, with `system.echo.v1` as the only job type. Job types are defined by a single versioned registry that drives wire schemas, capabilities and node handlers. Phase 1 stays **Current** until the items in `docs/implementation-report.md` under "Remaining v0.1 work" are done: TLS/reverse-proxy deployment review, backup/recovery exercise, and independent security review. Not yet implemented within Phase 1's scope: node-key rotation (application credentials rotate in place), and a PostgreSQL store adapter (SQLite only).
 
-## Phase 2 — Adaptive Resource Engine — Planned
+## Phase 2 — Adaptive Resource Engine — Current (core implemented in v0.2.0; remainder planned)
 
 Goal: allow PrivaNode to use genuinely spare machine resources while keeping the computer owner in control.
 
@@ -53,7 +53,9 @@ Principle:
 
 > User workloads always take priority over PrivaNet workloads.
 
-Planned features:
+Status: the memory/CPU core is **implemented** (operator policy, adaptive smoothed budgets with hysteresis, schedules, battery policy on Linux, heartbeat resource telemetry, job resource declarations, resource-aware scheduling, preemption and release of preemptible jobs, graceful draining with `DRAINING` and `OFFLINE_EXPECTED`). Still **planned** within this phase: disk-I/O and bandwidth/transfer limits, network-pressure awareness, checkpointing, schedule-aware placement of long jobs, battery detection beyond Linux, and tuning against real workloads. Details in `docs/RESOURCES.md`.
+
+Planned features (see status above for what is done):
 
 - adaptive CPU contribution
 - adaptive RAM contribution
