@@ -33,6 +33,11 @@ Completes Phase 2 (Adaptive Resource Engine) and closes the operational items le
 - Long-term design: an internal resource market for verified useful resources with PrivaCredits as the internal accounting unit (`docs/RESOURCE_MARKET.md`, rewritten `docs/CREDITS.md`, updated roadmap, resources, architecture ADR 002 and market threat model). Market-discovered clearing prices supersede fixed demand multipliers as the main scarcity mechanism. Roadmap Phase 7 is now Resource Measurement/Accounting and Phase 8 is Resource Market + PrivaCredits. No code or protocol changes; nothing described there is implemented.
 - Long-term design: an internal Network Treasury funded primarily by a bounded, versioned, visible levy on existing credits, with separate budget buckets, treasury-paid public-good jobs (including a PrivaSearch public crawl queue), a contributor bootstrap program that matches verified contribution, and maintenance/emergency reserves (`docs/TREASURY.md`, ADR 003, treasury threat table). Roadmap gains Phase 9 Network Treasury and Public Goods; Community Hardening becomes Phase 10 and Stable Protocol Phase 11. Documentation only; not implemented, not an investment fund, credits remain non-tradable.
 
+### Tests
+- Release-readiness tests: version, lockfile and changelog consistency; relative Markdown links and anchors; staged distribution contents and secret hygiene for all three platforms; a run of the packaged Coordinator, node, admin, demo, long checkpointable job, backup and drain from outside the repository.
+- Randomised lifecycle test (seeded, five seeds) checking lease exclusivity, fencing of stale and foreign leases, result integrity and terminal-state stability; upgrade-compatibility checks for v0.1/v0.2.0 nodes and pre-v0.2.1 job records.
+- The release archives now include `tools/backup.mjs`.
+
 ### Known limits
 - Checkpoints resume only on the same node. Disk and network load are sampled on Linux only. macOS/Windows battery commands and Windows console signals were not exercised on real hardware. Resource declarations were calibrated on one development machine.
 
