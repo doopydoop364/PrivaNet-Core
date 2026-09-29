@@ -231,6 +231,10 @@ idempotent, reference the job/lease/attempt, node, application, resource class,
 unit version, quantity, price and policy version, and be reversible only by an
 explicit compensating entry.
 
+## Treasury as a buyer (planned, Phase 9)
+
+Some demand has no single payer (public crawling, maintenance, contributor bootstrap). The planned [Network Treasury](TREASURY.md) is funded mainly by a small, bounded, versioned levy on the settlements described above and pays for that work **as an ordinary market participant**: a budgeted demand with a maximum willingness to pay, not a privileged unlimited buyer. It goes through the same request, market, scheduler, verification and settlement path, and it slows or pauses non-urgent purchases when a class is scarce or expensive. The settlement design must therefore leave room for an explicit, visible levy entry; the treasury itself is not part of the market phase.
+
 ## Reliability
 
 Reliability stays **separate from price**. It informs the scheduler (who gets
@@ -363,8 +367,9 @@ design consequences are:
 | Colluding nodes/clients; bandwidth farming | Rewardable traffic must be Coordinator-authorised for an application purpose; cap or exclude traffic between related parties; anomaly detection |
 | Useless compute jobs | Job types come from the typed registry, applications pay for them, and verification defines rewardable work |
 | Storage churn only to earn | Reward stored-and-retained data over time, charge for churn and repair, discount short-lived storage |
-| Sybil nodes | Enrollment control now; identity cost and reputation in Phase 9; never let identity count alone buy influence over the clearing price |
+| Sybil nodes | Enrollment control now; identity cost and reputation in Phase 10; never let identity count alone buy influence over the clearing price |
 | Clearing-price manipulation; artificial scarcity by withdrawing supply | Uniform-price design, thin-market protections, movement limits, circuit breakers, statistics on withdrawals |
+| Manipulating price before treasury purchases; treasury overpaying under artificial scarcity | Treasury maximum willingness to pay, reference-price ceilings, thin-market protection, throttling when scarce, circuit breakers (see [TREASURY.md](TREASURY.md)) |
 | Credential theft | Per-account limits, revocation, reversal entries |
 
 The critical rule: **only Coordinator-authorised, policy-valid, verified
@@ -428,3 +433,4 @@ No Phase 1 or Phase 2 code change was necessary.
 - How do price-driven supply changes interact with the adaptive engine so that price never pushes a node past its limits?
 - What is the minimum participation needed before a market is meaningful, and what is the fallback below it?
 - What visibility is acceptable without exposing individual nodes?
+- How does the settlement leave room for a levy entry, and are treasury-paid settlements levied? See [TREASURY.md](TREASURY.md#unresolved-research-questions).
