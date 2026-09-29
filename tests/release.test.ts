@@ -48,7 +48,7 @@ test('documentation: every relative link and anchor in the shipped Markdown reso
   for (const file of files) {
     for (const match of readFileSync(join(root, file), 'utf8').matchAll(/\]\(([^)#\s]*)(?:#([^)]*))?\)/g)) {
       const [, target = '', anchor] = match; if (/^(https?:|mailto:)/.test(target)) continue;
-      const path = target ? normalize(join(dirname(file), target)) : file;
+      const path = target ? normalize(join(dirname(file), target)).replaceAll('\\', '/') : file; // forward slashes on every OS
       if (!existsSync(join(root, path))) { problems.push(`${file}: missing ${target}`); continue; }
       if (anchor && path.endsWith('.md') && !anchors.get(path)?.has(anchor)) problems.push(`${file}: no anchor #${anchor} in ${path}`);
     }
@@ -86,7 +86,7 @@ test('staged distributions contain what they should and nothing they should not 
     const example = readFileSync(join(stage, '.env.example'), 'utf8'); assert.doesNotMatch(example, /[a-f0-9]{64}/, '.env.example must hold no real secret');
     const bin = readFileSync(join(stage, 'bin', `privanet-node${platform === 'windows' ? '.cmd' : ''}`), 'utf8');
     if (platform === 'windows') assert.match(bin, /^@echo off\r\nnode "%~dp0\.\.\\node_modules\\@privanet\\node\\dist\\main\.js" %\*\r\n$/); else assert.match(bin, /^#!\/bin\/sh\nexec node "\$\(dirname "\$0"\)\/\.\.\/node_modules\/@privanet\/node\/dist\/main\.js" "\$@"\n$/);
-    if (platform !== 'windows') assert.ok((statSync(join(stage, 'bin', 'privanet-node')).mode & 0o111) !== 0, 'launcher must be executable');
+    if (platform !== 'windows' && process.platform !== 'win32') assert.ok((statSync(join(stage, 'bin', 'privanet-node')).mode & 0o111) !== 0, 'launcher must be executable');
     assert.match(readFileSync(join(stage, 'RUNNING.txt'), 'utf8'), new RegExp(`PrivaNet ${version.replaceAll('.', '\\.')} \\(${platform}\\)`));
   }
 });
