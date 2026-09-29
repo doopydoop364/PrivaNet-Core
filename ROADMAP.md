@@ -43,6 +43,8 @@ A local application can submit a strictly typed job using the PrivaNet SDK, the 
 
 PrivaNet must not provide arbitrary remote shell, arbitrary script execution, unrestricted anonymous proxying, or generic download-and-execute functionality.
 
+Status (audited): the deliverables above are **implemented** in code and covered by automated tests, with `system.echo.v1` as the only job type. Job types are defined by a single versioned registry that drives wire schemas, capabilities and node handlers. Phase 1 stays **Current** until the items in `docs/implementation-report.md` under "Remaining v0.1 work" are done: CI OS matrix validation, TLS/reverse-proxy deployment review, backup/recovery exercise, and independent security review. Not yet implemented within Phase 1's scope: node-key rotation (application credentials rotate in place), and a PostgreSQL store adapter (SQLite only).
+
 ## Phase 2 — Adaptive Resource Engine — Planned
 
 Goal: allow PrivaNode to use genuinely spare machine resources while keeping the computer owner in control.

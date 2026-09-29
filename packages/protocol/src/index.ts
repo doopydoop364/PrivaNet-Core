@@ -13,10 +13,23 @@ export const JOB_TYPES = Object.freeze({
   'system.echo.v1': Object.freeze({ version: 1, capability: 'system.echo.v1', input: EchoSchema, output: EchoSchema }),
 });
 export type JobType = keyof typeof JOB_TYPES;
-export type JobInputMap = { 'system.echo.v1': z.infer<typeof EchoSchema> };
-export type JobOutputMap = JobInputMap;
-export const JobTypeSchema = z.literal('system.echo.v1');
-export const CapabilitiesSchema = z.array(JobTypeSchema).max(1);
+export type JobInputMap = { [T in JobType]: z.infer<(typeof JOB_TYPES)[T]['input']> };
+export type JobOutputMap = { [T in JobType]: z.infer<(typeof JOB_TYPES)[T]['output']> };
+// Every wire schema derives from the registry: adding a job type means adding one entry
+// above (plus a node-side handler). Nothing else on the wire accepts unregistered types.
+export const JOB_TYPE_IDS = Object.keys(JOB_TYPES) as [JobType, ...JobType[]];
+export const JobTypeSchema = z.enum(JOB_TYPE_IDS);
+export const CapabilitiesSchema = z.array(JobTypeSchema).max(JOB_TYPE_IDS.length)
+  .refine(list => new Set(list).size === list.length, 'duplicate capability');
+type Payload = { type: JobType; input?: unknown; result?: unknown };
+/** Validates payload fields against the schema registered for `type`; never trusts the sender's shape. */
+function registered<S extends z.ZodType<Payload>>(schema: S) {
+  return schema.superRefine((value, ctx) => {
+    const definition = JOB_TYPES[value.type];
+    if ('input' in value && !definition.input.safeParse(value.input).success) ctx.addIssue({ code: 'custom', path: ['input'], message: 'invalid job input' });
+    if (value.result != null && !definition.output.safeParse(value.result).success) ctx.addIssue({ code: 'custom', path: ['result'], message: 'invalid job result' });
+  });
+}
 export const VersionSchema = z.string().regex(/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/).max(64);
 export const HealthSchema = z.strictObject({
   protocolVersion: ProtocolSchema, serviceVersion: VersionSchema, coordinatorId: IdSchema, status: z.literal('ok'),
@@ -52,26 +65,27 @@ export const NodeViewSchema = z.strictObject({
   currentJobs: z.number().int().min(0).max(1), jobSlots: z.literal(1),
 });
 export const NodesSchema = z.strictObject({ nodes: z.array(NodeViewSchema).max(1000) });
-export const AppCreateSchema = z.strictObject({ name: z.string().min(1).max(80), allowedJobTypes: z.array(JobTypeSchema).max(1) });
+export const AppCreateSchema = z.strictObject({ name: z.string().min(1).max(80), allowedJobTypes: z.array(JobTypeSchema).max(JOB_TYPE_IDS.length) });
 export const AppCredentialSchema = z.strictObject({ applicationId: IdSchema, token: SecretSchema });
-export const SubmitSchema = z.strictObject({
-  type: JobTypeSchema, input: EchoSchema, idempotencyKey: z.string().min(1).max(128).regex(/^[a-zA-Z0-9_.:-]+$/),
-});
+export const SubmitSchema = registered(z.strictObject({
+  type: JobTypeSchema, input: z.unknown(), idempotencyKey: z.string().min(1).max(128).regex(/^[a-zA-Z0-9_.:-]+$/),
+}));
 export const JobErrorSchema = z.strictObject({ code: z.enum(['HANDLER_FAILED', 'LEASE_EXPIRED', 'NODE_REVOKED', 'CAPABILITY_DISABLED', 'INVALID_RESULT']) });
 export const JobStatusSchema = z.enum(['QUEUED', 'LEASED', 'COMPLETED', 'FAILED']);
-export const JobSchema = z.strictObject({
-  id: IdSchema, type: JobTypeSchema, protocolVersion: ProtocolSchema, input: EchoSchema,
+export const JobSchema = registered(z.strictObject({
+  id: IdSchema, type: JobTypeSchema, protocolVersion: ProtocolSchema, input: z.unknown(),
   status: JobStatusSchema, createdAt: TimeSchema, completedAt: TimeSchema.nullable(),
-  attempts: z.number().int().nonnegative(), result: EchoSchema.nullable(), error: JobErrorSchema.nullable(),
-});
-export const LeaseSchema = z.strictObject({
-  jobId: IdSchema, type: JobTypeSchema, input: EchoSchema, protocolVersion: ProtocolSchema,
+  attempts: z.number().int().nonnegative(), result: z.unknown().nullable(), error: JobErrorSchema.nullable(),
+}));
+export const LeaseSchema = registered(z.strictObject({
+  jobId: IdSchema, type: JobTypeSchema, input: z.unknown(), protocolVersion: ProtocolSchema,
   leaseId: IdSchema, expiresAt: TimeSchema, attempt: z.number().int().positive(),
-});
+}));
 export const LeaseResponseSchema = z.strictObject({ lease: LeaseSchema.nullable() });
-export const CompleteSchema = z.strictObject({ leaseId: IdSchema, result: EchoSchema });
+/** The result is validated against the leased job's registered output schema by the Coordinator. */
+export const CompleteSchema = z.strictObject({ leaseId: IdSchema, result: z.unknown() });
 export const FailureSchema = z.strictObject({ leaseId: IdSchema, error: JobErrorSchema });
-export const CapabilitiesResponseSchema = z.strictObject({ capabilities: z.array(z.strictObject({ capability: JobTypeSchema, onlineNodes: z.number().int().nonnegative() })).max(1) });
+export const CapabilitiesResponseSchema = z.strictObject({ capabilities: z.array(z.strictObject({ capability: JobTypeSchema, onlineNodes: z.number().int().nonnegative() })).max(JOB_TYPE_IDS.length) });
 export type NodeView = z.infer<typeof NodeViewSchema>;
 export type Heartbeat = z.infer<typeof HeartbeatSchema>;
 export type EnrollmentStart = z.infer<typeof EnrollmentStartSchema>;

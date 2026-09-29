@@ -65,7 +65,7 @@ and on job reads/lease requests. Stale/offline nodes receive no new jobs.
 
 ## Typed jobs, idempotency and leases
 
-Only `system.echo.v1` exists: input/output `{message: string}` (≤1024 characters).
+Only `system.echo.v1` exists: input/output `{message: string}` (≤1024 characters). Job types live in one registry (`JOB_TYPES` in `packages/protocol`); submit, lease, job and capability schemas derive from it, the Coordinator validates each result against the leased job's own registered output schema, and a test requires every registered type to have a node handler.
 Both sides validate; node checks locally enabled capability and fixed handler.
 SDK submit requires a caller idempotency key. Same application/key/request
 returns same job, changed request is 409. Keep the key when retrying a submission. Read requests retry one transient

@@ -188,3 +188,18 @@ test('concurrent authenticated polls cannot lease the same job twice', async t =
   assert.equal(leases.filter(response => response.lease === null).length, 1);
   assert.equal((await sdk.getJob(job.id)).attempts, 1);
 });
+test('application credential rotation keeps identity and job ownership, kills the old credential, needs admin', async t => {
+  const f = await fixture(t); const app = await f.app();
+  const old = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token });
+  const job = await old.submit('system.echo.v1', { message: 'kept' }, 'rotation');
+  await assert.rejects(f.transport.request('POST', `/v1/admin/applications/${app.applicationId}/rotate`, AppCredentialSchema, {}, app.token), errorCode('UNAUTHORIZED_ADMIN'));
+  const rotated = await f.transport.request('POST', `/v1/admin/applications/${app.applicationId}/rotate`, AppCredentialSchema, {}, f.admin);
+  assert.equal(rotated.applicationId, app.applicationId); assert.notEqual(rotated.token, app.token);
+  await assert.rejects(old.getJob(job.id), errorCode('UNAUTHORIZED_APPLICATION'));
+  const fresh = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: rotated.token });
+  assert.equal((await fresh.getJob(job.id)).id, job.id);
+  assert.equal((await fresh.submit('system.echo.v1', { message: 'kept' }, 'rotation')).id, job.id);
+  await f.transport.request('POST', `/v1/admin/applications/${app.applicationId}/revoke`, AckSchema, {}, f.admin);
+  await assert.rejects(f.transport.request('POST', `/v1/admin/applications/${app.applicationId}/rotate`, AppCredentialSchema, {}, f.admin), errorCode('NOT_FOUND'));
+  assert.equal(JSON.stringify(f.logs).includes(rotated.token), false);
+});

@@ -155,7 +155,7 @@ test('revocation requeues live work with a new lease to another node', t => {
   f.core.complete(b.session.nodeId, job.id, { leaseId: second.leaseId, result: { message: 'hello' } });
 });
 test('Coordinator restart preserves credentials, queued/leased/completed jobs and revocation', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'privanet-persistence-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await mkdtemp(join(tmpdir(), 'privanet-persistence-'));
   const path = join(directory, 'state.sqlite'); const f = fixture(new SqliteStore(path));
   const node = f.enroll(); const revoked = f.enroll(); f.core.revokeNode(revoked.session.nodeId);
   f.core.heartbeat(node.session.nodeId, heartbeat());
@@ -166,7 +166,9 @@ test('Coordinator restart preserves credentials, queued/leased/completed jobs an
   const leased = f.submit('leased'); const active = f.core.lease(node.session.nodeId); assert(active);
   f.advance(1); const queued = f.submit('queued');
   const coordinatorId = f.store.coordinatorId; f.store.close();
-  const store = new SqliteStore(path); t.after(() => store.close());
+  const store = new SqliteStore(path);
+  // Windows cannot unlink an open SQLite file, and after-hooks run in registration order: close, then remove.
+  t.after(async () => { store.close(); await rm(directory, { recursive: true, force: true }); });
   const core = new Coordinator(store, { leaseMs: 50 }, f.now);
   const app = core.authenticateApplication(f.appCredential.token);
   assert.equal(store.coordinatorId, coordinatorId); assert.equal(core.authenticateNode(node.session.token).nodeId, node.session.nodeId);

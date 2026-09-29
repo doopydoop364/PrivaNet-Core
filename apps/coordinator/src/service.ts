@@ -110,6 +110,14 @@ export class Coordinator {
     const app = this.store.getApplication(id); if (!app) reject(404, 'NOT_FOUND');
     this.store.saveApplication({ ...app, revoked: true });
   }
+  /** Issues a new credential for the same application identity; the old credential stops working at once. */
+  rotateApplication(id: string) {
+    return this.store.transaction(() => {
+      const app = this.store.getApplication(id); if (!app || app.revoked) reject(404, 'NOT_FOUND');
+      const token = secret(); this.store.saveApplication({ ...app, tokenHash: hash(token) });
+      return { applicationId: app.id, token };
+    });
+  }
   revokeNode(id: string): void {
     this.store.transaction(() => {
       const node = this.store.getNode(id); if (!node) reject(404, 'NOT_FOUND');
@@ -194,7 +202,13 @@ export class Coordinator {
   }
   complete(nodeId: string, id: string, input: unknown): void {
     const request = CompleteSchema.parse(input);
-    this.finish(nodeId, id, request.leaseId, { result: JOB_TYPES['system.echo.v1'].output.parse(request.result), error: null }, 'COMPLETED');
+    const node = this.store.getNode(nodeId); if (!node || node.revoked) reject(401, 'UNAUTHORIZED_NODE');
+    const job = this.store.getJob(id);
+    // Result shape is checked against the schema registered for the job's own type, never the node's claim.
+    if (!job || job.assignedNodeId !== nodeId) reject(409, 'LEASE_CONFLICT');
+    const parsed = JOB_TYPES[job.type].output.safeParse(request.result);
+    if (!parsed.success) reject(400, 'INVALID_RESULT');
+    this.finish(nodeId, id, request.leaseId, { result: parsed.data, error: null }, 'COMPLETED');
   }
   fail(nodeId: string, id: string, input: unknown): void {
     const request = FailureSchema.parse(input);

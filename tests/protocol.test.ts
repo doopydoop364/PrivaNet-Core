@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { EchoSchema, EnrollmentStartSchema, HeartbeatSchema, LeaseSchema, SubmitSchema } from '@privanet/protocol';
+import { CapabilitiesSchema, EchoSchema, EnrollmentStartSchema, HeartbeatSchema, JOB_TYPES, JOB_TYPE_IDS, JobTypeSchema, LeaseSchema, SubmitSchema } from '@privanet/protocol';
+import type { JobType } from '@privanet/protocol';
 import { Transport } from '@privanet/shared';
-import { executeLease } from '@privanet/node/handlers';
+import { executeLease, registeredHandlerTypes } from '@privanet/node/handlers';
 import { loadConfig as coordinatorConfig } from '@privanet/coordinator/config';
 import { loadConfig as nodeConfig } from '@privanet/node/config';
 import { randomUUID } from 'node:crypto';
@@ -42,4 +43,18 @@ test('configuration keeps roles separate, operator defaults disabled and remote 
   assert.equal(coordinatorConfig({ PRIVANET_ADMIN_SECRET: admin, PRIVANET_HOST: '0.0.0.0', PRIVANET_TLS_TERMINATED: 'true' }).host, '0.0.0.0');
   assert.deepEqual(nodeConfig({}).capabilities, []);
   assert.throws(() => nodeConfig({ PRIVANODE_CAPABILITIES: 'compute.anything' }));
+});
+
+test('job type registry is the single source for wire types, capabilities and node handlers', () => {
+  for (const [id, definition] of Object.entries(JOB_TYPES)) {
+    assert.match(id, /^[a-z]+(\.[a-z]+)+\.v\d+$/);
+    assert.equal(definition.capability, id);
+    assert.equal(definition.version, Number(id.slice(id.lastIndexOf('.v') + 2)));
+    assert.equal(JobTypeSchema.safeParse(id).success, true);
+    assert.equal(registeredHandlerTypes().includes(id as JobType), true);
+  }
+  assert.deepEqual([...JOB_TYPE_IDS].sort(), registeredHandlerTypes().sort());
+  assert.equal(CapabilitiesSchema.safeParse(['system.echo.v1', 'system.echo.v1']).success, false);
+  const lease = { jobId: randomUUID(), leaseId: randomUUID(), type: 'system.echo.v1', input: { message: 'x', extra: 1 }, protocolVersion: 1, expiresAt: 1, attempt: 1 };
+  assert.equal(LeaseSchema.safeParse(lease).success, false);
 });

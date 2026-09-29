@@ -52,7 +52,7 @@ shorten expiry and transmit via a safe channel. A stolen node private key permit
 authentication until revoked. A stolen session permits its node role until
 expiry/revocation. A stolen app/admin secret permits its scope until revoked or
 admin bootstrap rotated/restarted. This is not mTLS or per-message signatures.
-Credential rotation uses session refresh, app revoke/reissue and node revoke/
+Credential rotation uses session refresh, in-place app credential rotation, app revoke/reissue and node revoke/
 new enrollment. There is no administrator account/SSO system or key recovery.
 
 A dishonest node can fabricate schema-valid echo output; no execution attestation
