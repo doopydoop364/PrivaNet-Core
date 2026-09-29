@@ -107,6 +107,11 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
             core.authenticateNode(token); core.release(node.nodeId, id, input);
             log({ event: 'job.released' }); send(res, 200, { ok: true }); return;
           }
+          const renew = /^\/v1\/node\/jobs\/([^/]+)\/renew$/.exec(path);
+          if (req.method === 'POST' && renew) {
+            const id = IdSchema.parse(renew[1]); const input = await body(req);
+            core.authenticateNode(token); send(res, 200, core.renew(node.nodeId, id, input)); return;
+          }
           const finish = /^\/v1\/node\/jobs\/([^/]+)\/(complete|fail)$/.exec(path);
           if (req.method === 'POST' && finish) {
             const id = IdSchema.parse(finish[1]); const input = await body(req);

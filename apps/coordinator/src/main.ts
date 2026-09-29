@@ -10,7 +10,7 @@ async function main() {
   const store = new SqliteStore(join(directory, 'coordinator.sqlite'));
   const core = new Coordinator(store, config.policy);
   const log = (entry: { event: string; code?: string }) => console.log(JSON.stringify(entry));
-  const server = createCoordinatorServer(core, { adminSecret: config.adminSecret, log });
+  const server = createCoordinatorServer(core, { adminSecret: config.adminSecret, log, authRequestsPerMinute: config.authRequestsPerMinute });
   try {
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(config.port, config.host, resolve); });
   } catch (error) { store.close(); throw error; }

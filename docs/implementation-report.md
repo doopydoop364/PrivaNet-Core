@@ -101,8 +101,4 @@ SQLite state, logs, identities, and secrets are ignored.
 
 ## Remaining v0.1 work
 
-Before calling this production-ready, review reverse
-proxy/TLS deployment, exercise backup and recovery procedures, add operational
-retention/quotas, and obtain an independent security review. The next product
-milestone should improve queues, cancellation, resource limits, observability,
-and operator administration before beginning PrivaSearch integration.
+Update (v0.2.1): the reverse-proxy/TLS review is written up in [deployment](deployment.md) (it found that per-address authentication limits collapse onto the proxy's address, so the limit is now configurable and per-client limiting belongs at the proxy), `npm run backup` and a restore test exist, and job retention and a per-application queue quota were added. Node-key rotation (revoke and re-enroll works today) and the PostgreSQL adapter moved to later phases. An **independent** security review still needs people outside this project and is tracked in Phase 11.

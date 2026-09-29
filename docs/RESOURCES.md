@@ -1,12 +1,31 @@
 # PrivaNet Resource Management
 
-Status: **the v0.2 core is implemented; the rest is planned.**
+Status: **Phase 2 (Adaptive Resource Engine) is complete as of v0.2.1.** The rest of this document that talks about a market, credits or storage is planned.
 
-Implemented in v0.2: operator policy file (hard memory/CPU ceilings, owner RAM/CPU reserve, safety margin, per-capability ceilings), an adaptive memory/CPU budget with fast-down/slow-up smoothing and enter/exit hysteresis, pressure states, weekly schedules (`FULL`/`ADAPTIVE`/`MINIMAL`/`OFF`), battery policy (Linux power detection only; other systems report `UNKNOWN` and are treated as mains), minimal budget telemetry in heartbeats, job resource declarations, a resource-aware scheduler, preemption of preemptible jobs after sustained pressure, voluntary release with refund, graceful draining and a goodbye that records an expected departure.
+Implemented (v0.2.0): operator policy file (hard memory/CPU ceilings, owner RAM/CPU reserve, safety margin, per-capability ceilings), an adaptive memory/CPU budget with fast-down/slow-up smoothing and enter/exit hysteresis, pressure states, weekly schedules (`FULL`/`ADAPTIVE`/`MINIMAL`/`OFF`), battery policy, minimal budget telemetry in heartbeats, job resource declarations, a resource-aware scheduler, preemption of preemptible jobs after sustained pressure, voluntary release with refund, graceful draining and a goodbye that records an expected departure.
 
-Not yet implemented: disk capacity/disk-I/O awareness, bandwidth and monthly transfer limits, network-pressure awareness, checkpoint/resume, thermal signals, using the schedule to plan long-running placement (the Coordinator sees only the current level), measured job resource use, and calibration on real workloads. Only `system.echo.v1` exists, so preemption is proven with test handlers, not real workloads. The `FULL` level differs from `ADAPTIVE` only in ignoring the owner's current CPU load (the owner's RAM reserve and pressure pausing still apply).
+Implemented (v0.2.1, completing the phase):
 
-The sections below describe the design, including parts not yet built.
+- **Disk**: a scratch-disk ceiling (`maxDiskBytes`) and an owner free-space reserve (`reserveDiskBytes`) bound `diskBudgetBytes`; free space is read from the volume holding the state directory, and unknown free space offers none. The disk-I/O class the node offers (`diskIo`) is capped by `maxDiskIo` and lowered while the owner's disk is busy (Linux `/proc/diskstats` utilisation).
+- **Network**: a `TransferMeter` enforces `maxBandwidthBytesPerSec` (token bucket) and `monthlyTransferBytes` (persisted UTC-month counter); the remaining allowance is the reported `networkBudgetBytes`. Handlers call `context.transfer(bytes)` before moving data; the daemon also counts each job's control-plane bytes. With `linkBytesPerSec` configured, the host's total throughput (Linux `/proc/net/dev`) raises pressure.
+- **Disk/network pressure** only ever produces `ELEVATED` (halves the budget), never `HIGH`, and uses enter/exit thresholds (75/65 percent) with the same smoothing as CPU.
+- **Scheduling on the new limits**: a job is assigned only if its declared disk, disk-I/O class and network estimate fit what the node reports. Nodes that do not report a field are not blocked by it.
+- **Schedule-aware placement**: the node reports `availableForMs`, the time until its schedule next sets `OFF` (omitted if none within a week). A job whose declared `expectedDurationMs` is longer is not placed on that node.
+- **Checkpoint/resume** for job types registered `checkpointable`: a node-local, bounded (1 MiB, 24 h), owner-private `CheckpointStore`. Preemption or shutdown keeps the checkpoint; if the Coordinator hands the job to the *same node* again it resumes; completion or failure deletes it. Other nodes never see it.
+- **Battery on macOS and Windows**: `pmset -g batt` and the WMI battery status are parsed from fixed, argument-free commands run in the background at most once a minute; failures report `UNKNOWN` (treated as mains).
+- **Windows graceful stop**: `SIGBREAK`/`SIGHUP` join `SIGINT`, and on every platform a `DRAIN` file created in the state directory asks the running node to drain (the way for a service manager or script to stop it gracefully).
+- **A real long-running workload**: `system.hashchain.v1` (deterministic, CPU-bound, preemptible, checkpointable; tests use it to prove preemption and resume) and its measured cost calibrated the declared estimate.
+
+Known limits and deliberately deferred work (none block the phase):
+
+- **Coordinator-visible limits are node-wide for disk and network.** Per-capability ceilings still apply to memory and CPU only.
+- **Non-Linux disk and network load are not sampled**: those platforms are limited by the owner's caps, reserve and free space, not by observed disk/network activity. The measured disk load includes PrivaNet's own I/O, so it errs on the side of backing off.
+- **The macOS and Windows battery commands run in CI but were not exercised on a real portable device**; the output parsers are unit-tested with representative outputs. The Windows console-signal handlers likewise are not testable from CI (the `DRAIN` file path is tested on all three platforms).
+- **Checkpoints are node-local.** Resuming on a different node needs a data plane and integrity design and belongs with Phases 4 and 5. Only the hash-chain job is checkpointable today.
+- **Measured per-job resource use and thermal signals are not collected.** Measured usage is Phase 7; thermal input is a later optimisation. Declared estimates are still hints, and hash-chain's were set from one measurement on a development machine (about 1.5 s per million iterations, declared as 30 s for the 5-million maximum, a deliberate 4x margin), not a fleet.
+- The `FULL` level differs from `ADAPTIVE` only in ignoring the owner's current CPU load (the owner's RAM reserve and pressure pausing still apply).
+
+The sections below describe the design, including parts (markets, credits, storage) that are not yet built.
 
 ## Principle
 
@@ -80,11 +99,11 @@ Memory-intensive PrivaNet work should be preempted or avoided before the host be
 
 Storage contribution and disk activity are separate concerns.
 
-A node may have large storage capacity but should still be able to limit background disk I/O. Future resource-aware scheduling may distinguish sequential/background storage tasks from latency-sensitive operations.
+A node may have large storage capacity but should still be able to limit background disk I/O. (Scratch-disk and disk-I/O limits exist since v0.2.1; storage *contribution* is a Phase 4/5 concern.) Future resource-aware scheduling may distinguish sequential/background storage tasks from latency-sensitive operations.
 
 ## Network
 
-Operators should be able to define bandwidth ceilings/reserves. Future adaptive behavior may reduce PrivaNet traffic when the owner's applications are actively using the connection.
+Operators define a bandwidth ceiling and a monthly transfer allowance (implemented in v0.2.1, see the status section). With a configured link speed the node also backs off while the host's own traffic is high (Linux only). Finer adaptive behaviour, such as per-connection shaping, is not built.
 
 Resource accounting must measure actual useful bytes rather than advertised bandwidth.
 
@@ -192,7 +211,7 @@ Weekend
 All day      Adaptive
 ```
 
-Planned availability lets the scheduler avoid placing unsuitable long-running work shortly before a node intends to leave.
+Planned availability lets the scheduler avoid placing unsuitable long-running work shortly before a node intends to leave. (Implemented in v0.2.1 as `availableForMs`: see the status section.)
 
 ## Graceful draining
 

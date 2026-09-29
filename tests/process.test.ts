@@ -4,7 +4,7 @@ import { spawn, execFile } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createServer } from 'node:net';
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -69,10 +69,19 @@ test('actual Coordinator, admin CLI, node daemon and SDK demo work across proces
   const after = JSON.parse((await exec(process.execPath, ['scripts/demo.mjs'], { cwd: root, env: { ...env, PRIVANET_APP_TOKEN: application.token }, timeout: 5000 })).stdout) as { jobId: string; result: { message: string } };
   assert.equal(after.result.message, result.result.message); assert.notEqual(after.jobId, result.jobId);
   assert.equal(await readFile(join(dir, 'node', 'identity.json'), 'utf8'), identityBefore);
+  const nodeStatus = async () => NodesSchema.parse(JSON.parse((await exec(process.execPath, ['scripts/admin.mjs', 'nodes'], { cwd: root, env, timeout: 5000 })).stdout)).nodes[0]?.status;
+  // The portable drain request (the only graceful stop a Windows service manager can use): a DRAIN file in the state directory.
+  const exited = new Promise<void>(resolve => node?.once('close', () => resolve()));
+  await writeFile(join(dir, 'node', 'DRAIN'), '');
+  await Promise.race([exited, new Promise((_, reject) => setTimeout(() => reject(new Error('Node did not drain')), 10000).unref())]);
+  assert.equal(await nodeStatus(), 'OFFLINE_EXPECTED'); assert.ok(logs.join('').includes('"event":"node.departed"'));
+  assert.equal(await stat(join(dir, 'node', 'DRAIN')).then(() => true, () => false), false); // consumed
   if (process.platform !== 'win32') { // Windows cannot deliver SIGTERM to a child gracefully
+    node = await start('apps/node/dist/main.js', { ...env, PRIVANODE_ENROLLMENT_TOKEN: undefined }, 'node.authenticated', logs);
+    for (let i = 0; i < 100 && await nodeStatus() !== 'ONLINE'; i++) await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(await nodeStatus(), 'ONLINE');
     await stop(node);
-    const nodes = NodesSchema.parse(JSON.parse((await exec(process.execPath, ['scripts/admin.mjs', 'nodes'], { cwd: root, env, timeout: 5000 })).stdout));
-    assert.equal(nodes.nodes[0]?.status, 'OFFLINE_EXPECTED'); assert.ok(logs.join('').includes('"event":"node.departed"'));
+    assert.equal(await nodeStatus(), 'OFFLINE_EXPECTED');
   }
   const privateKey = (JSON.parse(identityBefore) as { privateKey: string }).privateKey;
   for (const value of [admin, application.token, grant.token, privateKey, result.result.message]) assert.equal(logs.join('').includes(value), false);

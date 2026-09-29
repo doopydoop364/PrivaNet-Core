@@ -14,3 +14,14 @@ export function levelAt(rules: readonly ScheduleRule[], fallback: Level, date: D
   }
   return fallback;
 }
+/**
+ * Milliseconds until the schedule next sets contribution OFF (0 if it is OFF now), or undefined when
+ * that does not happen within `horizonMs`. Scans minute by minute, so callers should cache the answer.
+ */
+export function nextOffMs(rules: readonly ScheduleRule[], fallback: Level, date: Date, horizonMs = 7 * 86400000): number | undefined {
+  if (fallback !== 'OFF' && !rules.some(rule => rule.level === 'OFF')) return undefined;
+  if (levelAt(rules, fallback, date) === 'OFF') return 0;
+  const minute = 60000; const start = Math.floor(date.getTime() / minute) * minute;
+  for (let at = start + minute; at - date.getTime() <= horizonMs; at += minute) if (levelAt(rules, fallback, new Date(at)) === 'OFF') return at - date.getTime();
+  return undefined;
+}

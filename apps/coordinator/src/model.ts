@@ -16,6 +16,8 @@ export interface JobRecord extends Job {
   assignedNodeId: string | null; leaseId: string | null; leaseExpiresAt: number | null;
   /** Graceful hand-backs (drain/preemption); absent in older records. Bounded by policy.maxReleases. */
   releases?: number;
+  /** When the current lease was first granted; renewals may not extend a lease past this plus policy.maxLeaseMs. */
+  leasedAt?: number;
 }
 export interface Store {
   readonly coordinatorId: string;
@@ -39,6 +41,10 @@ export interface Store {
   findSubmission(applicationId: string, key: string): JobRecord | undefined;
   saveJob(job: JobRecord): void;
   listPendingJobs(): JobRecord[];
+  /** QUEUED plus LEASED jobs of one application (used for its queue quota). */
+  countPendingJobs(applicationId: string): number;
+  /** Deletes COMPLETED/FAILED jobs finished at or before the cutoff and returns how many were removed. */
+  deleteTerminalJobs(completedBefore: number): number;
   prune(now: number): void;
   close(): void;
 }

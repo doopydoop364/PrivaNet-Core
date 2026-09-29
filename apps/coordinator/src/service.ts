@@ -2,7 +2,7 @@ import { createPublicKey, randomUUID, verify } from 'node:crypto';
 import {
   AppCreateSchema, CompleteSchema, EnrollmentStartSchema, EnrollmentTokenRequestSchema,
   FailureSchema, GoodbyeSchema, HeartbeatSchema, JOB_TYPES, JobSchema, PROTOCOL_VERSION, ProofSchema,
-  ReleaseSchema, SERVICE_VERSION, SubmitSchema,
+  ReleaseSchema, RenewSchema, SERVICE_VERSION, SubmitSchema,
 } from '@privanet/protocol';
 import type { Challenge, Job, JobError, Lease, NodeView, Session } from '@privanet/protocol';
 import { ApiError, canonicalPublicKey, hash, secret } from '@privanet/shared';
@@ -10,15 +10,21 @@ import type { ApplicationRecord, ChallengeRecord, JobRecord, NodeRecord, Store }
 import { ResourceAwareScheduler } from './scheduler.js';
 import type { Scheduler } from './scheduler.js';
 
-export interface Policy { staleMs: number; offlineMs: number; leaseMs: number; maxAttempts: number; maxReleases: number; sessionMs: number; challengeMs: number }
-export const defaultPolicy: Policy = { staleMs: 15000, offlineMs: 60000, leaseMs: 10000, maxAttempts: 3, maxReleases: 20, sessionMs: 300000, challengeMs: 60000 };
+export interface Policy { staleMs: number; offlineMs: number; leaseMs: number; maxAttempts: number; maxReleases: number; sessionMs: number; challengeMs: number;
+  /** Finished jobs (and their results) are deleted this long after completion; 0 keeps them forever. Duplicate-submission replays stop working after this. */
+  retentionMs: number;
+  /** Longest a single lease may be kept alive by renewals. */
+  maxLeaseMs: number;
+  /** Most QUEUED + LEASED jobs one application may hold; further submissions get 429 QUEUE_LIMIT. */
+  maxPendingPerApplication: number }
+export const defaultPolicy: Policy = { staleMs: 15000, offlineMs: 60000, leaseMs: 10000, maxAttempts: 3, maxReleases: 20, sessionMs: 300000, challengeMs: 60000, retentionMs: 30 * 86400000, maxLeaseMs: 3600000, maxPendingPerApplication: 10000 };
 function reject(status: number, code: string): never { throw new ApiError(status, code, code.replaceAll('_', ' ').toLowerCase()); }
 
 export class Coordinator {
   readonly policy: Policy;
   constructor(readonly store: Store, policy: Partial<Policy> = {}, private readonly now: () => number = Date.now, private readonly scheduler: Scheduler = new ResourceAwareScheduler()) {
     this.policy = { ...defaultPolicy, ...policy };
-    for (const value of Object.values(this.policy)) if (!Number.isSafeInteger(value) || value < 1) throw new Error('Invalid policy');
+    for (const [key, value] of Object.entries(this.policy)) if (!Number.isSafeInteger(value) || value < (key === 'retentionMs' ? 0 : 1)) throw new Error('Invalid policy');
     if (this.policy.offlineMs <= this.policy.staleMs || this.policy.maxAttempts > 100 || this.policy.sessionMs > 86400000 || this.policy.challengeMs > 300000) throw new Error('Invalid policy boundaries');
   }
   health() { return { protocolVersion: PROTOCOL_VERSION, serviceVersion: SERVICE_VERSION, coordinatorId: this.store.coordinatorId, status: 'ok' as const }; }
@@ -165,6 +171,7 @@ export class Coordinator {
         if (previous.type !== request.type || JSON.stringify(previous.input) !== JSON.stringify(request.input)) reject(409, 'IDEMPOTENCY_CONFLICT');
         return this.view(previous);
       }
+      if (this.store.countPendingJobs(app.id) >= this.policy.maxPendingPerApplication) reject(429, 'QUEUE_LIMIT');
       const job: JobRecord = { id: randomUUID(), ...request, applicationId: app.id, protocolVersion: PROTOCOL_VERSION,
         createdAt: this.now(), completedAt: null, status: 'QUEUED', attempts: 0, result: null, error: null,
         assignedNodeId: null, leaseId: null, leaseExpiresAt: null };
@@ -182,9 +189,12 @@ export class Coordinator {
     this.store.saveJob({ ...job, status: exhausted ? 'FAILED' : 'QUEUED', completedAt: exhausted ? this.now() : null,
       assignedNodeId: null, leaseId: null, leaseExpiresAt: null, error: { code } });
   }
+  private lastRetentionAt = 0;
   maintain(): void {
     this.store.transaction(() => {
       this.store.prune(this.now());
+      // The retention sweep scans finished jobs, so it runs at most once a minute.
+      if (this.policy.retentionMs > 0 && this.now() - this.lastRetentionAt >= 60000) { this.lastRetentionAt = this.now(); this.store.deleteTerminalJobs(this.now() - this.policy.retentionMs); }
       for (const job of this.store.listPendingJobs()) {
         if (job.status === 'LEASED' && job.leaseExpiresAt !== null && job.leaseExpiresAt <= this.now()) this.retry(job, 'LEASE_EXPIRED');
         else if (job.status === 'QUEUED' && job.attempts >= this.policy.maxAttempts) this.retry(job, job.error?.code ?? 'LEASE_EXPIRED');
@@ -201,7 +211,7 @@ export class Coordinator {
       if (!job) return null;
       const leaseId = randomUUID(); const expiresAt = this.now() + this.policy.leaseMs;
       const next: JobRecord = { ...job, status: 'LEASED', attempts: job.attempts + 1,
-        assignedNodeId: nodeId, leaseId, leaseExpiresAt: expiresAt, error: null };
+        assignedNodeId: nodeId, leaseId, leaseExpiresAt: expiresAt, leasedAt: this.now(), error: null };
       this.store.saveJob(next);
       return { jobId: job.id, type: job.type, input: job.input, protocolVersion: PROTOCOL_VERSION, leaseId, expiresAt, attempt: next.attempts };
     });
@@ -219,6 +229,24 @@ export class Coordinator {
   fail(nodeId: string, id: string, input: unknown): void {
     const request = FailureSchema.parse(input);
     this.finish(nodeId, id, request.leaseId, { result: null, error: request.error }, 'FAILED');
+  }
+  /**
+   * A node running a long job extends its lease. Fenced like completion: authenticated, assigned node,
+   * matching lease ID, and the lease must still be valid; total lease time is bounded by `maxLeaseMs`.
+   * The Coordinator chooses the new expiry, so a node cannot claim an arbitrary deadline.
+   */
+  renew(nodeId: string, id: string, input: unknown): { expiresAt: number } {
+    const request = RenewSchema.parse(input);
+    return this.store.transaction(() => {
+      const node = this.store.getNode(nodeId); if (!node || node.revoked) reject(401, 'UNAUTHORIZED_NODE');
+      const job = this.store.getJob(id); const now = this.now();
+      if (!job || job.status !== 'LEASED' || job.assignedNodeId !== nodeId || job.leaseId !== request.leaseId
+        || job.leaseExpiresAt === null || job.leaseExpiresAt <= now) reject(409, 'LEASE_CONFLICT');
+      const ceiling = (job.leasedAt ?? now) + this.policy.maxLeaseMs;
+      if (ceiling <= now) reject(409, 'LEASE_LIMIT');
+      const expiresAt = Math.max(job.leaseExpiresAt, Math.min(now + this.policy.leaseMs, ceiling));
+      this.store.saveJob({ ...job, leaseExpiresAt: expiresAt }); return { expiresAt };
+    });
   }
   /** Node hands a leased job back (drain, preemption, shutdown). Not a failure: the attempt is refunded. */
   release(nodeId: string, id: string, input: unknown): void {

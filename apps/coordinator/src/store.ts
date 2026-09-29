@@ -76,6 +76,10 @@ export class SqliteStore implements Store {
     this.db.prepare('INSERT INTO jobs VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status, record=excluded.record').run(job.id, job.applicationId, job.idempotencyKey, job.status, job.createdAt, JSON.stringify(job));
   }
   listPendingJobs(): JobRecord[] { return this.db.prepare("SELECT record FROM jobs WHERE status IN ('QUEUED','LEASED') ORDER BY created_at,id").all().map(row => JSON.parse(String(row.record)) as JobRecord); }
+  countPendingJobs(applicationId: string): number { return Number(this.db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE application_id=? AND status IN ('QUEUED','LEASED')").get(applicationId)?.count); }
+  deleteTerminalJobs(completedBefore: number): number {
+    return Number(this.db.prepare("DELETE FROM jobs WHERE status IN ('COMPLETED','FAILED') AND json_extract(record,'$.completedAt') <= ?").run(completedBefore).changes);
+  }
   prune(now: number): void {
     this.db.prepare('DELETE FROM challenges WHERE expires_at<=?').run(now);
     this.db.prepare('DELETE FROM sessions WHERE expires_at<=?').run(now);

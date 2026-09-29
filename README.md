@@ -1,8 +1,8 @@
 # PrivaNet Core Foundation
 
 PrivaNet supplies shared infrastructure to separate self-hosted applications.
-This v0.1 foundation runs a Coordinator and operator-controlled PrivaNode, with
-an application SDK and **only** the harmless `system.echo.v1` job.
+This foundation (v0.2.1) runs a Coordinator and operator-controlled PrivaNode, with
+an application SDK and **only** two harmless diagnostic jobs: `system.echo.v1` and the CPU-bound, checkpointable `system.hashchain.v1`.
 
 Every job, including on one machine, follows:
 
@@ -47,6 +47,7 @@ credential and allowed job types; applications receive no admin/node privileges.
 - [Protocol, node lifecycle, jobs and leases](docs/protocol.md)
 - [Threat model, privacy and security limits](docs/security.md)
 - [Development, configuration and recovery](docs/development.md)
+- [Deployment: TLS, reverse proxy, backup and recovery](docs/deployment.md)
 - [Roadmap](docs/roadmap.md)
 - [Resource market design (planned)](docs/RESOURCE_MARKET.md), [PrivaCredits (planned)](docs/CREDITS.md), [Network Treasury (planned)](docs/TREASURY.md), [adaptive resources](docs/RESOURCES.md)
 - [Implementation and verification report](docs/implementation-report.md)

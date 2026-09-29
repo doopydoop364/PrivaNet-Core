@@ -3,7 +3,7 @@
 | Version | Scope |
 | --- | --- |
 | v0.1 Core Foundation | Coordinator/node/protocol/SDK, identity/enrollment/auth, scoped apps, capabilities/health, echo typed jobs, scheduler, leases, SQLite, tests/docs |
-| v0.2 Job Infrastructure | Scheduling, limits, queues, observability, backoff/retries, cancellation, operator config and administration |
+| v0.2 Adaptive Resource Engine | Owner resource policy, adaptive memory/CPU/disk/network budgets, schedules, battery policy, resource-aware scheduling, preemption, checkpoint/resume, graceful draining (complete in v0.2.1) |
 | v0.3 PrivaSearch Integration | Separate search project consumes crawl/parse/index typed workers with resource controls |
 | v0.4 Storage Foundation | Generic object/chunk APIs; no Drive metadata |
 | v0.5 Distributed Storage | Placement, replication, repair, verification, actual physical accounting, failures |
@@ -14,6 +14,6 @@
 | v0.10 Community Hardening | Public enrollment, abuse/Sybil resistance, reputation, security and tooling |
 | v1.0 Stable PrivaNet | Compatibility guarantees, migrations, upgrade/recovery, operations, docs and independent security review |
 
-Only v0.1 is implemented here. No speculative storage/credits interfaces. Before
+v0.1 and v0.2 (Phase 2, adaptive resources; complete in v0.2.1) are implemented here. No speculative storage/credits interfaces. Before
 production release of v0.1: review TLS deployment and
 Windows ACL handling, exercise backup/recovery, review security independently.

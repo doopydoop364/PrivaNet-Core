@@ -18,6 +18,10 @@ import { PrivaNode } from '@privanet/node/daemon';
 import { ResourceEngine } from '@privanet/node/resource-engine';
 import { ResourcePolicySchema } from '@privanet/node/resource-policy';
 import type { HostSample } from '@privanet/node/resource-sampler';
+import { defaultHandlers } from '@privanet/node/handlers';
+import { CheckpointStore } from '@privanet/node/checkpoint';
+import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import type { Handlers } from '@privanet/node/handlers';
 import { identity, heartbeat } from './helpers.js';
 async function listen(server: Server, port = 0): Promise<string> {
@@ -255,7 +259,7 @@ test('sustained pressure preempts a preemptible job: it is released, not failed,
   const f = await fixture(t); const app = await f.app(); const rig = engineRig();
   const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token });
   let started!: () => void; const begun = new Promise<void>(resolve => { started = resolve; });
-  const blocking: Handlers = { 'system.echo.v1': (_input, { signal }) => new Promise((_resolve, reject) => { started(); signal.addEventListener('abort', () => reject(new Error('aborted'))); }) };
+  const blocking: Handlers = { ...defaultHandlers, 'system.echo.v1': (_input, { signal }) => new Promise((_resolve, reject) => { started(); signal.addEventListener('abort', () => reject(new Error('aborted'))); }) };
   const first = await enrolled(f, { engine: rig.engine, handlers: blocking, preemptCheckMs: 5 }, 'first');
   const job = await sdk.submit('system.echo.v1', { message: 'squeezed' }, 'preempt');
   const ticking = first.tick(); await begun;
@@ -272,7 +276,7 @@ test('forced shutdown hands the running job back with reason SHUTDOWN instead of
   const f = await fixture(t); const app = await f.app();
   const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token });
   let started!: () => void; const begun = new Promise<void>(resolve => { started = resolve; });
-  const blocking: Handlers = { 'system.echo.v1': (_input, { signal }) => new Promise((_resolve, reject) => { started(); signal.addEventListener('abort', () => reject(new Error('aborted'))); }) };
+  const blocking: Handlers = { ...defaultHandlers, 'system.echo.v1': (_input, { signal }) => new Promise((_resolve, reject) => { started(); signal.addEventListener('abort', () => reject(new Error('aborted'))); }) };
   const node = await enrolled(f, { handlers: blocking }); const job = await sdk.submit('system.echo.v1', { message: 'stop' }, 'shutdown');
   const ticking = node.tick(); await begun; node.abortNow(); await ticking;
   const after = await sdk.getJob(job.id); assert.equal(after.status, 'QUEUED'); assert.equal(after.attempts, 0);
@@ -283,4 +287,41 @@ test('node HTTP: release and goodbye need node credentials and reject malformed 
   await assert.rejects(f.transport.request('POST', '/v1/node/goodbye', AckSchema, { reason: 'SHUTDOWN' }, app.token), errorCode('UNAUTHORIZED_NODE'));
   await assert.rejects(f.transport.request('POST', `/v1/node/jobs/${'0'.repeat(8)}-0000-4000-8000-000000000000/release`, AckSchema, { leaseId: 'x', reason: 'DRAINING' }, app.token), errorCode('UNAUTHORIZED_NODE'));
   await assert.rejects(f.transport.request('POST', '/v1/node/goodbye', AckSchema, { reason: 'SHUTDOWN' }, f.admin), errorCode('UNAUTHORIZED_NODE'));
+});
+
+test('a preempted checkpointable job is released, then resumed from its checkpoint by the same node and completes with the right digest', async t => {
+  const f = await fixture(t); const app = await f.app(['system.hashchain.v1']); const rig = engineRig();
+  rig.host.freeDiskBytes = 100 * GiB; // the hash-chain job declares scratch disk, so the node must report some
+  const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token });
+  const checkpoints = new CheckpointStore(join(f.dir, 'checkpoints')); const iterations = 3_000_000;
+  const grant = await f.grant(['system.hashchain.v1']);
+  const node = new PrivaNode({ url: f.url, allowInsecureLoopback: true, stateDir: join(f.dir, 'node'), capabilities: ['system.hashchain.v1'], enrollmentToken: grant.token,
+    log: e => f.logs.push(e), engine: rig.engine, checkpoints, preemptCheckMs: 5 });
+  const job = await sdk.submit('system.hashchain.v1', { seed: 'resume me', iterations }, 'resume');
+  const ticking = node.tick();
+  const file = join(f.dir, 'checkpoints', `${job.id}.json`);
+  for (let i = 0; i < 200 && !existsSync(file); i++) await delay(25); // the handler has made real progress once it has checkpointed
+  assert.equal((await sdk.getJob(job.id)).status, 'LEASED');
+  rig.host.availableMemoryBytes = 1 * GiB; await ticking; // sustained pressure: handed back, not failed
+  const released = await sdk.getJob(job.id); assert.equal(released.status, 'QUEUED'); assert.equal(released.attempts, 0);
+  const partial = (JSON.parse(await readFile(file, 'utf8')) as { state: { done: number } }).state.done;
+  assert.ok(partial > 0 && partial < iterations, `checkpoint should hold partial progress, got ${partial}`);
+  rig.host.availableMemoryBytes = 12 * GiB; await node.tick(); await node.tick();
+  let h = createHash('sha256').update('resume me').digest(); for (let i = 0; i < iterations; i++) h = createHash('sha256').update(h).digest();
+  assert.deepEqual(await sdk.waitForResult(job.id, { timeoutMs: 20000 }), { digest: h.toString('hex'), iterations });
+  await assert.rejects(() => readFile(file, 'utf8')); // cleared once the result was accepted
+});
+
+test('a job that outlasts many leases finishes on its first attempt because the node renews the lease', async t => {
+  const f = await fixture(t, 120, { leaseMs: 1000 }); const app = await f.app(['system.hashchain.v1']); const rig = engineRig();
+  rig.host.freeDiskBytes = 100 * GiB;
+  const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token }); const iterations = 3_000_000;
+  const grant = await f.grant(['system.hashchain.v1']);
+  const node = new PrivaNode({ url: f.url, allowInsecureLoopback: true, stateDir: join(f.dir, 'node'), capabilities: ['system.hashchain.v1'], enrollmentToken: grant.token, log: e => f.logs.push(e), engine: rig.engine });
+  const job = await sdk.submit('system.hashchain.v1', { seed: 'lease', iterations }, 'lease');
+  const started = Date.now(); await node.tick(); const took = Date.now() - started;
+  assert.ok(took > 1200, `the job must outlast a 1000 ms lease (took ${took} ms)`);
+  const done = await sdk.getJob(job.id); assert.equal(done.status, 'COMPLETED'); assert.equal(done.attempts, 1);
+  let h = createHash('sha256').update('lease').digest(); for (let i = 0; i < iterations; i++) h = createHash('sha256').update(h).digest();
+  assert.deepEqual(done.result, { digest: h.toString('hex'), iterations });
 });

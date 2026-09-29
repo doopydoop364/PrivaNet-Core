@@ -7,9 +7,34 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-29
+
+Completes Phase 2 (Adaptive Resource Engine) and closes the operational items left open in Phase 1. Protocol version 1; all wire changes are additive and optional, so v0.2.0 nodes still work.
+
+### Added
+- Disk limits: scratch-disk ceiling and owner free-space reserve (`maxDiskBytes`, `reserveDiskBytes`), an offered disk-I/O class (`maxDiskIo`) that drops while the owner's disk is busy (Linux), reported as `diskBudgetBytes`/`diskIo`.
+- Network limits: a transfer meter with a bandwidth ceiling (`maxBandwidthBytesPerSec`) and persisted monthly allowance (`monthlyTransferBytes`), reported as `networkBudgetBytes`; optional link speed (`linkBytesPerSec`) for network-pressure awareness on Linux. Disk/network load only raises pressure to `ELEVATED`.
+- Scheduler honours disk, disk-I/O, network and schedule limits; schedule-aware placement via `availableForMs` keeps long jobs off nodes about to go `OFF`.
+- Node-local checkpoint/resume for `checkpointable` job types.
+- Battery detection on macOS (`pmset`) and Windows (WMI battery status).
+- Windows graceful stop: `SIGBREAK`/`SIGHUP`, plus a portable `DRAIN` file in the state directory that drains a running node on any platform.
+- `system.hashchain.v1`: deterministic, CPU-bound, preemptible, checkpointable diagnostic job (real long-running workload for preemption/resume tests and calibration).
+- `npm run backup -- <file>`: consistent online Coordinator backup with integrity check; restore test.
+- Per-application queue quota (`PRIVANET_MAX_PENDING_PER_APP`, 429 `QUEUE_LIMIT`) and finished-job retention (`PRIVANET_RETENTION_MS`, default 30 days).
+- Lease renewal: `POST /v1/node/jobs/{id}/renew` (fenced like completion, Coordinator-chosen expiry, total bounded by `PRIVANET_MAX_LEASE_MS`), used automatically by the node while a job runs, so jobs longer than one lease period finish on their first attempt. The node also heartbeats during long jobs.
+- `PRIVANET_AUTH_REQUESTS_PER_MINUTE`, and `PRIVANET_JOB_TYPES` for the admin script.
+- `docs/deployment.md`: TLS/reverse-proxy review, backup and recovery runbook.
+
+### Changed
+- Node handlers may receive `checkpoint` and `transfer` services in their context; `executeLease` takes an optional services argument.
+- Roadmap: Phase 1 and Phase 2 are complete; deferred items (portable checkpoints, measured per-job use, thermal signals, node-key rotation, PostgreSQL, independent review) are assigned to later phases.
+
 ### Documentation
 - Long-term design: an internal resource market for verified useful resources with PrivaCredits as the internal accounting unit (`docs/RESOURCE_MARKET.md`, rewritten `docs/CREDITS.md`, updated roadmap, resources, architecture ADR 002 and market threat model). Market-discovered clearing prices supersede fixed demand multipliers as the main scarcity mechanism. Roadmap Phase 7 is now Resource Measurement/Accounting and Phase 8 is Resource Market + PrivaCredits. No code or protocol changes; nothing described there is implemented.
 - Long-term design: an internal Network Treasury funded primarily by a bounded, versioned, visible levy on existing credits, with separate budget buckets, treasury-paid public-good jobs (including a PrivaSearch public crawl queue), a contributor bootstrap program that matches verified contribution, and maintenance/emergency reserves (`docs/TREASURY.md`, ADR 003, treasury threat table). Roadmap gains Phase 9 Network Treasury and Public Goods; Community Hardening becomes Phase 10 and Stable Protocol Phase 11. Documentation only; not implemented, not an investment fund, credits remain non-tradable.
+
+### Known limits
+- Checkpoints resume only on the same node. Disk and network load are sampled on Linux only. macOS/Windows battery commands and Windows console signals were not exercised on real hardware. Resource declarations were calibrated on one development machine.
 
 ## [0.2.0] - 2026-09-29
 
