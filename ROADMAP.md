@@ -79,6 +79,8 @@ A machine with 12 GiB of readily available RAM may accept substantially more mem
 
 PrivaNet should maintain a safety margin rather than consuming every technically free byte. Adaptive limits should be smoothed so temporary resource spikes do not cause unnecessary job churn.
 
+Adaptive budgets are also the future *supply* side of the Phase 8 resource market: the market may only price and match capacity inside what the owner's limits allow, and capacity is never a promise that overrides them (see docs/RESOURCE_MARKET.md).
+
 Future typed jobs should declare resource estimates such as CPU intensity, expected RAM, disk usage, network usage, whether the job can be preempted, and expected duration where known.
 
 ## Phase 3 — PrivaSearch — Planned
@@ -146,7 +148,9 @@ Planned features:
 - graceful retirement
 - physical-resource accounting
 - failure-domain-aware placement
-- storage possession/integrity challenges
+- storage possession/integrity challenges (also the verification input for Phase 7 storage measurement)
+
+Storage placement is driven by durability and failure-domain constraints; a future market's price must never override them.
 
 Research areas:
 
@@ -180,75 +184,67 @@ PrivaNet should own:
 
 A one-node installation remains fully usable. Community nodes add capacity and resilience rather than being a prerequisite.
 
-## Phase 7 — Resource Accounting — Planned
+## Phase 7 — Resource Measurement and Accounting — Planned
 
-Goal: accurately measure useful resources supplied and consumed before creating an economic incentive system.
+Goal: accurately measure and verify useful resources supplied and consumed **before** any market or credits exist. We should not build a market around unverified resource claims.
 
-Measure independently:
+Measure independently, per resource class and with explicit versioned units:
 
-- storage actually used
-- storage duration (for example GiB-days)
-- bandwidth actually served
+- storage actually used and storage duration (for example GiB-days)
+- bandwidth actually served (valid application traffic only)
 - verified compute/jobs completed
 - crawler/indexing work
 - repair traffic
-- node availability
-- job success/failure
-- integrity challenge results
+- node availability, including graceful versus unexpected departures
+- job success/failure, attributed to the right party
+- integrity/possession challenge results
 
-Keep logical application usage separate from physical network cost.
+Deliverables to plan: append-only, idempotent usage records per attempt (job, lease, node, application, class, unit version, quantity, evidence); verification methods per class; a node-to-account link; measurement-only dashboards. Note that the current code does not keep per-attempt history or release reasons, so nothing before this phase is billable.
 
-Do not reward nodes primarily for advertising unused capacity.
+Keep logical application usage separate from physical network cost. Do not reward nodes primarily for advertising unused capacity. Details: [docs/RESOURCE_MARKET.md](docs/RESOURCE_MARKET.md#prerequisites-before-any-market-is-activated).
 
-## Phase 8 — PrivaCredits — Planned
+## Phase 8 — Resource Market and PrivaCredits — Planned / Research
 
-Goal: reward useful contribution and charge for resource consumption using an internal non-cryptocurrency accounting system.
+Goal: run an internal market for verified useful resources, with PrivaCredits as the internal accounting unit. **PrivaCredits are the accounting unit; resources are what get priced.**
 
-PrivaCredits are not cryptocurrency, blockchain assets, mining rewards, or speculative tokens.
+PrivaCredits are not cryptocurrency, blockchain assets, mining rewards, speculative tokens, or an externally tradable currency. There is no buying or selling for money, no cash-out and no exchange rate. The market exists inside PrivaNet; the resources are what is bought and sold.
 
-Core rules:
+Market design (research first; see [docs/RESOURCE_MARKET.md](docs/RESOURCE_MARKET.md)):
 
-- use an append-only auditable ledger
-- use integer accounting units
-- require idempotent ledger events
-- preserve reason/reference IDs
-- version all economic policies
-- preserve the policy version that generated historical entries
-- separate storage, bandwidth, compute, and specialized-work measurements
-- avoid unlimited rewards simply for remaining connected while idle
+- separate markets per resource class (storage, bandwidth, compute, crawl, indexing), each with an explicit, versioned, measurable unit
+- node asks (minimum price per class) with automatic, competitive, premium and custom pricing modes, and pricing conditions/schedules
+- application demand with maximum price and constraints; applications never pick nodes
+- **market and scheduler stay separate**: the market decides economically eligible supply and the price; the scheduler chooses operationally (reliability, latency, pressure, limits, failure domains, planned availability, capability, storage placement). The cheapest node must not automatically win, and price never overrides durability
+- a clearing-price or auction-like mechanism, to be researched and simulated before implementation; not a fixed choice
+- terminology: reference price, ask, clearing (market) price, effective cost/score, settlement price
+- adaptive supply: capacity is dynamic and never overrides hard operator limits
+- price guardrails: reference prices, minimum/maximum asks, movement limits, circuit breakers, audited emergency controls; all configurable and versioned
+- anti-manipulation: fake demand, fake contribution, collusion, bandwidth farming, useless compute jobs, storage churn, wash activity, Sybils, price manipulation, artificial scarcity, falsified telemetry. Only Coordinator-authorised, policy-valid, verified consumption may generate contributor rewards
+- observability: aggregate market history without exposing private node or user data
 
-Potential ledger events include:
+Accounting rules:
 
-- STORAGE_REWARD
-- BANDWIDTH_REWARD
-- COMPUTE_REWARD
-- STORAGE_CHARGE
-- BANDWIDTH_CHARGE
-- FREE_ALLOWANCE
-- ADMIN_ADJUSTMENT
-- REVERSAL
+- append-only auditable ledger; integer units; idempotent events; reason/reference IDs
+- prefer a balanced (double-entry) design so credit conservation is checkable
+- version every economic policy and preserve the version that produced historical entries
+- **advertising capacity never creates credits**; credits mostly circulate from consumers to providers, with explicit, auditable, versioned issuance (bounded free-allowance/subsidy pool, administrative adjustment) and explicit sinks
+- track macroeconomic metrics (issued, consumed, circulating, per-account, prices, supply and demand per class)
 
-### Reliability incentives
+Potential ledger events include settlement (paired charge and reward), STORAGE/BANDWIDTH/COMPUTE reward and charge variants, FREE_ALLOWANCE, ADMIN_ADJUSTMENT and REVERSAL.
 
-Useful work may receive a bounded reliability multiplier based on measurable behavior such as:
+### Reliability
 
-- successful jobs
-- successful storage challenges
-- uptime/availability
-- failed retrievals
-- corruption
-- unexpected disappearance
-- graceful shutdown behavior
+```text
+reward = verified useful contribution x settlement price x bounded reliability adjustment
+```
 
-Reliability should primarily modify rewards for useful contribution rather than become a large passive source of credits.
+Reliability adjusts rewards for useful work from measurable behavior (successful and failed jobs, storage challenges, failed retrievals, corruption, unexpected disappearance, graceful draining). It is not a large passive source of credits, and graceful `DRAINING` to `OFFLINE_EXPECTED` shutdown must not be punished like an unexplained disappearance.
 
-### Demand multipliers
+### Fixed demand multipliers, refined
 
-PrivaNet may eventually offer bounded, versioned demand multipliers when a useful resource is genuinely scarce.
+Earlier plans used bounded fixed demand multipliers. **Scarcity should instead show up primarily in the market clearing price**: rising when supply is short, falling when supply is abundant. Bounded policy adjustments and emergency controls remain as secondary, versioned tools. Owners choose when to contribute using pricing conditions rather than PrivaNet inventing time-of-day bonuses.
 
-For example, compute or bandwidth supplied during a network shortage may earn more than the same resource supplied during a period of excess capacity.
-
-Demand multipliers must be based on actual network supply/demand and remain bounded/configurable. They must not turn PrivaCredits into a speculative market.
+A private single-operator deployment runs with the market off (fixed or zero reference price) and stays fully useful.
 
 ## Phase 9 — Community Network Hardening — Planned
 
@@ -263,6 +259,7 @@ Areas to address:
 - credential rotation and revocation
 - malicious or colluding nodes
 - manipulated accounting
+- resource-market manipulation (fake demand, wash activity, price manipulation, artificial scarcity; see docs/security.md and docs/RESOURCE_MARKET.md)
 - bandwidth farming
 - storage corruption
 - denial of service
@@ -315,3 +312,7 @@ These applications should not distract from the Core Foundation, PrivaSearch, an
 8. Community participation should improve the system, not be required for basic usefulness.
 9. Security-sensitive behavior must be documented and tested.
 10. Planned features must never be presented as already implemented.
+11. Advertising capacity never creates credits; only verified, Coordinator-authorised, policy-valid consumption is rewarded.
+12. The resource market (economic eligibility and price) stays separate from the scheduler (operational choice); price never overrides owner limits, durability or safety.
+13. Resource measurement and verification come before any market; no market is built around unverified claims.
+14. PrivaCredits stay an internal accounting unit: no external trading, cash-out or speculation.

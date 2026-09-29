@@ -48,6 +48,7 @@ credential and allowed job types; applications receive no admin/node privileges.
 - [Threat model, privacy and security limits](docs/security.md)
 - [Development, configuration and recovery](docs/development.md)
 - [Roadmap](docs/roadmap.md)
+- [Resource market design (planned)](docs/RESOURCE_MARKET.md), [PrivaCredits (planned)](docs/CREDITS.md), [adaptive resources](docs/RESOURCES.md)
 - [Implementation and verification report](docs/implementation-report.md)
 
 Runtime state belongs in ignored `var/`, protected with private permissions.

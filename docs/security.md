@@ -45,6 +45,28 @@ this milestone supplies neither job encryption nor retention automation.
 Application and enrollment secrets are returned once to authorized operators;
 the operator must deliver them securely and must not paste them into logs.
 
+## Market-specific threats (planned)
+
+Status: **planned.** No market, credits or rewards exist, so none of these attacks applies to the current code; they are recorded now so later interfaces do not make them easy. The governing rule: only Coordinator-authorised, policy-valid, verified resource consumption may generate contributor rewards, and advertising capacity must never create credits. See [RESOURCE_MARKET.md](RESOURCE_MARKET.md).
+
+| Threat | Why it matters | Planned direction |
+| --- | --- | --- |
+| Fake demand / wash activity | Consuming your own resources to look busy or farm rewards | Circulation-based ledger makes it zero-sum (minus fees); bounded subsidies; reward only policy-valid consumption |
+| Fake contribution | Claiming storage, bandwidth or compute not actually provided | Independent verification: challenges, spot checks, redundancy, two-ended accounting |
+| Falsified resource telemetry | Nodes already report untrusted budgets (v0.2) | Never pay for self-reported figures; telemetry is a scheduling hint |
+| Colluding nodes / clients | Two accounts exchange useless data to mint rewards | Rewardable traffic must be Coordinator-authorised for an application purpose; related-party limits; anomaly detection |
+| Bandwidth farming | Cheap junk traffic priced per GiB | Count only valid application traffic; exclude repair and wash traffic |
+| Deliberately useless compute jobs | Paying yourself through the job system | Typed registry, application pays, verified units only |
+| Storage churn for rewards | Repeatedly storing and deleting to earn | Reward retained data over time; charge churn and repair; minimum terms |
+| Sybil nodes and accounts | Many identities to gain influence, allowances or price power | Enrollment control; identity cost and reputation in Phase 9; identities never buy price influence alone |
+| Clearing-price manipulation | Strategic asks or thin markets move the price | Uniform-price design to research, thin-market fallback, movement limits, circuit breakers |
+| Withdrawing supply to create scarcity | Coordinated exits to raise the price | Withdrawal statistics, notice for stored data, guardrails; graceful/pressure exits must not be over-penalised |
+| Free-allowance farming | Subsidy leaks to fake accounts | Bounded pool, per-account limits, account-gating |
+| Credential theft | Stolen node or app credentials earn or spend credits | Revocation, per-account limits, reversal entries |
+| Ledger replay or duplicates | Double settlement | Idempotent events keyed by job/lease/attempt |
+
+Market data itself is a privacy risk: aggregate only, with minimum participant thresholds, and no per-node or per-user disclosure.
+
 ## Limits and threats left open
 
 A stolen grant can enroll the thief before the owner; restrict grant capability,
