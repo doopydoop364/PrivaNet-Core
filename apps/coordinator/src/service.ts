@@ -1,22 +1,22 @@
 import { createPublicKey, randomUUID, verify } from 'node:crypto';
 import {
   AppCreateSchema, CompleteSchema, EnrollmentStartSchema, EnrollmentTokenRequestSchema,
-  FailureSchema, HeartbeatSchema, JOB_TYPES, JobSchema, PROTOCOL_VERSION, ProofSchema,
-  SERVICE_VERSION, SubmitSchema,
+  FailureSchema, GoodbyeSchema, HeartbeatSchema, JOB_TYPES, JobSchema, PROTOCOL_VERSION, ProofSchema,
+  ReleaseSchema, SERVICE_VERSION, SubmitSchema,
 } from '@privanet/protocol';
 import type { Challenge, Job, JobError, Lease, NodeView, Session } from '@privanet/protocol';
 import { ApiError, canonicalPublicKey, hash, secret } from '@privanet/shared';
 import type { ApplicationRecord, ChallengeRecord, JobRecord, NodeRecord, Store } from './model.js';
-import { FifoScheduler } from './scheduler.js';
+import { ResourceAwareScheduler } from './scheduler.js';
 import type { Scheduler } from './scheduler.js';
 
-export interface Policy { staleMs: number; offlineMs: number; leaseMs: number; maxAttempts: number; sessionMs: number; challengeMs: number }
-export const defaultPolicy: Policy = { staleMs: 15000, offlineMs: 60000, leaseMs: 10000, maxAttempts: 3, sessionMs: 300000, challengeMs: 60000 };
+export interface Policy { staleMs: number; offlineMs: number; leaseMs: number; maxAttempts: number; maxReleases: number; sessionMs: number; challengeMs: number }
+export const defaultPolicy: Policy = { staleMs: 15000, offlineMs: 60000, leaseMs: 10000, maxAttempts: 3, maxReleases: 20, sessionMs: 300000, challengeMs: 60000 };
 function reject(status: number, code: string): never { throw new ApiError(status, code, code.replaceAll('_', ' ').toLowerCase()); }
 
 export class Coordinator {
   readonly policy: Policy;
-  constructor(readonly store: Store, policy: Partial<Policy> = {}, private readonly now: () => number = Date.now, private readonly scheduler: Scheduler = new FifoScheduler()) {
+  constructor(readonly store: Store, policy: Partial<Policy> = {}, private readonly now: () => number = Date.now, private readonly scheduler: Scheduler = new ResourceAwareScheduler()) {
     this.policy = { ...defaultPolicy, ...policy };
     for (const value of Object.values(this.policy)) if (!Number.isSafeInteger(value) || value < 1) throw new Error('Invalid policy');
     if (this.policy.offlineMs <= this.policy.staleMs || this.policy.maxAttempts > 100 || this.policy.sessionMs > 86400000 || this.policy.challengeMs > 300000) throw new Error('Invalid policy boundaries');
@@ -127,20 +127,26 @@ export class Coordinator {
   }
   status(node: NodeRecord): NodeView['status'] {
     if (node.revoked) return 'REVOKED';
+    // A node that said goodbye left on purpose until it heartbeats again; it is not an unexplained loss.
+    if (node.lifecycle === 'DEPARTED') return 'OFFLINE_EXPECTED';
     if (node.lastHeartbeatAt === null || this.now() - node.lastHeartbeatAt >= this.policy.offlineMs) return 'OFFLINE';
     if (this.now() - node.lastHeartbeatAt >= this.policy.staleMs) return 'STALE';
-    return 'ONLINE';
+    return node.lifecycle === 'DRAINING' ? 'DRAINING' : 'ONLINE';
   }
   listNodes(): NodeView[] {
     return this.store.listNodes().map(node => ({ nodeId: node.nodeId, protocolVersion: node.protocolVersion,
       daemonVersion: node.daemonVersion, capabilities: node.capabilities, lastHeartbeatAt: node.lastHeartbeatAt,
-      currentJobs: node.currentJobs, jobSlots: node.jobSlots, status: this.status(node) }));
+      currentJobs: node.currentJobs, jobSlots: node.jobSlots, status: this.status(node),
+      ...(node.resources ? { resources: node.resources } : {}) }));
   }
   heartbeat(nodeId: string, input: unknown): void {
     const request = HeartbeatSchema.parse(input);
     const node = this.store.getNode(nodeId); if (!node || node.revoked) reject(401, 'UNAUTHORIZED_NODE');
     if (request.capabilities.some(capability => !node.allowedCapabilities.includes(capability))) reject(403, 'CAPABILITY_FORBIDDEN');
-    this.store.saveNode({ ...node, ...request, lastHeartbeatAt: this.now() });
+    const { lifecycle = 'ACTIVE', resources, ...rest } = request;
+    // Absent resources means the node no longer reports them: never keep a stale, more generous budget.
+    const kept: NodeRecord = { ...node }; delete kept.resources;
+    this.store.saveNode({ ...kept, ...rest, lifecycle, ...(resources ? { resources } : {}), lastHeartbeatAt: this.now() });
   }
   capabilities(app: ApplicationRecord) {
     return { capabilities: app.allowedJobTypes.map(capability => ({ capability,
@@ -213,6 +219,34 @@ export class Coordinator {
   fail(nodeId: string, id: string, input: unknown): void {
     const request = FailureSchema.parse(input);
     this.finish(nodeId, id, request.leaseId, { result: null, error: request.error }, 'FAILED');
+  }
+  /** Node hands a leased job back (drain, preemption, shutdown). Not a failure: the attempt is refunded. */
+  release(nodeId: string, id: string, input: unknown): void {
+    const request = ReleaseSchema.parse(input);
+    this.store.transaction(() => {
+      const node = this.store.getNode(nodeId); if (!node || node.revoked) reject(401, 'UNAUTHORIZED_NODE');
+      const job = this.store.getJob(id);
+      if (!job || job.status !== 'LEASED' || job.assignedNodeId !== nodeId || job.leaseId !== request.leaseId
+        || job.leaseExpiresAt === null || job.leaseExpiresAt <= this.now()) reject(409, 'LEASE_CONFLICT');
+      this.giveBack(job);
+    });
+  }
+  private giveBack(job: JobRecord): void {
+    const releases = (job.releases ?? 0) + 1;
+    // Bounded: endless drain/preempt cycles must not keep a job alive forever.
+    const exhausted = releases > this.policy.maxReleases;
+    this.store.saveJob({ ...job, status: exhausted ? 'FAILED' : 'QUEUED', completedAt: exhausted ? this.now() : null,
+      attempts: Math.max(0, job.attempts - 1), releases, assignedNodeId: null, leaseId: null, leaseExpiresAt: null,
+      error: exhausted ? { code: 'RELEASE_LIMIT' } : null });
+  }
+  /** Planned departure: return the node's leases without penalty and record that it left on purpose. */
+  goodbye(nodeId: string, input: unknown): void {
+    GoodbyeSchema.parse(input);
+    this.store.transaction(() => {
+      const node = this.store.getNode(nodeId); if (!node || node.revoked) reject(401, 'UNAUTHORIZED_NODE');
+      for (const job of this.store.listPendingJobs()) if (job.status === 'LEASED' && job.assignedNodeId === nodeId) this.giveBack(job);
+      this.store.saveNode({ ...node, lifecycle: 'DEPARTED', currentJobs: 0 });
+    });
   }
   private finish(nodeId: string, id: string, leaseId: string, outcome: Pick<Job, 'result' | 'error'>, status: 'COMPLETED' | 'FAILED'): void {
     this.store.transaction(() => {

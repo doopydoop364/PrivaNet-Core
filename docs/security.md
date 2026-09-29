@@ -37,9 +37,9 @@ Public errors contain fixed messages, never raw validation/database exceptions.
 
 The Coordinator learns node public key/stable ID, daemon/protocol version,
 capabilities, heartbeat receipt times, workload/slot counts, job payloads/results
-and app ownership. Network peers/reverse proxies inherently see addresses and
+and app ownership, plus (v0.2) the node's lifecycle and its resource report: coarse contribution/pressure/power states and the permitted memory/CPU budget. Network peers/reverse proxies inherently see addresses and
 timing. SQLite grants/sessions contain hashes, not originals. No telemetry,
-third-party analytics, host inventory or detailed resource metrics.
+third-party analytics, host inventory or raw resource metrics. Raw memory/CPU samples are read locally to compute the budget and are never transmitted or stored. Power state is read from the OS power-supply files on Linux only.
 Echo input/output is plaintext and retained with job state. Use synthetic data;
 this milestone supplies neither job encryption nor retention automation.
 Application and enrollment secrets are returned once to authorized operators;
@@ -55,7 +55,7 @@ admin bootstrap rotated/restarted. This is not mTLS or per-message signatures.
 Credential rotation uses session refresh, in-place app credential rotation, app revoke/reissue and node revoke/
 new enrollment. There is no administrator account/SSO system or key recovery.
 
-A dishonest node can fabricate schema-valid echo output; no execution attestation
+A node can lie about its budget or state (for example claim spare RAM it lacks, or claim `DRAINING`/goodbye to shed work); v0.2 does not verify or penalise this, and there is no reputation. The budget is a scheduling hint that protects honest owners, not a guarantee against a malicious node. Owner limits are enforced on the node, and a compromised node is not bound by them. Nothing forces a running handler to stop except its own cooperation with the abort signal; the echo handler is instantaneous and preemption is untested against real long-running work. A dishonest node can fabricate schema-valid echo output; no execution attestation
 or reputation. At-least-once execution can repeat future side effects. SQLite
 is a single-process prototype, not HA. Job queues/results persist without an
 automatic retention quota; authorized apps can consume storage. Production needs

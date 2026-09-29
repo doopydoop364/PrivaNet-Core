@@ -1,14 +1,18 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { AckSchema, CapabilitiesSchema, ChallengeSchema, HealthSchema, LeaseResponseSchema, PROTOCOL_VERSION, SERVICE_VERSION, SessionSchema } from '@privanet/protocol';
+import { AckSchema, JOB_TYPES, CapabilitiesSchema, ChallengeSchema, HealthSchema, LeaseResponseSchema, PROTOCOL_VERSION, SERVICE_VERSION, SessionSchema } from '@privanet/protocol';
 import type { JobType, Session } from '@privanet/protocol';
 import { ApiError, Transport } from '@privanet/shared';
 import type { TransportOptions } from '@privanet/shared';
 import { bindCoordinator, loadIdentity, signProof } from './identity.js';
 import type { Identity } from './identity.js';
-import { executeLease } from './handlers.js';
+import { defaultHandlers, executeLease } from './handlers.js';
+import type { Handlers } from './handlers.js';
+import type { ResourceEngine } from './resource-engine.js';
 export interface NodeOptions extends TransportOptions {
   stateDir: string; capabilities: JobType[]; enrollmentToken?: string;
-  heartbeatMs?: number; pollMs?: number; log?: (entry: { event: string; code?: string }) => void;
+  heartbeatMs?: number; pollMs?: number;
+  /** Owner-policy resource engine. Without one the node reports no resources and gets only the Coordinator's small legacy budget. */
+  engine?: ResourceEngine; handlers?: Handlers; drainTimeoutMs?: number; preemptCheckMs?: number; log?: (entry: { event: string; code?: string }) => void;
 }
 export class PrivaNode {
   readonly capabilities: JobType[];
@@ -22,6 +26,8 @@ export class PrivaNode {
   private enrollmentToken: string | undefined;
   private busy = false;
   private currentJobs = 0;
+  private draining = false;
+  private readonly hardStop = new AbortController();
   constructor(private readonly options: NodeOptions) {
     this.transport = new Transport(options); this.capabilities = CapabilitiesSchema.parse(options.capabilities);
     this.heartbeatMs = options.heartbeatMs ?? 5000; this.pollMs = options.pollMs ?? 1000;
@@ -52,22 +58,35 @@ export class PrivaNode {
     this.session = session; this.enrollmentToken = undefined; this.lastHeartbeat = 0;
     this.log({ event: purpose === 'enroll' ? 'node.enrolled' : 'node.authenticated' });
   }
+  private lastState = '';
   private async heartbeat(force = false) {
-    if (!this.session || (!force && Date.now() - this.lastHeartbeat < this.heartbeatMs)) return;
+    // A change of contribution or pressure is reported at once so the Coordinator never schedules against a stale budget.
+    const report = this.options.engine?.report; const state = `${this.draining}/${report?.contribution}/${report?.pressure}`;
+    if (!this.session || (!force && state === this.lastState && Date.now() - this.lastHeartbeat < this.heartbeatMs)) return;
+    this.lastState = state;
     await this.transport.request('POST', '/v1/node/heartbeat', AckSchema, {
       protocolVersion: PROTOCOL_VERSION, daemonVersion: SERVICE_VERSION, capabilities: this.capabilities,
-      jobSlots: 1, currentJobs: this.currentJobs,
+      jobSlots: 1, currentJobs: this.currentJobs, lifecycle: this.draining ? 'DRAINING' : 'ACTIVE',
+      ...(this.options.engine ? { resources: this.options.engine.report } : {}),
     }, this.session.token);
     this.lastHeartbeat = Date.now();
   }
+  /** Stop asking for work; the next heartbeat tells the Coordinator this node is draining. */
+  drain(): void { this.draining = true; this.lastHeartbeat = 0; }
+  /** Abort whatever is running and hand it back; used when a graceful drain runs out of time. */
+  abortNow(): void { this.hardStop.abort(); }
+  get isDraining() { return this.draining; }
   async tick(): Promise<void> {
     if (this.busy) throw new Error('Daemon already polling');
     this.busy = true;
     try {
       if (!this.session || this.session.expiresAt <= Date.now() + 1000) await this.connect();
+      this.options.engine?.update();
       await this.heartbeat();
       const session = this.session;
       if (!session) throw new Error('Missing session');
+      // Owner priority: no new work while draining or while the owner's policy/pressure pauses contribution.
+      if (this.draining || this.options.engine?.report.contribution === 'PAUSED') return;
       const { lease } = await this.transport.request('POST', '/v1/node/jobs/lease', LeaseResponseSchema, {}, session.token);
       if (!lease) return;
       if (lease.expiresAt <= Date.now()) { this.log({ event: 'job.lease_expired' }); return; }
@@ -75,12 +94,21 @@ export class PrivaNode {
       // Handler failure and result transport failure are separate: lost completion
       // acknowledgement must not be changed into a terminal handler failure.
       let result;
-      try { result = executeLease(lease, this.capabilities); }
+      const preempt = new AbortController(); const stop = AbortSignal.any([preempt.signal, this.hardStop.signal]);
+      // Only jobs declared preemptible are ever interrupted for resource pressure.
+      const watcher = JOB_TYPES[lease.type].resources.preemptible && this.options.engine
+        ? setInterval(() => { this.options.engine?.update(); if (this.options.engine?.shouldPreempt()) preempt.abort(); }, this.options.preemptCheckMs ?? 250) : undefined;
+      try { result = await executeLease(lease, this.capabilities, stop, this.options.handlers ?? defaultHandlers); }
       catch {
+        if (stop.aborted) {
+          await this.transport.request('POST', `/v1/node/jobs/${lease.jobId}/release`, AckSchema,
+            { leaseId: lease.leaseId, reason: this.hardStop.signal.aborted ? 'SHUTDOWN' : 'PREEMPTED' }, session.token);
+          this.log({ event: 'job.released' }); return;
+        }
         await this.transport.request('POST', `/v1/node/jobs/${lease.jobId}/fail`, AckSchema,
           { leaseId: lease.leaseId, error: { code: this.capabilities.includes(lease.type) ? 'HANDLER_FAILED' : 'CAPABILITY_DISABLED' } }, session.token);
         this.log({ event: 'job.handler_failed' }); return;
-      }
+      } finally { if (watcher) clearInterval(watcher); }
       await this.transport.request('POST', `/v1/node/jobs/${lease.jobId}/complete`, AckSchema, { leaseId: lease.leaseId, result }, session.token);
       this.log({ event: 'job.completed' });
     } catch (error) {
@@ -103,6 +131,18 @@ export class PrivaNode {
       try { await delay(backoff + (failures ? Math.floor(Math.random() * 250) : 0), undefined, { signal }); }
       catch { if (!signal.aborted) throw new Error('Daemon timer failed'); }
     }
+    await this.shutdown();
     this.log({ event: 'node.stopped' });
+  }
+  /** Planned departure: announce DRAINING, then say goodbye so the Coordinator records an expected exit. */
+  private async shutdown(): Promise<void> {
+    this.drain();
+    if (!this.session) return; // never connected: nothing to announce
+    try {
+      if (this.session.expiresAt <= Date.now()) await this.connect();
+      await this.heartbeat(true);
+      await this.transport.request('POST', '/v1/node/goodbye', AckSchema, { reason: 'SHUTDOWN' }, this.session?.token);
+      this.log({ event: 'node.departed' });
+    } catch { this.log({ event: 'node.goodbye_failed' }); }
   }
 }

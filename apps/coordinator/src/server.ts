@@ -97,6 +97,16 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
             if (JSON.stringify(await body(req)) !== '{}') throw new ApiError(400, 'INVALID_REQUEST', 'expected empty object');
             core.authenticateNode(token); send(res, 200, { lease: core.lease(node.nodeId) }); return;
           }
+          if (req.method === 'POST' && path === '/v1/node/goodbye') {
+            const input = await body(req); core.authenticateNode(token); core.goodbye(node.nodeId, input);
+            log({ event: 'node.departed' }); send(res, 200, { ok: true }); return;
+          }
+          const release = /^\/v1\/node\/jobs\/([^/]+)\/release$/.exec(path);
+          if (req.method === 'POST' && release) {
+            const id = IdSchema.parse(release[1]); const input = await body(req);
+            core.authenticateNode(token); core.release(node.nodeId, id, input);
+            log({ event: 'job.released' }); send(res, 200, { ok: true }); return;
+          }
           const finish = /^\/v1\/node\/jobs\/([^/]+)\/(complete|fail)$/.exec(path);
           if (req.method === 'POST' && finish) {
             const id = IdSchema.parse(finish[1]); const input = await body(req);

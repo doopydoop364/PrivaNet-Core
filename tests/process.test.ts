@@ -4,11 +4,11 @@ import { spawn, execFile } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createServer } from 'node:net';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AppCredentialSchema, EnrollmentTokenSchema } from '@privanet/protocol';
+import { AppCredentialSchema, EnrollmentTokenSchema, NodesSchema } from '@privanet/protocol';
 import { secret } from '@privanet/shared';
 const exec = promisify(execFile);
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -47,12 +47,15 @@ test('actual Coordinator, admin CLI, node daemon and SDK demo work across proces
   const dir = await mkdtemp(join(tmpdir(), 'privanet-process-')); const port = await unusedPort(); const logs: string[] = [];
   let coordinator: ChildProcess | undefined; let node: ChildProcess | undefined;
   t.after(async () => { if (node) await stop(node); if (coordinator) await stop(coordinator); await rm(dir, { recursive: true, force: true }); });
+  // Deterministic on any CI host: leave nothing reserved so the demo node is never paused by a busy machine's free memory.
+  const policyFile = join(dir, 'policy.json');
+  await writeFile(policyFile, JSON.stringify({ reserveMemoryBytes: 0, safetyMarginBytes: 0, maxMemoryBytes: 1024 ** 3, maxCpuPercent: 100, reserveCpuPercent: 0, onBattery: 'normal' }));
   const admin = secret(); const url = `http://127.0.0.1:${port}`;
   const env = { ...process.env, PRIVANET_ADMIN_SECRET: admin, PRIVANET_COORDINATOR_URL: url,
     PRIVANET_HOST: '127.0.0.1', PRIVANET_PORT: String(port), PRIVANET_DATA_DIR: join(dir, 'coordinator'),
     PRIVANET_STALE_MS: '500', PRIVANET_OFFLINE_MS: '2000', PRIVANET_LEASE_MS: '1000', PRIVANET_MAINTENANCE_MS: '50',
     PRIVANODE_COORDINATOR_URL: url, PRIVANODE_STATE_DIR: join(dir, 'node'), PRIVANODE_ALLOW_INSECURE_LOOPBACK: 'true',
-    PRIVANODE_CAPABILITIES: 'system.echo.v1', PRIVANODE_HEARTBEAT_MS: '50', PRIVANODE_POLL_MS: '10' };
+    PRIVANODE_CAPABILITIES: 'system.echo.v1', PRIVANODE_POLICY_FILE: policyFile, PRIVANODE_HEARTBEAT_MS: '50', PRIVANODE_POLL_MS: '10' };
   coordinator = await start('apps/coordinator/dist/main.js', env, 'coordinator.started', logs);
   const application = AppCredentialSchema.parse(JSON.parse((await exec(process.execPath, ['scripts/admin.mjs', 'application', 'process-test'], { cwd: root, env, timeout: 5000 })).stdout));
   const grant = EnrollmentTokenSchema.parse(JSON.parse((await exec(process.execPath, ['scripts/admin.mjs', 'enrollment'], { cwd: root, env, timeout: 5000 })).stdout));
@@ -66,6 +69,11 @@ test('actual Coordinator, admin CLI, node daemon and SDK demo work across proces
   const after = JSON.parse((await exec(process.execPath, ['scripts/demo.mjs'], { cwd: root, env: { ...env, PRIVANET_APP_TOKEN: application.token }, timeout: 5000 })).stdout) as { jobId: string; result: { message: string } };
   assert.equal(after.result.message, result.result.message); assert.notEqual(after.jobId, result.jobId);
   assert.equal(await readFile(join(dir, 'node', 'identity.json'), 'utf8'), identityBefore);
+  if (process.platform !== 'win32') { // Windows cannot deliver SIGTERM to a child gracefully
+    await stop(node);
+    const nodes = NodesSchema.parse(JSON.parse((await exec(process.execPath, ['scripts/admin.mjs', 'nodes'], { cwd: root, env, timeout: 5000 })).stdout));
+    assert.equal(nodes.nodes[0]?.status, 'OFFLINE_EXPECTED'); assert.ok(logs.join('').includes('"event":"node.departed"'));
+  }
   const privateKey = (JSON.parse(identityBefore) as { privateKey: string }).privateKey;
   for (const value of [admin, application.token, grant.token, privateKey, result.result.message]) assert.equal(logs.join('').includes(value), false);
 });
