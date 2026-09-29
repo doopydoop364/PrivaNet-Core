@@ -46,7 +46,9 @@ test('retention deletes finished jobs after the configured age and never touches
 });
 
 test('online backup restores into a working Coordinator with the same identity, results and pending work', async t => {
-  const dir = await mkdtemp(join(tmpdir(), 'privanet-backup-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await mkdtemp(join(tmpdir(), 'privanet-backup-')); const opened: SqliteStore[] = [];
+  // Windows cannot delete an open database: close it first, in the same hook that removes the directory.
+  t.after(async () => { for (const store of opened) store.close(); await rm(dir, { recursive: true, force: true }); });
   const dataDir = join(dir, 'data'); await mkdir(dataDir, { mode: 0o700 });
   const live = new SqliteStore(join(dataDir, 'coordinator.sqlite')); let now = 5_000_000; const core = new Coordinator(live, { staleMs: 1e9, offlineMs: 2e9, leaseMs: 1e6 }, () => now);
   const credential = core.createApplication({ name: 'backup', allowedJobTypes: ['system.echo.v1'] }); const app = core.authenticateApplication(credential.token);
@@ -64,7 +66,7 @@ test('online backup restores into a working Coordinator with the same identity, 
   await assert.rejects(exec(process.execPath, ['scripts/backup.mjs', backup], { cwd: root, env })); // never overwrites
   await assert.rejects(exec(process.execPath, ['scripts/backup.mjs'], { cwd: root, env })); // needs a destination
   const coordinatorId = live.coordinatorId; live.close();
-  const restored = new SqliteStore(backup); t.after(() => restored.close());
+  const restored = new SqliteStore(backup); opened.push(restored);
   const recovered = new Coordinator(restored, { staleMs: 1e9, offlineMs: 2e9, leaseMs: 1e6 }, () => now);
   assert.equal(restored.coordinatorId, coordinatorId);
   const again = recovered.authenticateApplication(credential.token); assert.equal(again.id, app.id); // credential hashes survive
