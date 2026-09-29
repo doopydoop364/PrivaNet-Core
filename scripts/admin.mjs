@@ -12,7 +12,8 @@ async function main() {
   else if (operation === 'nodes') result = await transport.request('GET', '/v1/admin/nodes', NodesSchema, undefined, token);
   else if (operation === 'revoke-node') result = await transport.request('POST', `/v1/admin/nodes/${NodeIdSchema.parse(value)}/revoke`, AckSchema, {}, token);
   else if (operation === 'revoke-application') result = await transport.request('POST', `/v1/admin/applications/${IdSchema.parse(value)}/revoke`, AckSchema, {}, token);
-  else throw new Error('Usage: npm run admin -- enrollment|application [name]|nodes|revoke-node ID|revoke-application ID');
+  else if (operation === 'rotate-application') result = await transport.request('POST', `/v1/admin/applications/${IdSchema.parse(value)}/rotate`, AppCredentialSchema, {}, token);
+  else throw new Error('Usage: npm run admin -- enrollment|application [name]|nodes|revoke-node ID|revoke-application ID|rotate-application ID');
   // Explicit administrator issuance output, not a service log. Do not capture
   // enrollment/application output into a shared log or shell history.
   console.log(JSON.stringify(result));

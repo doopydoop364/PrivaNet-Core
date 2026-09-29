@@ -78,6 +78,11 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
           if (req.method === 'GET' && path === '/v1/admin/nodes') { send(res, 200, { nodes: core.listNodes() }); return; }
           if (req.method === 'POST' && path === '/v1/admin/enrollment-tokens') { send(res, 201, core.createEnrollment(await body(req))); return; }
           if (req.method === 'POST' && path === '/v1/admin/applications') { send(res, 201, core.createApplication(await body(req))); return; }
+          const rotate = /^\/v1\/admin\/applications\/([^/]+)\/rotate$/.exec(path);
+          if (req.method === 'POST' && rotate) {
+            await body(req); send(res, 200, core.rotateApplication(IdSchema.parse(rotate[1])));
+            log({ event: 'application.rotated' }); return;
+          }
           const revoke = /^\/v1\/admin\/(nodes|applications)\/([^/]+)\/revoke$/.exec(path);
           if (req.method === 'POST' && revoke) {
             const empty = await body(req);

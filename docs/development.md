@@ -111,7 +111,7 @@ node through administrator API and enroll a new private identity in a new state
 directory. For a deliberate Coordinator URL/identity change, stop the daemon,
 review the new TLS endpoint, back up its state, and explicitly provision a new
 binding/enrollment as appropriate; no job can alter this binding. There is no
-in-place key rotation wizard. Rotate app credentials by revoke/reissue. Rotate
+in-place key rotation wizard. Rotate app credentials in place with `npm run admin -- rotate-application ID` (same identity and jobs, old credential invalid immediately). Rotate
 the admin bootstrap secret by replacing its environment value and restarting.
 
 POSIX state directories/files require 0700/0600 and owner checks. On Windows,
