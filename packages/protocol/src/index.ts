@@ -125,6 +125,9 @@ export const ReleaseReasonSchema = z.enum(['DRAINING', 'PREEMPTED', 'SHUTDOWN'])
 /** A node hands a leased job back without failing it; the job is requeued and the attempt is refunded. */
 export const ReleaseSchema = z.strictObject({ leaseId: IdSchema, reason: ReleaseReasonSchema });
 /** Planned departure: the node leaves on purpose, so this is not an unexplained disappearance. */
+/** Extends a still-valid lease of a running job (v0.2.1, additive). The Coordinator picks the new expiry, never the node. */
+export const RenewSchema = z.strictObject({ leaseId: IdSchema });
+export const RenewResponseSchema = z.strictObject({ expiresAt: TimeSchema });
 export const GoodbyeSchema = z.strictObject({ reason: z.literal('SHUTDOWN') });
 export const AckSchema = z.strictObject({ ok: z.literal(true) });
 export const NodeStatusSchema = z.enum(['ONLINE', 'STALE', 'OFFLINE', 'DRAINING', 'OFFLINE_EXPECTED', 'REVOKED']);

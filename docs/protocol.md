@@ -21,7 +21,7 @@ cookies/CORS are not part of this machine-client API.
 | Public | GET health; POST enrollment challenge/proof, node auth challenge/proof |
 | Admin bearer | POST admin/enrollment-tokens, admin/applications; GET admin/nodes; POST admin/nodes/:id/revoke, admin/applications/:id/revoke |
 | Scoped application bearer | GET capabilities; POST jobs; GET jobs/:id (own jobs only) |
-| Node session bearer | POST node/heartbeat, node/goodbye, node/jobs/lease, node/jobs/:id/complete, node/jobs/:id/fail, node/jobs/:id/release |
+| Node session bearer | POST node/heartbeat, node/goodbye, node/jobs/lease, node/jobs/:id/complete, node/jobs/:id/fail, node/jobs/:id/release, node/jobs/:id/renew |
 
 Admin bootstrap is a high-entropy environment secret. Application secrets are
 random and returned once, hash-only in the DB; allowed job types and revocation
@@ -97,7 +97,6 @@ must match authenticated node and lease ID and arrive strictly before expiry.
 All mutation checks occur inside a transaction. Old or superseded leases cannot
 commit results; repeated identical completion of the same successful lease is
 accepted, changed completion is a conflict. Expired completion is rejected even
-when nobody has yet acquired a replacement lease. There is no lease renewal in
-v0.1: only bounded echo runs (plus, since v0.2.1, the bounded hash chain). Execution is at-least-once; future handlers need
+when nobody has yet acquired a replacement lease. Since v0.2.1 a node running a long job renews its lease with `POST node/jobs/:id/renew` `{leaseId}` (response `{expiresAt}`), roughly every third of a lease period. Renewal is fenced exactly like completion (authenticated, assigned node, matching lease ID, lease not yet expired; otherwise 409 `LEASE_CONFLICT`), the Coordinator chooses the new expiry (`now` plus the lease period), and a single lease can be kept alive at most `PRIVANET_MAX_LEASE_MS` (default one hour; 409 `LEASE_LIMIT`), so a stuck node cannot hold a job forever. A node that loses its lease stops the handler and does not hand the job back. Handlers must yield to the event loop (as hash-chain does) so renewals and heartbeats run. Execution is at-least-once; future handlers need
 idempotency by job ID and cannot infer exactly-once side effects from fencing.
 Node restart may lose an unreported result; its lease expires and retries.

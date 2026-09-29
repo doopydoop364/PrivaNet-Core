@@ -16,6 +16,8 @@ export interface JobRecord extends Job {
   assignedNodeId: string | null; leaseId: string | null; leaseExpiresAt: number | null;
   /** Graceful hand-backs (drain/preemption); absent in older records. Bounded by policy.maxReleases. */
   releases?: number;
+  /** When the current lease was first granted; renewals may not extend a lease past this plus policy.maxLeaseMs. */
+  leasedAt?: number;
 }
 export interface Store {
   readonly coordinatorId: string;

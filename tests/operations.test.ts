@@ -77,3 +77,20 @@ test('online backup restores into a working Coordinator with the same identity, 
   await assert.rejects(exec(process.execPath, ['scripts/backup.mjs', join(dir, 'x', 'y.sqlite')], { cwd: root, env }));
   await assert.rejects(exec(process.execPath, ['scripts/backup.mjs', join(dir, 'z.sqlite')], { cwd: root, env: { ...env, PRIVANET_DATA_DIR: join(dir, 'missing') } }));
 });
+
+test('lease renewal is fenced to the assigned node and lease, extends only a live lease, and is bounded in total', t => {
+  const f = fixture(); t.after(() => f.store.close());
+  const core = new Coordinator(f.store, { staleMs: 1e5, offlineMs: 5e5, leaseMs: 100, maxAttempts: 2, sessionMs: 1e5, challengeMs: 100, maxLeaseMs: 250 }, f.now);
+  const a = f.enroll(); const b = f.enroll(); core.heartbeat(a.session.nodeId, heartbeat()); core.heartbeat(b.session.nodeId, heartbeat());
+  const job = core.submit(f.app, { type: 'system.echo.v1', input: { message: 'long' }, idempotencyKey: 'long' });
+  const lease = core.lease(a.session.nodeId); assert.ok(lease); const first = lease.expiresAt;
+  const renew = (node: string, leaseId = lease.leaseId) => core.renew(node, job.id, { leaseId });
+  assert.throws(() => renew(b.session.nodeId), code('LEASE_CONFLICT', 409)); // another node cannot extend it
+  assert.throws(() => renew(a.session.nodeId, '99999999-9999-4999-8999-999999999999'), code('LEASE_CONFLICT', 409));
+  assert.throws(() => core.renew(a.session.nodeId, job.id, { leaseId: lease.leaseId, expiresAt: 1 }), /./); // the node never chooses the deadline
+  f.advance(60); assert.equal(renew(a.session.nodeId).expiresAt, first + 60); // now + leaseMs
+  f.advance(90); assert.equal(renew(a.session.nodeId).expiresAt, first + 150); // capped at leasedAt + maxLeaseMs (250 ms), not now + 100
+  f.advance(60); assert.equal(renew(a.session.nodeId).expiresAt, first + 150); // at the ceiling: no further extension
+  f.advance(60); assert.throws(() => renew(a.session.nodeId), code('LEASE_CONFLICT', 409)); // expired leases cannot be revived
+  core.maintain(); assert.equal(core.getJob(f.app, job.id).status, 'QUEUED');
+});

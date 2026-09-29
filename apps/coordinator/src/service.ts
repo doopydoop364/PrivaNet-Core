@@ -2,7 +2,7 @@ import { createPublicKey, randomUUID, verify } from 'node:crypto';
 import {
   AppCreateSchema, CompleteSchema, EnrollmentStartSchema, EnrollmentTokenRequestSchema,
   FailureSchema, GoodbyeSchema, HeartbeatSchema, JOB_TYPES, JobSchema, PROTOCOL_VERSION, ProofSchema,
-  ReleaseSchema, SERVICE_VERSION, SubmitSchema,
+  ReleaseSchema, RenewSchema, SERVICE_VERSION, SubmitSchema,
 } from '@privanet/protocol';
 import type { Challenge, Job, JobError, Lease, NodeView, Session } from '@privanet/protocol';
 import { ApiError, canonicalPublicKey, hash, secret } from '@privanet/shared';
@@ -13,9 +13,11 @@ import type { Scheduler } from './scheduler.js';
 export interface Policy { staleMs: number; offlineMs: number; leaseMs: number; maxAttempts: number; maxReleases: number; sessionMs: number; challengeMs: number;
   /** Finished jobs (and their results) are deleted this long after completion; 0 keeps them forever. Duplicate-submission replays stop working after this. */
   retentionMs: number;
+  /** Longest a single lease may be kept alive by renewals. */
+  maxLeaseMs: number;
   /** Most QUEUED + LEASED jobs one application may hold; further submissions get 429 QUEUE_LIMIT. */
   maxPendingPerApplication: number }
-export const defaultPolicy: Policy = { staleMs: 15000, offlineMs: 60000, leaseMs: 10000, maxAttempts: 3, maxReleases: 20, sessionMs: 300000, challengeMs: 60000, retentionMs: 30 * 86400000, maxPendingPerApplication: 10000 };
+export const defaultPolicy: Policy = { staleMs: 15000, offlineMs: 60000, leaseMs: 10000, maxAttempts: 3, maxReleases: 20, sessionMs: 300000, challengeMs: 60000, retentionMs: 30 * 86400000, maxLeaseMs: 3600000, maxPendingPerApplication: 10000 };
 function reject(status: number, code: string): never { throw new ApiError(status, code, code.replaceAll('_', ' ').toLowerCase()); }
 
 export class Coordinator {
@@ -209,7 +211,7 @@ export class Coordinator {
       if (!job) return null;
       const leaseId = randomUUID(); const expiresAt = this.now() + this.policy.leaseMs;
       const next: JobRecord = { ...job, status: 'LEASED', attempts: job.attempts + 1,
-        assignedNodeId: nodeId, leaseId, leaseExpiresAt: expiresAt, error: null };
+        assignedNodeId: nodeId, leaseId, leaseExpiresAt: expiresAt, leasedAt: this.now(), error: null };
       this.store.saveJob(next);
       return { jobId: job.id, type: job.type, input: job.input, protocolVersion: PROTOCOL_VERSION, leaseId, expiresAt, attempt: next.attempts };
     });
@@ -227,6 +229,24 @@ export class Coordinator {
   fail(nodeId: string, id: string, input: unknown): void {
     const request = FailureSchema.parse(input);
     this.finish(nodeId, id, request.leaseId, { result: null, error: request.error }, 'FAILED');
+  }
+  /**
+   * A node running a long job extends its lease. Fenced like completion: authenticated, assigned node,
+   * matching lease ID, and the lease must still be valid; total lease time is bounded by `maxLeaseMs`.
+   * The Coordinator chooses the new expiry, so a node cannot claim an arbitrary deadline.
+   */
+  renew(nodeId: string, id: string, input: unknown): { expiresAt: number } {
+    const request = RenewSchema.parse(input);
+    return this.store.transaction(() => {
+      const node = this.store.getNode(nodeId); if (!node || node.revoked) reject(401, 'UNAUTHORIZED_NODE');
+      const job = this.store.getJob(id); const now = this.now();
+      if (!job || job.status !== 'LEASED' || job.assignedNodeId !== nodeId || job.leaseId !== request.leaseId
+        || job.leaseExpiresAt === null || job.leaseExpiresAt <= now) reject(409, 'LEASE_CONFLICT');
+      const ceiling = (job.leasedAt ?? now) + this.policy.maxLeaseMs;
+      if (ceiling <= now) reject(409, 'LEASE_LIMIT');
+      const expiresAt = Math.max(job.leaseExpiresAt, Math.min(now + this.policy.leaseMs, ceiling));
+      this.store.saveJob({ ...job, leaseExpiresAt: expiresAt }); return { expiresAt };
+    });
   }
   /** Node hands a leased job back (drain, preemption, shutdown). Not a failure: the attempt is refunded. */
   release(nodeId: string, id: string, input: unknown): void {

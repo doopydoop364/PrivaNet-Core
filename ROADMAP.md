@@ -14,7 +14,7 @@ A local machine is just another PrivaNode. Early versions may run every componen
 - **Planned** — accepted direction, not yet implemented.
 - **Research** — promising idea that still needs design/measurement before implementation.
 
-## Phase 1 — Core Foundation — Complete (v0.1.0; operational items closed in v0.2.1)
+## Phase 1 — Core Foundation — Complete (independent security review pending, tracked in Phase 11)
 
 Goal: establish a small, secure, testable PrivaNet control plane.
 

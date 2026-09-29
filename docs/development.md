@@ -63,7 +63,7 @@ before stopping; leases recover any lost work.
 [.env.example](../.env.example) lists defaults. Coordinator policy uses positive
 bounded integers; offline timeout must exceed stale timeout. Keep heartbeat
 interval comfortably below stale timeout and poll interval below lease duration.
-Current echo execution is synchronous/bounded, one slot, with no lease renewal.
+Execution is one slot; the node renews the lease of a running job (see [protocol](protocol.md)), bounded by `PRIVANET_MAX_LEASE_MS` (default 1 hour), while `PRIVANET_LEASE_MS` stays the base lease period.
 Policy changes take effect on service restart; lowering the attempt limit also
 marks exhausted queued retries FAILED. Max attempts counts actual leases,
 not submission calls. Revocation/expiry retries are bounded; handler failures

@@ -1,5 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { AckSchema, JOB_TYPES, CapabilitiesSchema, ChallengeSchema, HealthSchema, LeaseResponseSchema, PROTOCOL_VERSION, SERVICE_VERSION, SessionSchema } from '@privanet/protocol';
+import { AckSchema, JOB_TYPES, RenewResponseSchema, CapabilitiesSchema, ChallengeSchema, HealthSchema, LeaseResponseSchema, PROTOCOL_VERSION, SERVICE_VERSION, SessionSchema } from '@privanet/protocol';
 import type { JobType, Session } from '@privanet/protocol';
 import { ApiError, Transport } from '@privanet/shared';
 import type { TransportOptions } from '@privanet/shared';
@@ -103,7 +103,20 @@ export class PrivaNode {
       // Handler failure and result transport failure are separate: lost completion
       // acknowledgement must not be changed into a terminal handler failure.
       let result;
-      const preempt = new AbortController(); const stop = AbortSignal.any([preempt.signal, this.hardStop.signal]);
+      // Keep the lease alive while a long handler runs; losing it (revoked, expired, superseded) stops the handler without a hand-back.
+      let leaseLost = false; let leaseUntil = lease.expiresAt; let renewing = false;
+      const preempt = new AbortController();
+      const renewer = setInterval(() => {
+        // A long job must not make the node look stale: heartbeats (self-throttled) continue while it runs.
+        void this.heartbeat().catch(() => { /* the next tick reconnects if the session is gone */ });
+        if (renewing) return; renewing = true;
+        void this.transport.request('POST', `/v1/node/jobs/${lease.jobId}/renew`, RenewResponseSchema, { leaseId: lease.leaseId }, session.token)
+          .then(response => { leaseUntil = response.expiresAt; })
+          .catch((error: unknown) => {
+            // A definite refusal, or a transient failure that outlasts the lease we last knew about, ends the job.
+            if ((error instanceof ApiError && [401, 409].includes(error.status)) || Date.now() >= leaseUntil) { leaseLost = true; preempt.abort(); }
+          }).finally(() => { renewing = false; });
+      }, Math.max(20, Math.floor((lease.expiresAt - Date.now()) / 3))); const stop = AbortSignal.any([preempt.signal, this.hardStop.signal]);
       // Only jobs declared preemptible are ever interrupted for resource pressure.
       const watcher = JOB_TYPES[lease.type].resources.preemptible && this.options.engine
         ? setInterval(() => { this.options.engine?.update(); if (this.options.engine?.shouldPreempt()) preempt.abort(); }, this.options.preemptCheckMs ?? 250) : undefined;
@@ -112,6 +125,7 @@ export class PrivaNode {
           ...(checkpoints ? { checkpoint: checkpoints.forJob(lease.jobId, lease.type) } : {}), ...(meter ? { transfer: (bytes: number) => meter.consume(bytes, stop) } : {}) });
       }
       catch {
+        if (leaseLost) { this.log({ event: 'job.lease_lost' }); return; }
         if (stop.aborted) {
           await this.transport.request('POST', `/v1/node/jobs/${lease.jobId}/release`, AckSchema,
             { leaseId: lease.leaseId, reason: this.hardStop.signal.aborted ? 'SHUTDOWN' : 'PREEMPTED' }, session.token);
@@ -121,7 +135,7 @@ export class PrivaNode {
         await this.transport.request('POST', `/v1/node/jobs/${lease.jobId}/fail`, AckSchema,
           { leaseId: lease.leaseId, error: { code: this.capabilities.includes(lease.type) ? 'HANDLER_FAILED' : 'CAPABILITY_DISABLED' } }, session.token);
         this.log({ event: 'job.handler_failed' }); return;
-      } finally { if (watcher) clearInterval(watcher); }
+      } finally { clearInterval(renewer); if (watcher) clearInterval(watcher); }
       meter?.record(JSON.stringify(result).length);
       await this.transport.request('POST', `/v1/node/jobs/${lease.jobId}/complete`, AckSchema, { leaseId: lease.leaseId, result }, session.token);
       checkpoints?.clear(lease.jobId); this.log({ event: 'job.completed' });
@@ -130,7 +144,7 @@ export class PrivaNode {
       throw error;
     } finally {
       this.currentJobs = 0; this.busy = false;
-      // Availability is refreshed next tick; no background heartbeat can race work.
+      // The renewal timer also heartbeats while a job runs; otherwise availability is refreshed on the next tick.
     }
   }
   async run(signal: AbortSignal): Promise<void> {
