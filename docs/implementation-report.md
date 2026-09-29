@@ -93,12 +93,11 @@ and verifies the same node identity and persisted application/job behavior.
 
 ## Git handoff
 
-Only `/home/iuselinuxbtw/privanet` was changed. The implementation is present
-in local commit `0e891ba` (`added stuff`) on `main`, after the original
-`92d5ee1` commit. Nothing was pushed. This report remains an uncommitted working
-tree addition because the sandbox exposes `.git` read-only and rejected the
-index lock required to commit it. Generated `dist/`, SQLite state, logs,
-identities, and secrets are ignored.
+The original implementation landed in commit `0e891ba`. A later audit
+(branch `claude/admiring-noether-msb69g`) made job types registry-driven: wire
+schemas, capability lists and result validation derive from `JOB_TYPES`, and a
+test keeps node handlers in lockstep with the registry. Generated `dist/`,
+SQLite state, logs, identities, and secrets are ignored.
 
 ## Remaining v0.1 work
 

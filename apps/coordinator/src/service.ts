@@ -194,7 +194,13 @@ export class Coordinator {
   }
   complete(nodeId: string, id: string, input: unknown): void {
     const request = CompleteSchema.parse(input);
-    this.finish(nodeId, id, request.leaseId, { result: JOB_TYPES['system.echo.v1'].output.parse(request.result), error: null }, 'COMPLETED');
+    const node = this.store.getNode(nodeId); if (!node || node.revoked) reject(401, 'UNAUTHORIZED_NODE');
+    const job = this.store.getJob(id);
+    // Result shape is checked against the schema registered for the job's own type, never the node's claim.
+    if (!job || job.assignedNodeId !== nodeId) reject(409, 'LEASE_CONFLICT');
+    const parsed = JOB_TYPES[job.type].output.safeParse(request.result);
+    if (!parsed.success) reject(400, 'INVALID_RESULT');
+    this.finish(nodeId, id, request.leaseId, { result: parsed.data, error: null }, 'COMPLETED');
   }
   fail(nodeId: string, id: string, input: unknown): void {
     const request = FailureSchema.parse(input);

@@ -10,3 +10,5 @@ export function executeLease(lease: Lease, enabled: readonly JobType[]) {
   const input = definition.input.parse(lease.input);
   return definition.output.parse(handlers[lease.type](input));
 }
+/** Job types this build can execute; used to keep the registry and handlers in lockstep. */
+export function registeredHandlerTypes(): JobType[] { return Object.keys(handlers) as JobType[]; }

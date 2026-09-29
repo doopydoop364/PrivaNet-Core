@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { CapabilitiesResponseSchema, HealthSchema, IdSchema, JobSchema, SubmitSchema } from '@privanet/protocol';
-import type { Job, JobInputMap, JobType } from '@privanet/protocol';
+import type { Job, JobInputMap, JobOutputMap, JobType } from '@privanet/protocol';
 import { Transport, ApiError } from '@privanet/shared';
 import type { TransportOptions } from '@privanet/shared';
 export { ApiError };
@@ -20,7 +20,7 @@ export class PrivaNetClient {
     return this.transport.request('POST', '/v1/jobs', JobSchema, request, this.token);
   }
   getJob(id: string, signal?: AbortSignal): Promise<Job> { return this.transport.request('GET', `/v1/jobs/${IdSchema.parse(id)}`, JobSchema, undefined, this.token, signal); }
-  async waitForResult(id: string, options: { timeoutMs?: number; pollMs?: number; signal?: AbortSignal } = {}): Promise<JobInputMap['system.echo.v1']> {
+  async waitForResult<T extends JobType = JobType>(id: string, options: { timeoutMs?: number; pollMs?: number; signal?: AbortSignal } = {}): Promise<JobOutputMap[T]> {
     const timeoutMs = options.timeoutMs ?? 30000; const pollMs = options.pollMs ?? 100;
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || !Number.isSafeInteger(pollMs) || pollMs < 1) throw new Error('Invalid polling policy');
     const timeout = AbortSignal.timeout(timeoutMs);
@@ -29,7 +29,7 @@ export class PrivaNetClient {
       for (;;) {
         signal.throwIfAborted();
         const job = await this.getJob(id, signal);
-        if (job.status === 'COMPLETED' && job.result) return job.result;
+        if (job.status === 'COMPLETED' && job.result) return job.result as JobOutputMap[T];
         if (job.status === 'FAILED') throw new ApiError(409, job.error?.code ?? 'JOB_FAILED', 'job failed');
         await delay(pollMs, undefined, { signal });
       }
