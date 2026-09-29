@@ -94,6 +94,23 @@ Status: **planned.** There is no treasury, levy, public budget or bootstrap prog
 
 Requirements for any future treasury code: idempotency, transactional updates, explicit budget limits, policy versions and auditable reference IDs. Aggregate metrics only; no per-node or per-user disclosure.
 
+## Crawl job threats (planned)
+
+Status: **planned.** No `privasearch.*` job type or crawl handler exists, so none of these apply to the current code. They are recorded for the design in [PRIVASEARCH_INTEGRATION.md](PRIVASEARCH_INTEGRATION.md), which is the specification for the first crawl job. The governing rule: the crawl job is a constrained fetch for one application, never a general proxy.
+
+| Threat | Why it matters | Planned direction |
+| --- | --- | --- |
+| SSRF to localhost, LAN, link-local or cloud metadata | A fetch job could reach internal services from a node | Reject IP literals and internal names; resolve on the node, check every address (IPv4-mapped, NAT64 and 6to4 by embedded IPv4), connect to the vetted address; re-check every redirect and the connected socket; ignore proxy environment variables; only an owner-local, default-empty CIDR allow list can relax it |
+| DNS rebinding | Name resolves to a public address at check time and a private one at connect time | Connect by the vetted address (pinned lookup), never re-resolve |
+| Exit-node or proxy abuse | Community nodes fetch arbitrary URLs from their owners' addresses | Closed job type: fixed GET, no caller headers or body, ports 80/443, no IP targets, same-origin redirects, digest results only; only PrivaSearch credentials may submit; owner opt-in; per-host and overall rate limits; residual risk from a compromised credential stated in the spec |
+| Compromised PrivaSearch credential or scheduler | Directs nodes at attacker-chosen public URLs | Revocation and rotation; per-application budgets and host concurrency before public nodes; robots enforcement; identifiable user agent |
+| Malicious node poisons results | Fabricated or omitted page content distorts the index | Untrusted-data handling; content hashes; sampled redundant crawls and disagreement tracking in PrivaSearch; no execution attestation exists |
+| Decompression bomb, huge or slow responses, oversized headers | Memory, CPU and slot exhaustion on the node | Streaming caps on compressed and decoded bytes, ratio cap, header cap, connect/header/idle/total timeouts, bounded hardened parser |
+| robots.txt evasion | Crawling what sites forbid | Enforced in the handler with no job-level bypass; unreachable robots.txt means no fetch |
+| Crawled-URL privacy | The Coordinator and its operator see every URL and digest; demand-queue URLs may reflect user interest | No user identifiers or queries in job input, decoupled and batched submission, short retention, no URL logging |
+| Hostile page content | Text and links are attacker-controlled | Digests are untrusted data, escaped and length-bounded; no JavaScript, no external fetches by the node |
+| Header injection through validators | Caller-supplied conditional headers | Strict regexes on `ETag` and `Last-Modified`; no other header is caller-controlled |
+
 ## Limits and threats left open
 
 A stolen grant can enroll the thief before the owner; restrict grant capability,

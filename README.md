@@ -61,6 +61,7 @@ credential and allowed job types; applications receive no admin/node privileges.
 - [Threat model, privacy and security limits](docs/security.md)
 - [Development, configuration and recovery](docs/development.md)
 - [Deployment: TLS, reverse proxy, backup and recovery](docs/deployment.md)
+- [PrivaSearch integration specification (design only)](docs/PRIVASEARCH_INTEGRATION.md)
 - [Roadmap](docs/roadmap.md)
 - [Resource market design (planned)](docs/RESOURCE_MARKET.md), [PrivaCredits (planned)](docs/CREDITS.md), [Network Treasury (planned)](docs/TREASURY.md), [adaptive resources](docs/RESOURCES.md)
 - [Implementation and verification report](docs/implementation-report.md)

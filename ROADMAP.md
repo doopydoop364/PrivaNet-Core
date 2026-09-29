@@ -117,6 +117,8 @@ Initial scaling targets should be measured milestones rather than attempts to cr
 
 Metasearch should fill gaps while PrivaSearch's own index grows. Searches may also help prioritize what the crawler indexes next.
 
+**Integration design ready (not implemented):** [docs/PRIVASEARCH_INTEGRATION.md](docs/PRIVASEARCH_INTEGRATION.md) specifies `privasearch.crawl.v1` (a constrained fetch job, not a proxy), the trust boundaries, application permissions, retry/checkpoint semantics, resource estimates, the PrivaNet-Core changes required (registry entry, guarded fetcher and handler with SSRF, robots and limits; later job cancellation, short retention and host-concurrency hints) and the MVP sequence for crawling with exactly one local PrivaNode. PrivaSearch stays a separate repository that depends on `@privanet/sdk` only. Phase 3 is complete only when PrivaSearch crawls and searches through the real PrivaNet path on a measured milestone; storage (Phase 4) is not part of it.
+
 Model two crawl queues from the start, even though no payer exists yet: a **demand-driven queue** (user searches, weak coverage, explicit refreshes; paid by the requester once the economy exists) and a **public queue** (new-domain discovery, recrawling and refreshing important pages, coverage and diversity; paid by the Network Treasury in Phase 9, see [docs/TREASURY.md](docs/TREASURY.md)). Until then both run on operator-provided capacity. Both must obey robots.txt, per-host rate limits, politeness and resource limits.
 
 ## Phase 4 — Generic Storage Foundation — Planned
