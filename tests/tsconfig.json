@@ -1,0 +1,27 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist"
+  },
+  "include": [
+    "*.ts"
+  ],
+  "references": [
+    {
+      "path": "../apps/coordinator"
+    },
+    {
+      "path": "../apps/node"
+    },
+    {
+      "path": "../packages/sdk"
+    },
+    {
+      "path": "../packages/shared"
+    },
+    {
+      "path": "../packages/protocol"
+    }
+  ]
+}

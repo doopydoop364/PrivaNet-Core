@@ -1,0 +1,35 @@
+{
+  "name": "privanet",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.4.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tests/tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "npm run build && node --test \"tests/dist/*.test.js\"",
+    "test:unit": "npm run build && node --test tests/dist/protocol.test.js tests/dist/core.test.js tests/dist/identity.test.js",
+    "test:integration": "npm run build && node --test tests/dist/integration.test.js tests/dist/process.test.js",
+    "start:coordinator": "node apps/coordinator/dist/main.js",
+    "start:node": "node apps/node/dist/main.js",
+    "demo": "node scripts/demo.mjs",
+    "admin": "node scripts/admin.mjs"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.19.0",
+    "eslint": "^10.11.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.71.0"
+  }
+}

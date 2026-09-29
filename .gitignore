@@ -1,0 +1,15 @@
+node_modules/
+**/dist/
+*.tsbuildinfo
+coverage/
+var/
+.env
+.env.*
+!.env.example
+*.sqlite*
+*.db*
+*.log
+*.pem
+*.key
+identity.json
+node-state.json

@@ -1,0 +1,17 @@
+{
+  "name": "@privanet/coordinator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@privanet/protocol": "0.1.0",
+    "@privanet/shared": "0.1.0",
+    "zod": "^4.6.5"
+  },
+  "exports": {
+    "./*": {
+      "types": "./dist/*.d.ts",
+      "default": "./dist/*.js"
+    }
+  }
+}
