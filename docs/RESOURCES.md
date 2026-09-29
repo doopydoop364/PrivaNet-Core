@@ -176,6 +176,7 @@ Gaming:  available RAM  3 GiB -> PrivaNet budget 0.5 GiB, CPU budget 5 %
 - The market and the scheduler stay separate: the market decides which supply is economically eligible and at what clearing price; the scheduler (which already uses budgets and pressure, and later reliability and planned availability) chooses among them. Price never overrides an owner's limits.
 - Per-class supply and ask reporting, when added, will be **additive optional heartbeat fields**; the current `ResourceReport` and job `ResourceEstimate` are deliberately class-neutral and need no change.
 - Resource telemetry remains minimal. A market does not justify collecting detailed host information; verifying claimed supply is a measurement-phase problem (challenges, spot checks, two-ended accounting), not something to solve by reading more from the host.
+- Treasury-funded public work (planned, Phase 9; see [TREASURY.md](TREASURY.md)) uses this same supply and these same limits. Public crawling, maintenance and bootstrap-funded jobs get no exemption from a node's budget, pressure, schedule or owner limits, and non-urgent public work is lower priority than owner and private workloads. A treasury payer changes who pays, not what a node is allowed to do.
 
 ## Planned availability
 

@@ -117,6 +117,8 @@ Initial scaling targets should be measured milestones rather than attempts to cr
 
 Metasearch should fill gaps while PrivaSearch's own index grows. Searches may also help prioritize what the crawler indexes next.
 
+Model two crawl queues from the start, even though no payer exists yet: a **demand-driven queue** (user searches, weak coverage, explicit refreshes; paid by the requester once the economy exists) and a **public queue** (new-domain discovery, recrawling and refreshing important pages, coverage and diversity; paid by the Network Treasury in Phase 9, see [docs/TREASURY.md](docs/TREASURY.md)). Until then both run on operator-provided capacity. Both must obey robots.txt, per-host rate limits, politeness and resource limits.
+
 ## Phase 4 — Generic Storage Foundation — Planned
 
 Goal: provide application-independent object/chunk storage through PrivaNet.
@@ -221,6 +223,7 @@ Market design (research first; see [docs/RESOURCE_MARKET.md](docs/RESOURCE_MARKE
 - price guardrails: reference prices, minimum/maximum asks, movement limits, circuit breakers, audited emergency controls; all configurable and versioned
 - anti-manipulation: fake demand, fake contribution, collusion, bandwidth farming, useless compute jobs, storage churn, wash activity, Sybils, price manipulation, artificial scarcity, falsified telemetry. Only Coordinator-authorised, policy-valid, verified consumption may generate contributor rewards
 - observability: aggregate market history without exposing private node or user data
+- a settlement hook for the Phase 9 treasury: a bounded, versioned, explicit levy entry per settlement (the ledger design must leave room for it; the treasury itself is not part of this phase)
 
 Accounting rules:
 
@@ -230,7 +233,7 @@ Accounting rules:
 - **advertising capacity never creates credits**; credits mostly circulate from consumers to providers, with explicit, auditable, versioned issuance (bounded free-allowance/subsidy pool, administrative adjustment) and explicit sinks
 - track macroeconomic metrics (issued, consumed, circulating, per-account, prices, supply and demand per class)
 
-Potential ledger events include settlement (paired charge and reward), STORAGE/BANDWIDTH/COMPUTE reward and charge variants, FREE_ALLOWANCE, ADMIN_ADJUSTMENT and REVERSAL.
+Potential ledger events include settlement (paired charge and reward), STORAGE/BANDWIDTH/COMPUTE reward and charge variants, FREE_ALLOWANCE, ADMIN_ADJUSTMENT and REVERSAL. Treasury events (levy, deposits, public-good spending) come with Phase 9 ([docs/TREASURY.md](docs/TREASURY.md)).
 
 ### Reliability
 
@@ -246,7 +249,26 @@ Earlier plans used bounded fixed demand multipliers. **Scarcity should instead s
 
 A private single-operator deployment runs with the market off (fixed or zero reference price) and stays fully useful.
 
-## Phase 9 — Community Network Hardening — Planned
+## Phase 9 — Network Treasury and Public Goods — Planned / Research
+
+Goal: give PrivaNet a transparent internal **Network Treasury** (also *PrivaNet Treasury* or *Public Resource Fund*) that pays for useful work with no single purchaser, using bounded redistribution of existing PrivaCredits. It is an internal resource-budgeting mechanism, **not** an investment fund: no external investment, speculation, yield, profit distribution, cash-backed token or external trading. Design source of truth: [docs/TREASURY.md](docs/TREASURY.md). Nothing here is implemented, and it must not be activated before Phases 7 and 8 exist and are trusted.
+
+Planned scope (research first):
+
+- a small configurable, bounded, versioned **market-settlement levy**, visible as explicit ledger events (`MARKET_LEVY`), no permanent rate chosen; the treasury primarily redistributes existing credits rather than minting
+- other explicit funding sources: allocated subsidies (measured as issuance), unused public-service budgets, administrative or community grants, disclosed expiring promotional allocations. No confiscation of ordinary inactive balances
+- separate **budget buckets** (General Reserve, PrivaSearch Public Goods, Contributor Bootstrap, Network Maintenance, Emergency Reserve) so one subsystem cannot drain another
+- **public-good jobs**: ordinary typed jobs paid by the treasury through the same market, scheduler, verification and settlement path; no special execution path, no unlimited buyer, per-job maximum price and per-period budget caps, lower priority for non-urgent work, slowing when capacity is scarce
+- **PrivaSearch public crawl queue** funded by the PrivaSearch Public Goods budget alongside the requester-funded demand queue (robots.txt, per-host limits and politeness still apply)
+- **Contributor Bootstrap Program**: match or bonus verified useful contribution during a bounded onboarding period, with a research option for a delayed reliability portion; never a gift for installing a node; graceful draining is not punished
+- bounded network-maintenance and emergency-reserve spending, explicitly authorised and separately auditable
+- ledger events such as `TREASURY_DEPOSIT`, `PUBLIC_GOOD_SPEND`, `PUBLIC_CRAWL_SPEND`, `CONTRIBUTOR_MATCH`, `NETWORK_MAINTENANCE_SPEND`, `EMERGENCY_RESERVE_SPEND`, `TREASURY_ADJUSTMENT`, `TREASURY_REVERSAL` with amount, context, reason, reference ID, policy version, timestamp, authority and audit trail
+- requirements: idempotency, transactional budget updates, explicit limits, policy versions, auditable reference IDs; treasury metrics (balance by bucket, levy income, spending by category, cost per useful public crawl/index unit, subsidy issuance)
+- policy is versioned configuration controlled by administrators; no governance or token-voting system is designed
+
+The economic stack stays modular: (1) resource measurement, (2) resource market, (3) PrivaCredits ledger, (4) Network Treasury, (5) public-good budgeting.
+
+## Phase 10 — Community Network Hardening — Planned
 
 Goal: safely support untrusted public/community nodes.
 
@@ -260,6 +282,7 @@ Areas to address:
 - malicious or colluding nodes
 - manipulated accounting
 - resource-market manipulation (fake demand, wash activity, price manipulation, artificial scarcity; see docs/security.md and docs/RESOURCE_MARKET.md)
+- treasury abuse (fake public jobs, onboarding farming, node/account churn; see docs/TREASURY.md)
 - bandwidth farming
 - storage corruption
 - denial of service
@@ -270,7 +293,7 @@ Areas to address:
 
 Community deployment should happen only after the local/small-network architecture is stable.
 
-## Phase 10 — Stable PrivaNet Protocol — Planned
+## Phase 11 — Stable PrivaNet Protocol — Planned
 
 Goal: provide a stable foundation other Priva applications can depend on.
 
@@ -316,3 +339,6 @@ These applications should not distract from the Core Foundation, PrivaSearch, an
 12. The resource market (economic eligibility and price) stays separate from the scheduler (operational choice); price never overrides owner limits, durability or safety.
 13. Resource measurement and verification come before any market; no market is built around unverified claims.
 14. PrivaCredits stay an internal accounting unit: no external trading, cash-out or speculation.
+15. The Network Treasury is an internal budgeting and redistribution mechanism funded primarily by a bounded, visible levy on existing credits. It never invests, speculates, yields returns or is externally tradable, and it never hides minting.
+16. Treasury-funded (public-good) work uses the same typed-job, market, scheduler, verification and settlement path as private work, inside explicit budgets and maximum prices; there is no privileged or unsafe path and no unlimited buyer.
+17. Do not activate a real resource market or treasury before PrivaNet can accurately measure and verify useful resource consumption.

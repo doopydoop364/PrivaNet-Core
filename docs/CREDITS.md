@@ -76,7 +76,7 @@ Use integer accounting units. Do not use floating-point arithmetic for balances.
 - `ADMIN_ADJUSTMENT`
 - `REVERSAL`
 
-Under the market model a paired `SETTLEMENT` event (charge and reward together) and explicit issuance/sink events (subsidy-pool issuance, fees) are likely; the reward/charge names above remain candidates. The exact event vocabulary may evolve with protocol versions. Every event references the job, lease/attempt, node, application, resource class, unit version, quantity, price and policy version it settles.
+Treasury events (`MARKET_LEVY`, `TREASURY_DEPOSIT`, `PUBLIC_GOOD_SPEND`, `PUBLIC_CRAWL_SPEND`, `CONTRIBUTOR_MATCH`, `NETWORK_MAINTENANCE_SPEND`, `EMERGENCY_RESERVE_SPEND`, `TREASURY_ADJUSTMENT`, `TREASURY_REVERSAL`) are planned for Phase 9 and described in [TREASURY.md](TREASURY.md). Under the market model a paired `SETTLEMENT` event (charge and reward together) and explicit issuance/sink events (subsidy-pool issuance, fees) are likely; the reward/charge names above remain candidates. The exact event vocabulary may evolve with protocol versions. Every event references the job, lease/attempt, node, application, resource class, unit version, quantity, price and policy version it settles.
 
 ## Reliability multiplier
 
@@ -215,6 +215,16 @@ Resource consumer --credits charged--> PrivaNet accounting/market --credits rewa
 
 Credits may be **created** only by explicit, auditable, versioned mechanisms such as a configured free allowance or subsidy pool, or an administrative adjustment. Credits may be **removed** only by explicit sinks (for example a small settlement fee). Nothing may create credits from advertised capacity or idle connection time, and the design must not continuously create credits without corresponding useful resource consumption. A settlement that does not balance is a bug.
 
+### Network Treasury (planned, Phase 9)
+
+A small, bounded, versioned levy on successful settlements may route a visible share to an internal **Network Treasury** that pays for public-good work (public crawling, maintenance, contributor bootstrap, emergency repair):
+
+```text
+Consumer pays 100  ->  Provider receives 97  +  Treasury receives 3   (illustrative; no rate chosen)
+```
+
+This is redistribution of existing credits, not issuance; the levy is an explicit ledger entry, never hidden in the reward. Issuance (free allowance, subsidies) stays separately measured and is never hidden inside treasury operations. Ordinary balances are not confiscated for inactivity. The treasury is not an investment fund and credits stay non-tradable. See [TREASURY.md](TREASURY.md).
+
 Track eventually: total credits issued and consumed, credits circulating, credits per active account, clearing prices per class, total supply and demand per class, storage used versus offered, and compute and bandwidth demand versus supply.
 
 ## Free allowance
@@ -238,6 +248,7 @@ Before PrivaCredits become meaningful, the design must address:
 - intentional job failure/retry farming
 - market manipulation: clearing-price manipulation, artificial scarcity by withdrawing supply, colluding nodes/clients, bandwidth farming, useless compute jobs, storage churn for rewards
 - allowance farming through many accounts
+- treasury abuse: fake public jobs, onboarding/bootstrap farming through node or account churn, duplicate or replayed treasury payouts, budget races (see [TREASURY.md](TREASURY.md))
 - manipulated telemetry
 - compromised node credentials
 
@@ -252,6 +263,7 @@ No single node's self-reported resource usage should be blindly accepted as suff
 5. simulate clearing mechanisms and adversarial strategies;
 6. introduce per-class supply, asks and demand, then the market with price guardrails;
 7. add reliability policy after enough data exists;
-8. add bounded policy adjustments only where measurements show the market alone is insufficient.
+8. add bounded policy adjustments only where measurements show the market alone is insufficient;
+9. only then add the Network Treasury (levy, budget buckets, public-good jobs, contributor bootstrap), Phase 9.
 
 This keeps the economy downstream of real infrastructure rather than forcing the infrastructure to fit an untested reward model. We should not attempt to build a market around unverified resource claims.

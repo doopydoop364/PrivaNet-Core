@@ -58,7 +58,7 @@ Status: **planned.** No market, credits or rewards exist, so none of these attac
 | Bandwidth farming | Cheap junk traffic priced per GiB | Count only valid application traffic; exclude repair and wash traffic |
 | Deliberately useless compute jobs | Paying yourself through the job system | Typed registry, application pays, verified units only |
 | Storage churn for rewards | Repeatedly storing and deleting to earn | Reward retained data over time; charge churn and repair; minimum terms |
-| Sybil nodes and accounts | Many identities to gain influence, allowances or price power | Enrollment control; identity cost and reputation in Phase 9; identities never buy price influence alone |
+| Sybil nodes and accounts | Many identities to gain influence, allowances or price power | Enrollment control; identity cost and reputation in Phase 10; identities never buy price influence alone |
 | Clearing-price manipulation | Strategic asks or thin markets move the price | Uniform-price design to research, thin-market fallback, movement limits, circuit breakers |
 | Withdrawing supply to create scarcity | Coordinated exits to raise the price | Withdrawal statistics, notice for stored data, guardrails; graceful/pressure exits must not be over-penalised |
 | Free-allowance farming | Subsidy leaks to fake accounts | Bounded pool, per-account limits, account-gating |
@@ -66,6 +66,29 @@ Status: **planned.** No market, credits or rewards exist, so none of these attac
 | Ledger replay or duplicates | Double settlement | Idempotent events keyed by job/lease/attempt |
 
 Market data itself is a privacy risk: aggregate only, with minimum participant thresholds, and no per-node or per-user disclosure.
+
+## Treasury-specific threats (planned)
+
+Status: **planned.** There is no treasury, levy, public budget or bootstrap program, so none of these apply to the current code. They are recorded so the design and later interfaces do not make them easy. See [TREASURY.md](TREASURY.md). A treasury is a shared pot of internal credits, which makes it a higher-value target than any one account.
+
+| Threat | Why it matters | Planned direction |
+| --- | --- | --- |
+| Draining public budgets with fake jobs | Attackers or a bug spend the shared fund | Per-bucket, per-period caps; per-job maximum price; only verified work is paid; anomaly alerts |
+| Fake public-crawl demand | Bogus crawl targets or submitted URLs that exist only to earn | Public queue is created by PrivaSearch policy, not by arbitrary requesters; crawl output verification; per-host and per-domain caps |
+| Fake contributor onboarding | Enrolling many nodes to claim bootstrap value | Bootstrap only matches verified useful contribution; bounded lifetime subsidy; delayed vesting; no gift for installing; no fragile KYC |
+| Repeated node/account churn | Re-enrolling to reset onboarding eligibility | One bootstrap per account-to-node relationship, minimum reliability window, rate limits, anti-Sybil work in Phase 10 |
+| Collusion and wash resource activity | Colluders exchange useless work to collect levy-funded matches or public spend | Treasury-paid work does not itself earn treasury match; related-party limits; the levy makes wash activity cost credits; anomaly detection |
+| Manipulating prices before treasury purchases | Pump the price, then sell to the treasury | Maximum willingness to pay, reference-price ceilings, thin-market protection, circuit breakers, purchase throttling when scarce |
+| Treasury overpaying under artificial scarcity | Coordinated supply withdrawal raises what the public budget pays | Withdrawal statistics, price-movement limits, pause non-urgent purchases when scarce |
+| Public-job spam | Flooding the public queue to starve real work or drain budgets | Queue and rate limits, dedup, priority below private and owner work, budget caps |
+| Compromised PrivaSearch scheduler | A trusted component spends its whole bucket | Isolated bucket caps and maximum prices bound the loss; spend is still verified; alerts on budget velocity |
+| Compromised administrative treasury policy | Attacker or insider changes levy, caps or bucket transfers | Versioned policy, audit trail, bounded parameter ranges, review or delay for large changes, separate authority for emergency spending |
+| Replaying treasury settlement events | Same settlement credits the treasury or a payout twice | Idempotency keyed by job/lease/attempt and reference ID |
+| Duplicate treasury payouts | Retries or restarts pay twice | Idempotent events, one payout per reference ID, reconciliation checks |
+| Budget overflow and race conditions | Concurrent spends exceed a cap or go negative | Transactional budget reservation and decrement, integer amounts, non-negative invariant, explicit limits |
+| Hidden minting through treasury operations | Issuance disguised as levy income inflates credits | Issuance is a separate explicit event and metric; conservation checks on every settlement |
+
+Requirements for any future treasury code: idempotency, transactional updates, explicit budget limits, policy versions and auditable reference IDs. Aggregate metrics only; no per-node or per-user disclosure.
 
 ## Limits and threats left open
 

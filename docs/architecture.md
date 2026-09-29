@@ -122,9 +122,27 @@ Application -> SDK -> Coordinator
 
 Design consequences already reflected in the code: stable versioned job identities, per-job resource estimates, dynamic node budgets in heartbeats, a replaceable scheduler behind an interface, additive-only protocol evolution and explicit versions. Not present, deliberately: any price, ask, credit or ledger field, node-to-account binding, per-attempt usage history. Market and scheduler remain separate so that economic eligibility never replaces durability, reliability or owner-limit checks, and so a single-node deployment can run the scheduler alone.
 
+### Network Treasury layer (planned, not implemented)
+
+A later layer, the **Network Treasury** ([TREASURY.md](TREASURY.md)), would sit beside the ledger. It is funded mainly by a bounded, visible levy on settlements and pays as a budgeted buyer for public-good work (PrivaSearch public crawling, maintenance, contributor bootstrap, emergency repair):
+
+```text
+private demand:      Application --pays-->  resource request --+
+                                                               v
+                                                        Resource market -> Scheduler -> PrivaNode -> verified usage
+                                                               ^                                          |
+public-good demand:  Treasury bucket (cap, max price) ---------+                                  settlement + levy
+```
+
+The economic stack has five separate layers (measurement, market, ledger, treasury, public-good budgeting) and treasury-funded work uses the same typed-job/market/scheduler/verification path with no privileged route. Phase 1 and 2 already carry the needed extension points (stable job IDs, application identities on jobs, replaceable scheduler, per-job resource estimates, idempotency keys, explicit protocol versions); a future payer or funding-source reference on a job would be an additive optional field. No treasury field or code exists.
+
 ### ADR 002: market design is documentation-first
 
 **Problem:** the credits design used fixed conversion rates and manual demand multipliers, which would need hand tuning and would push economics into scheduler and job code. **Decision:** plan a resource market with explicit versioned units per class, keep it separate from scheduling, settle only verified consumption, and build measurement (Phase 7) before any market (Phase 8). Do not add speculative market code now. **Alternatives:** fixed rates plus multipliers (simple, but scarcity signals are manual and easy to misprice); a single universal credit-per-work rate (ignores that storage, bandwidth and compute have different economics); implementing credits first and measurement later (would reward unverified claims). **Security:** rewards create incentives to lie, so measurement and verification come first and are documented in the [market threat model](security.md#market-specific-threats-planned). **Consequences:** clearing mechanism, units, reference prices and reliability formulas stay open research questions until simulated; Phase 1 and 2 interfaces needed no changes, and gaps (per-attempt usage records, node-to-account binding) are listed as Phase 7 and 8 prerequisites.
+
+### ADR 003: the treasury is an internal, levy-funded, bucketed public-good payer
+
+**Problem:** the market pays only when a user or application demands work, but crawling, index freshness, integrity checks, repair and onboarding benefit the whole network with no single payer. **Decision:** plan a Network Treasury inside the PrivaCredits accounting, funded primarily by a bounded, versioned, visible levy that redistributes existing credits; split it into logical budget buckets with per-period caps; let it buy resources through the ordinary market and scheduler with a maximum price; support contributor bootstrap only as a match on verified useful contribution. Documentation-first; no code. **Alternatives:** mint credits for public work (inflation, hidden issuance); one unlimited pool (a runaway crawler drains everything); a privileged buyer that always outbids (destroys price signals and crowds out users); free credits per install (farmed by churn); an investment-style fund (out of scope and wrong incentives). **Security:** shared budgets attract fake jobs, onboarding farming, duplicate payouts, price pumping before purchase and compromised schedulers or policy; see the [treasury threats](security.md#treasury-specific-threats-planned). **Consequences:** it must not activate before measurement and the market exist; ledger, idempotency, transactional budgets and versioned policy are prerequisites; numbers and bucket lists remain open research questions.
 
 ## Future control/data plane
 
