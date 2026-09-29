@@ -101,7 +101,7 @@ SQLite state, logs, identities, and secrets are ignored.
 
 ## Remaining v0.1 work
 
-Before calling this production-ready, validate the CI OS matrix, review reverse
+Before calling this production-ready, review reverse
 proxy/TLS deployment, exercise backup and recovery procedures, add operational
 retention/quotas, and obtain an independent security review. The next product
 milestone should improve queues, cancellation, resource limits, observability,
