@@ -29,7 +29,9 @@ function startNode(lan: Lan, name: string, host: 'server' | 'desktop', policy: o
   const policyFile = join(lan.dir, `${name}.policy.json`);
   const child: ChildProcess = (host === 'server' ? lan.server : lan.desktop).spawn(join(lan.release, 'bin', 'privanet-node'), [],
     lan.nodeEnv(name, { PRIVANODE_CAPABILITIES: 'web.fetch.v1', PRIVANODE_POLICY_FILE: policyFile, PRIVANODE_JOB_SLOTS: String(slots), PRIVANODE_ENROLLMENT_TOKEN: token }), logs);
-  child.stdout?.on('data', (chunk: Buffer) => { const n = chunk.toString().split('"event":"job.completed"').length - 1; for (let i = 0; i < n; i++) completions.push(Date.now()); });
+  // Count whole lines: a pipe may split a line across two chunks, and a count per chunk would miss an event at the boundary.
+  let partial = '';
+  child.stdout?.on('data', (chunk: Buffer) => { const lines = (partial + chunk.toString()).split('\n'); partial = lines.pop() ?? ''; for (const line of lines) if (line.includes('"event":"job.completed"')) completions.push(Date.now()); });
   return { child, logs, completions, stateDir: join(lan.dir, `node-${name}`), policyFile, policy, count: (event: string) => logs.join('').split(`"event":"${event}"`).length - 1 };
 }
 const between = (times: number[], from: number, to: number) => times.filter(t => t >= from && t < to).length;
