@@ -111,6 +111,31 @@ Status: **implemented in v0.3.0-alpha.1** (`apps/node/src/fetch/`; tests in `tes
 | Hostile page content | Text and links are attacker-controlled | Digests are untrusted data, escaped and length-bounded; no JavaScript, no external fetches by the node |
 | Header injection through validators | Caller-supplied conditional headers | Strict regexes on `ETag` and `Last-Modified`; no other header is caller-controlled |
 
+## Data-plane threats (planned)
+
+Status: **planned; nothing implemented.** These apply to the future direct-transfer data plane ([DATA_PLANE.md](DATA_PLANE.md), ADR 006, Phase 4 and 5). Today no direct transfer exists and every payload transits the Coordinator within its 32 KiB and 512 KiB limits. The governing rule: a transfer is authorized by a narrow Coordinator-issued authorization and node identity, never by network location; LAN is not trusted.
+
+| Threat | Why it matters | Planned direction |
+| --- | --- | --- |
+| Stolen transfer authorization | A leaked ticket lets someone else store or fetch | Short expiry, one operation, one resource, one node, byte bound, hash binding; the ticket is never a general node credential and is never logged |
+| Replayed authorization | A captured ticket reused to store or fetch again or something else | Non-reusable or explicitly idempotent tickets, node-side replay state, Coordinator-recorded transfer state |
+| Expired authorization | A late holder still transferring | Node-side expiry check with a bounded skew allowance; expiry mid-transfer has a defined outcome |
+| Wrong-node use | A ticket presented to a node it was not issued for | Ticket bound to the target node identity; a node refuses tickets naming another node |
+| Wrong-object use or object substitution | Different bytes stored under an authorized name | Ticket bound to resource ID and content hash; hash verified while streaming, mismatch discards |
+| Byte-limit bypass | A "small" ticket used to fill a disk or the bandwidth allowance | Hard byte bound enforced by the node, owner disk and network limits still apply, transfer stops at the bound |
+| Corrupted or incomplete transfer | Silent data loss, false completion | Integrity verification, explicit completion state, partial data never committed |
+| Malicious sender or receiver | Garbage sent, or data accepted and discarded | Hash verification by the receiver, receipts from both ends where needed, later possession and integrity challenges |
+| Application or node lying about completion | False evidence to gain quota, credit or a commit | Completion is a Coordinator state transition backed by evidence from the right party; nothing is billable or rewardable on an issued ticket alone |
+| Endpoint spoofing, DNS or endpoint substitution | An application sends data to an attacker's endpoint | Endpoints come only from the Coordinator and are bound to node identity (open design questions 4 and 5); applications never supply endpoints |
+| Authorization leakage through logs, referrers or URLs | Ticket exposure | Log the reference ID, not the ticket; keep tickets out of URLs where possible; short life limits damage |
+| Concurrent duplicate upload | Two writers for one resource | Idempotency keys, single-writer transfer state, deterministic conflict outcome |
+| Race between revocation or expiry and an in-progress transfer | Transfer completes after permission was withdrawn | Defined semantics for fail-fast versus bounded grace (open question 12), transactional transfer state |
+| Accounting double counting | Retries or resumption counted twice | Idempotent evidence keyed by reference ID and bytes verified; only verified useful bytes count (open question 13) |
+| Transfer resumption abuse | Resuming to bypass bounds or replay | Resumption bound by the same authorization, offsets validated against verified state (open question 3) |
+| Node transfer service becoming a general server | A file server, proxy or socket forwarder on volunteers' machines | Dedicated restricted service, closed operation set, fixed storage area, no caller-influenced paths, off unless the owner enables the capability |
+| Coordinator as accidental bulk relay | Bandwidth cost and a central bottleneck | Keep the 32 KiB and 512 KiB limits; any relay is a separate bounded data-plane service |
+| Data privacy | Plaintext or keys reaching PrivaNet or its logs | Applications encrypt before transfer (PrivaDrive owns keys); never log contents, keys or raw private data |
+
 ## Limits and threats left open
 
 A stolen grant can enroll the thief before the owner; restrict grant capability,

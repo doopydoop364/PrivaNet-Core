@@ -8,6 +8,16 @@ The core design principle is simple:
 
 A local machine is just another PrivaNode. Early versions may run every component on one computer, but the architecture should remain compatible with remote community nodes later.
 
+## Architecture in one picture: control plane and data plane
+
+PrivaNet has three layers ([docs/DATA_PLANE.md](docs/DATA_PLANE.md), ADR 006):
+
+1. **Applications** (PrivaSearch, PrivaDrive, Privaproxy where relevant, future applications).
+2. **Control plane**: the Coordinator. Authentication, node identity, capability registry, scheduler, job state, leases, placement decisions, transfer authorizations, and later accounting, the resource market and the Network Treasury.
+3. **Resource/data plane**: PrivaNodes. Actual compute, storage and bandwidth, plus application-to-node and node-to-node transfers.
+
+> The Coordinator is the control plane, not the bulk-data pipe. All work begins at the Coordinator; large payloads eventually move directly between authorized participants through narrowly scoped, Coordinator-authorized transfers. Small typed jobs keep returning bounded inline results through the Coordinator. The direct data plane is a Phase 4 deliverable and is **not implemented**.
+
 ## Status terminology
 
 - **Current** — actively being implemented now.
@@ -107,20 +117,32 @@ Initial PrivaSearch scaling targets are measured milestones rather than attempts
 
 **Status:** the integration contract and the boundary decision (ADR 005, accepted) are written; the Core capability `web.fetch.v1` is **implemented in v0.3.0-alpha.1** (PrivaSearch's real-path proof is in its own repository) and no PrivaSearch code exists in this repository. The two crawl queues, a demand-driven queue paid by the requester and a public queue paid by the Network Treasury in Phase 9 ([docs/TREASURY.md](docs/TREASURY.md)), are PrivaSearch policy, modelled as two application credentials from the start; until the economy exists both run on operator-provided capacity and must obey robots.txt, per-host limits, politeness and resource limits. Phase 3 is complete when PrivaSearch crawls and searches through the real PrivaNet path at a measured milestone; storage (Phase 4) is not part of it.
 
-## Phase 4 — Generic Storage Foundation — Planned
+**Data-plane stance in Phase 3:** keep the normal typed-job control path. Bounded `web.fetch.v1` results (digests of at most 28,000 bytes) stay inline through the Coordinator. Use real crawl measurements to decide whether larger-result transfer support is ever necessary; if it is, a future `web.fetch` version could return metadata, a content hash and a bounded result reference. Do not build a generic data plane speculatively ([docs/DATA_PLANE.md](docs/DATA_PLANE.md)).
 
-Goal: provide application-independent object/chunk storage through PrivaNet.
+**Measured so far (v0.3.0-alpha.1, PrivaSearch milestone 2):** one real public URL fetched through the guarded PrivaNode and found by search (CI), and 10, 100 and 1,000 pages crawled through the full real path on a synthetic local site (about 950 pages per minute on one single-slot node, zero invalid results). The measurements point at SDK polling cost on the Coordinator, not payload size, as the first bottleneck. See PrivaSearch `docs/measurements.md`.
+
+## Phase 4 — Generic Storage + Data Plane Foundation — Planned
+
+Goal: provide application-independent object/chunk storage through PrivaNet **and the first generic direct-transfer data plane**, so large payloads never transit the Coordinator ([docs/DATA_PLANE.md](docs/DATA_PLANE.md), ADR 006).
 
 Planned primitives:
 
-- put object
-- get object
-- delete object
-- chunk integrity verification
+- put object, get object, delete object (bounded object and chunk PUT and GET)
+- chunk integrity verification and object/chunk identity
 - storage-node capabilities
-- local-node storage using the same API as remote storage
+- local-node storage using the same API and the same transfer mechanism as remote storage (no localhost bypass)
 
-PrivaNet owns physical resource infrastructure; applications own their own user-visible semantics.
+Planned data-plane foundation:
+
+- Coordinator-issued, short-lived **transfer authorizations**, scoped to one operation, one resource, one node (or node pair), a byte bound and an expiry, non-reusable or explicitly idempotent, revocable where practical, auditable by reference ID and replay-safe
+- a dedicated, restricted node-side transfer service (not a file server, proxy or generic endpoint) that verifies authorization, target node, operation, resource, size, expiry, replay state, integrity and owner policy; owner limits stay authoritative
+- application-to-node direct transfer after Coordinator placement (the application never picks nodes)
+- transfer completion and failure reporting, expiry and revocation, integrity and hash verification, safe retry and resume if justified
+- an explicit transfer state machine, aggregate transfer metrics, and threat-tested behaviour for the [data-plane threats](docs/security.md#data-plane-threats-planned)
+
+Not part of Phase 4: NAT traversal, public node exposure and relay services (a separate networking problem, [DATA_PLANE.md](docs/DATA_PLANE.md#13-connectivity)); node-to-node transfer (Phase 5).
+
+PrivaNet owns physical resource infrastructure; applications own their own user-visible semantics. Phase 4 implementation does not start while Phase 3 is still being proven.
 
 ## Phase 5 — Distributed Storage — Planned
 
@@ -138,6 +160,7 @@ Planned features:
 - graceful retirement
 - physical-resource accounting
 - failure-domain-aware placement
+- **node-to-node authorized transfers**: the Coordinator authorizes a sender and a receiver for a specific chunk, the nodes transfer directly, and both report evidence ([docs/DATA_PLANE.md](docs/DATA_PLANE.md#8-node-to-node-flow-phase-5)); replication, repair, migration and rebalancing never relay bytes through the Coordinator
 - storage possession/integrity challenges (also the verification input for Phase 7 storage measurement)
 
 Storage placement is driven by durability and failure-domain constraints; a future market's price must never override them.
@@ -167,6 +190,7 @@ PrivaNet should own:
 
 - physical storage nodes
 - object/chunk placement
+- **transfer authorization** and the generic data plane (PrivaDrive uploads and downloads encrypted chunks directly to and from authorized nodes and never sends large payloads through the Coordinator)
 - replication
 - repair
 - node health
@@ -190,6 +214,8 @@ Measure independently, per resource class and with explicit versioned units:
 - integrity/possession challenge results
 
 Deliverables to plan: append-only, idempotent usage records per attempt (job, lease, node, application, class, unit version, quantity, evidence); verification methods per class; a node-to-account link; measurement-only dashboards. Note that the current code does not keep per-attempt history or release reasons, so nothing before this phase is billable.
+
+Phase 7 consumes **verified data-plane evidence**: authorized transfer, actual verified useful bytes, failed or partial bytes, storage duration, repair traffic, application traffic and duplicate or retry traffic are distinct. A node is never credited because a transfer authorization was issued ([docs/DATA_PLANE.md](docs/DATA_PLANE.md#10-accounting-implications-phase-7-and-later)).
 
 Keep logical application usage separate from physical network cost. Do not reward nodes primarily for advertising unused capacity. Details: [docs/RESOURCE_MARKET.md](docs/RESOURCE_MARKET.md#prerequisites-before-any-market-is-activated).
 
@@ -274,7 +300,7 @@ Areas to address:
 - bandwidth farming
 - storage corruption
 - denial of service
-- NAT/connectivity strategy
+- NAT/connectivity strategy, including whether a bounded data-plane relay is needed as a fallback (never the Coordinator as the normal relay; [docs/DATA_PLANE.md](docs/DATA_PLANE.md#13-connectivity))
 - operational monitoring
 - coordinator recovery
 - upgrade compatibility
@@ -331,3 +357,8 @@ These applications should not distract from the Core Foundation, PrivaSearch, an
 16. Treasury-funded (public-good) work uses the same typed-job, market, scheduler, verification and settlement path as private work, inside explicit budgets and maximum prices; there is no privileged or unsafe path and no unlimited buyer.
 17. Do not activate a real resource market or treasury before PrivaNet can accurately measure and verify useful resource consumption.
 18. Applications (PrivaSearch, PrivaDrive, Privaproxy) live in their own repositories and depend on PrivaNet through the SDK and protocol only. PrivaNet-Core contains generic, function-named capabilities and never application code, policy or names in code paths.
+19. **The Coordinator is the control plane, not the bulk-data pipe.** It authenticates, authorizes, schedules, places and issues narrowly scoped transfer authorizations; large payloads move directly between authorized participants. All work still begins at the Coordinator and applications never select or trust nodes on their own.
+20. The data plane is never a bypass: no unrestricted node endpoints, general file serving, arbitrary proxying or socket forwarding, and no trust based on network location (LAN is not trusted). A transfer authorization never overrides owner resource limits.
+21. Small typed jobs keep returning bounded inline results; introduce result-by-reference only when measurements require it, and additively.
+22. Accounting rests on verified data-plane evidence, never on issued authorizations or requested capacity.
+23. The Coordinator's server may also run an optional, conservatively limited PrivaNode, scheduled through the same authenticated path as any node; the Coordinator never depends on it.

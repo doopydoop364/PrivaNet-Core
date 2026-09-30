@@ -243,8 +243,10 @@ seasons or events, because it comes from prices and budgets rather than a
 
 ## PrivaSearch public crawling
 
+Note on transfers: treasury-funded storage or repair traffic, like any paid traffic, is accounted from verified data-plane evidence and never from issued transfer authorizations ([DATA_PLANE.md](DATA_PLANE.md#10-accounting-implications-phase-7-and-later)).
+
 The strongest expected use. PrivaSearch (Phase 3) will have two queues, both
-using generic capabilities such as the constrained fetch job (provisionally `web.fetch.v1`; see [APPLICATION_BOUNDARY.md](APPLICATION_BOUNDARY.md)), and
+using generic capabilities such as the constrained fetch job (`web.fetch.v1`; see [APPLICATION_BOUNDARY.md](APPLICATION_BOUNDARY.md)), and
 both obeying `robots.txt`, per-host rate limits, crawl politeness,
 bandwidth/resource limits, typed-job restrictions and verification/accounting
 rules.

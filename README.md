@@ -62,8 +62,9 @@ credential and allowed job types; applications receive no admin/node privileges.
 - [Development, configuration and recovery](docs/development.md)
 - [Deployment: TLS, reverse proxy, backup and recovery](docs/deployment.md)
 - [Application boundary: what Core owns and what applications own (ADR 005, accepted)](docs/APPLICATION_BOUNDARY.md)
-- [PrivaSearch integration contract (design only)](docs/PRIVASEARCH_INTEGRATION.md)
-- [Roadmap](docs/roadmap.md)
+- [PrivaSearch integration contract](docs/PRIVASEARCH_INTEGRATION.md)
+- [Control plane and data plane (ADR 006, design only)](docs/DATA_PLANE.md): the Coordinator authorizes and schedules; large payloads will move directly between authorized participants
+- [Roadmap](docs/roadmap.md), [package installation and publishing](docs/PACKAGES.md)
 - [Resource market design (planned)](docs/RESOURCE_MARKET.md), [PrivaCredits (planned)](docs/CREDITS.md), [Network Treasury (planned)](docs/TREASURY.md), [adaptive resources](docs/RESOURCES.md)
 - [Implementation and verification report](docs/implementation-report.md)
 
