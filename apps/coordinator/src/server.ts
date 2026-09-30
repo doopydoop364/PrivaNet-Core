@@ -113,7 +113,7 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
                 const deadline = Date.now() + waitMs; let gone = false; res.once('close', () => { gone = true; });
                 while (!lease && !gone && Date.now() < deadline) {
                   // Sleep until work appears, the deadline passes or the node disconnects; then re-check the credential (revocation) and try again.
-                  await new Promise<void>(resolve => { const timer = setTimeout(finish, Math.max(1, deadline - Date.now())); const off = core.onWork(finish); res.once('close', finish);
+                  await new Promise<void>(resolve => { const timer = setTimeout(finish, Math.max(1, deadline - Date.now())); const off = core.onWork(node.nodeId, node.capabilities, finish); res.once('close', finish);
                     function finish() { clearTimeout(timer); off(); res.off('close', finish); resolve(); } });
                   if (gone || res.destroyed) break;
                   core.authenticateNode(token); lease = core.lease(node.nodeId);

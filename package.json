@@ -1,6 +1,6 @@
 {
   "name": "privanet",
-  "version": "0.3.0-alpha.3",
+  "version": "0.3.0-alpha.4",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -17,6 +17,7 @@
     "lint": "eslint .",
     "test": "npm run build && node --test --test-concurrency=1 \"tests/dist/*.test.js\"",
     "test:unit": "npm run build && node --test tests/dist/protocol.test.js tests/dist/core.test.js tests/dist/identity.test.js",
+    "test:multinode": "npm run build && node --test --test-concurrency=1 tests/dist/multinode.cluster.js",
     "test:integration": "npm run build && node --test tests/dist/integration.test.js tests/dist/process.test.js",
     "start:coordinator": "node apps/coordinator/dist/main.js",
     "start:node": "node apps/node/dist/main.js",
