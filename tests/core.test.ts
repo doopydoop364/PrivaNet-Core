@@ -222,6 +222,6 @@ test('lease attempts that find nothing are cheap: they neither write nor change 
   for (let i = 0; i < 50; i++) assert.equal(f.core.lease(n.session.nodeId), null);
   const job = f.submit(); const lease = f.core.lease(n.session.nodeId); assert(lease); assert.equal(lease.jobId, job.id);
   assert.equal(f.core.lease(n.session.nodeId), null, 'a leased job is not handed out twice');
-  f.advance(200); // the lease (50 ms) expired: the same call that sweeps it also re-offers it
+  f.advance(200); f.core.heartbeat(n.session.nodeId, heartbeat()); // the lease (50 ms) expired: the same call that sweeps it also re-offers it
   const again = f.core.lease(n.session.nodeId); assert(again); assert.equal(again.jobId, job.id); assert.equal(again.attempt, 2);
 });

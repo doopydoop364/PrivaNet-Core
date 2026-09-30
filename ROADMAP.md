@@ -121,6 +121,8 @@ Initial PrivaSearch scaling targets are measured milestones rather than attempts
 
 **Measured so far (v0.3.0-alpha.1, PrivaSearch milestone 2):** one real public URL fetched through the guarded PrivaNode and found by search (CI), and 10, 100 and 1,000 pages crawled through the full real path on a synthetic local site (about 950 pages per minute on one single-slot node, zero invalid results). The measurements point at SDK polling cost on the Coordinator, not payload size, as the first bottleneck. See PrivaSearch `docs/measurements.md`.
 
+**Multi-node validation (v0.3.0-alpha.4):** trusted, admin-enrolled nodes were validated as real processes (spread, crash failover, Coordinator restart, drain, restart, paused-then-resumed zombie, mixed owner limits, revocation, churn) with no correctness or security defect found, and measurement found and fixed a Coordinator scaling defect with many job slots. Details, numbers and limits: [docs/MULTI_NODE_VALIDATION.md](docs/MULTI_NODE_VALIDATION.md). Untrusted nodes stay in Phase 10.
+
 ## Phase 4 — Generic Storage + Data Plane Foundation — Planned
 
 Goal: provide application-independent object/chunk storage through PrivaNet **and the first generic direct-transfer data plane**, so large payloads never transit the Coordinator ([docs/DATA_PLANE.md](docs/DATA_PLANE.md), ADR 006).

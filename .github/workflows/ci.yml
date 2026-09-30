@@ -19,3 +19,14 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+  multinode:
+    # Real Coordinator and PrivaNode processes that are killed, paused and restarted (docs/MULTI_NODE_VALIDATION.md). POSIX only; not part of the per-OS default suite.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:multinode

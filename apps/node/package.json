@@ -1,12 +1,12 @@
 {
   "name": "@privanet/node",
-  "version": "0.3.0-alpha.3",
+  "version": "0.3.0-alpha.4",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
   "dependencies": {
-    "@privanet/protocol": "0.3.0-alpha.3",
-    "@privanet/shared": "0.3.0-alpha.3",
+    "@privanet/protocol": "0.3.0-alpha.4",
+    "@privanet/shared": "0.3.0-alpha.4",
     "zod": "^4.6.5"
   },
   "exports": {

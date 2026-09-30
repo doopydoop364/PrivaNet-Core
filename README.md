@@ -65,6 +65,7 @@ credential and allowed job types; applications receive no admin/node privileges.
 - [Threat model, privacy and security limits](docs/security.md)
 - [Development, configuration and recovery](docs/development.md)
 - [Deployment: TLS, reverse proxy, backup and recovery](docs/deployment.md)
+- [Trusted multi-node validation: scenarios, findings, measurements](docs/MULTI_NODE_VALIDATION.md)
 - [Application boundary: what Core owns and what applications own (ADR 005, accepted)](docs/APPLICATION_BOUNDARY.md)
 - [PrivaSearch integration contract](docs/PRIVASEARCH_INTEGRATION.md)
 - [Control plane and data plane (ADR 006, design only)](docs/DATA_PLANE.md): the Coordinator authorizes and schedules; large payloads will move directly between authorized participants

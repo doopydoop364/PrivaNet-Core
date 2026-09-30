@@ -53,11 +53,15 @@ Synthetic `system.echo.v1` jobs, 64 in flight, one machine with 4 CPUs running t
 
 | nodes x slots | before (jobs/min) | after (jobs/min) |
 | --- | --- | --- |
-| 1 x 1 | 8,711 | see below |
-| 4 x 1 | 13,036 | 16,116 |
+| 1 x 1 | 8,711 | 10,849 |
+| 2 x 1 | 11,638 | 16,417 |
+| 4 x 1 | 13,036 | 16,718 |
+| 8 x 1 | 11,794 | 15,859 |
 | 4 x 16 | 10,397 | 15,288 |
 | 4 x 32 | 5,680 | 13,141 |
 | 8 x 64 | timed out | 8,687 |
+
+(Runs before the fix used 2,000 jobs, runs after 3,000; the machine and the 64 requests in flight are the same. The one-node run counted 2,999 of 3,000 `job.completed` log lines because the last line had not been flushed when the log was read; every job's result was received.)
 
 Work spread evenly: with 8 nodes the per-node completions were 248 to 254 of 2,000.
 

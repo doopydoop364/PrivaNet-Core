@@ -114,7 +114,7 @@ Compatibility posture for that future: a job's `result` is `unknown` on the wire
 - the node's credential is re-checked every time the request wakes, so a node revoked while waiting gets 401, not a job;
 - a request whose connection closed is never leased to (a job submitted in the very instant of a disconnect can still be leased to the dead connection; that lease simply expires and the job is retried);
 - the number of held-open requests is bounded (default 512, `maxLeaseWaiters`); over the bound a request is answered at once like a plain poll;
-- wake-ups come from job submission, release and requeue; each waiter then re-runs the normal scheduler decision, so eligibility (capabilities, budgets, schedule) is unchanged.
+- wake-ups come from job submission, release and requeue. Each event wakes at most one waiting request per node that advertises the capability (every lane of a node asks the scheduler the same question, so waking more only repeats it); the woken request re-runs the normal scheduler decision, so eligibility (capabilities, budgets, schedule) is unchanged. A woken request that cannot take the job leaves it queued for the next event or the end of the wait; a lane that finishes a job polls again at once.
 
 Compatibility: an old node sends `{}` and works unchanged. A new node against an older Coordinator gets 400 for `waitMs`, logs `node.lease_wait_unsupported`, and polls plainly from then on. The node's library default is no waiting; the daemon defaults `PRIVANODE_LEASE_WAIT_MS` to 5000, capped by the heartbeat interval so availability stays fresh, and a drain wakes an idle wait at once.
 

@@ -7,6 +7,21 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 
 ## [Unreleased]
 
+## [0.3.0-alpha.4] - 2026-09-30
+
+Trusted multi-node validation release. Protocol version 1, no wire change: `0.3.0-alpha.3` nodes, clients and Coordinators interoperate. Highlights: the Coordinator no longer gets slower as nodes add job slots, and there is now a repeatable real-process multi-node test and measurement suite ([docs/MULTI_NODE_VALIDATION.md](docs/MULTI_NODE_VALIDATION.md)).
+
+### Fixed
+- **Coordinator cost grew with the number of waiting lease requests.** Every submitted job woke every held-open lease request and each ran a full transaction plus two scans and JSON parses of the pending jobs. With many job slots the Coordinator saturated (measured: 4 nodes x 32 slots halved throughput, and 8 nodes x 64 slots timed out the client). A work event now wakes at most one waiting request per capable node, prepared SQL statements are cached, and `lease()` reuses the pending-job list its own expiry sweep read. An idle lease attempt fell from 60 to 13 microseconds; indicative throughput on one 4-CPU machine rose from 8,711 to 10,849 (1 node), 13,036 to 16,718 (4 nodes), 5,680 to 13,141 (4 nodes x 32 slots) and from a timeout to 8,687 jobs per minute (8 nodes x 64 slots). Behaviour is otherwise unchanged.
+
+### Added
+- Real-process multi-node harness and scenarios: work spread, crash failover, Coordinator restart, drain, node restart with the same identity, a paused-then-resumed zombie node, mixed owner limits and capabilities, and revocation mid-job. Run with `npm run test:multinode` (not part of `npm test`). Measurement driver `tests/cluster-measure.ts` (throughput, failover, restart, churn).
+- `PRIVANET_ENROLLMENT_TTL_MS` for the admin CLI's enrollment tokens (default unchanged, 60 s; up to 24 h), so a fleet held back by the per-address authentication limit does not outlive its tokens.
+- Tests that a work event wakes at most one waiter per capable node (fails if every waiter is woken) and that empty lease attempts change nothing.
+
+### Documentation
+- `docs/MULTI_NODE_VALIDATION.md`: scenario matrix and pass criteria, findings (no correctness or security defect found across the cross-process scenarios), measured failover (lease TTL plus about 50 ms), restart recovery (all nodes back in about 6.5 s), a 60 s churn run (35 `SIGKILL`s, 2,618 of 2,618 jobs correct, 2 retried), authentication-limit behaviour, throughput before and after, and what is not covered.
+
 ## [0.3.0-alpha.3] - 2026-09-30
 
 Throughput and scaling release, driven by measurements of a real PrivaSearch crawl through the Coordinator and PrivaNode. Protocol version 1; every wire change is additive and optional, so `0.3.0-alpha.2` nodes, clients and Coordinators interoperate with this release (new features fall back to the old behaviour). Highlights: a node no longer sleeps after every job (59 to 1,018 pages per minute on default settings), leases and job reads can wait instead of poll, and a node can run up to 64 jobs at once inside the owner's limits.
