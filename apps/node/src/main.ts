@@ -6,6 +6,8 @@ import { ResourceEngine } from './resource-engine.js';
 import { OsSampler } from './resource-sampler.js';
 import { TransferMeter } from './transfer-meter.js';
 import { CheckpointStore } from './checkpoint.js';
+import { defaultHandlers } from './handlers.js';
+import { createFetchHandler } from './fetch/handler.js';
 /** Creating this file in the node's state directory asks the running node to drain (any platform; the way to do it on Windows). */
 export const DRAIN_FILE = 'DRAIN';
 async function main() {
@@ -13,7 +15,10 @@ async function main() {
   const log = (entry: { event: string; code?: string }) => console.log(JSON.stringify(entry));
   const transfer = new TransferMeter({ stateDir: config.stateDir, ratePerSec: policy.maxBandwidthBytesPerSec, monthlyBytes: policy.monthlyTransferBytes });
   const checkpoints = new CheckpointStore(join(config.stateDir, 'checkpoints'));
-  const node = new PrivaNode({ ...config, engine: new ResourceEngine(policy, new OsSampler(config.stateDir), Date.now, transfer), transfer, checkpoints, log });
+  // The fetch capability is only usable through this wiring, with the owner's policy applied.
+  if (policy.fetch.unsafeLocal) log({ event: 'fetch.unsafe_local_enabled' });
+  const handlers = { ...defaultHandlers, 'web.fetch.v1': createFetchHandler({ policy: policy.fetch }) };
+  const node = new PrivaNode({ ...config, handlers, engine: new ResourceEngine(policy, new OsSampler(config.stateDir), Date.now, transfer), transfer, checkpoints, log });
   const abort = new AbortController();
   // First request: drain (finish the current job, say goodbye). After the timeout, or on a second request, hand the job back.
   let forced: NodeJS.Timeout | undefined;

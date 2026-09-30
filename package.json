@@ -1,6 +1,6 @@
 {
   "name": "privanet",
-  "version": "0.2.1",
+  "version": "0.3.0-alpha.1",
   "private": true,
   "type": "module",
   "engines": {
@@ -14,7 +14,7 @@
     "build": "tsc -b",
     "typecheck": "tsc -b && tsc -p tests/tsconfig.json --noEmit",
     "lint": "eslint .",
-    "test": "npm run build && node --test \"tests/dist/*.test.js\"",
+    "test": "npm run build && node --test --test-concurrency=1 \"tests/dist/*.test.js\"",
     "test:unit": "npm run build && node --test tests/dist/protocol.test.js tests/dist/core.test.js tests/dist/identity.test.js",
     "test:integration": "npm run build && node --test tests/dist/integration.test.js tests/dist/process.test.js",
     "start:coordinator": "node apps/coordinator/dist/main.js",

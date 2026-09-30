@@ -91,7 +91,7 @@ Goal: prove PrivaNet's real job architecture with its first external application
 
 **Owned by PrivaNet-Core in this phase (generic platform work only):**
 
-- a generic, security-reviewed **constrained web-fetch capability** (provisionally `web.fetch.v1`, a function-named capability, not `privasearch.*`), with its SSRF guard, robots enforcement, redirect, size, time and decompression bounds, owner policy and test corpus, specified in [docs/PRIVASEARCH_INTEGRATION.md](docs/PRIVASEARCH_INTEGRATION.md);
+- a generic, security-reviewed **constrained web-fetch capability** (`web.fetch.v1`, a function-named capability, not `privasearch.*`), with its SSRF guard, robots enforcement, redirect, size, time and decompression bounds, owner policy and test corpus, specified in [docs/PRIVASEARCH_INTEGRATION.md](docs/PRIVASEARCH_INTEGRATION.md);
 - generic extension points an application needs: application client identity in the lease, job cancellation, per-application or per-type retention, scheduler concurrency keys, per-application request budgets, batch status polling (see the boundary document, section 5);
 - the integration contract and the rules for adding capabilities to Core's first-party registry (the generic-capability test).
 
@@ -105,7 +105,7 @@ Initial PrivaSearch scaling targets are measured milestones rather than attempts
 4. 1 million pages
 5. 10 million pages if earlier measurements justify it
 
-**Status:** the integration contract and the boundary decision (ADR 005, proposed) are written; the Core capability is **not implemented** and no PrivaSearch code exists in this repository. The two crawl queues, a demand-driven queue paid by the requester and a public queue paid by the Network Treasury in Phase 9 ([docs/TREASURY.md](docs/TREASURY.md)), are PrivaSearch policy, modelled as two application credentials from the start; until the economy exists both run on operator-provided capacity and must obey robots.txt, per-host limits, politeness and resource limits. Phase 3 is complete when PrivaSearch crawls and searches through the real PrivaNet path at a measured milestone; storage (Phase 4) is not part of it.
+**Status:** the integration contract and the boundary decision (ADR 005, accepted) are written; the Core capability `web.fetch.v1` is **implemented in v0.3.0-alpha.1** (PrivaSearch's real-path proof is in its own repository) and no PrivaSearch code exists in this repository. The two crawl queues, a demand-driven queue paid by the requester and a public queue paid by the Network Treasury in Phase 9 ([docs/TREASURY.md](docs/TREASURY.md)), are PrivaSearch policy, modelled as two application credentials from the start; until the economy exists both run on operator-provided capacity and must obey robots.txt, per-host limits, politeness and resource limits. Phase 3 is complete when PrivaSearch crawls and searches through the real PrivaNet path at a measured milestone; storage (Phase 4) is not part of it.
 
 ## Phase 4 — Generic Storage Foundation — Planned
 

@@ -51,6 +51,15 @@ jobs:
           dir=$(ls -d privanet-*-${{ matrix.label }})
           if [ "${{ matrix.label }}" = windows ]; then tar -a -cf "$dir.zip" "$dir"; else tar -czf "$dir.tar.gz" "$dir"; fi
           rm -rf "$dir"; ls -l
+      - name: Pack the installable packages (once, on Linux)
+        if: matrix.label == 'linux'
+        shell: bash
+        run: |
+          npm pack --workspace @privanet/protocol --workspace @privanet/shared --workspace @privanet/sdk --pack-destination dist-release
+          # A dry run of the registry publish catches metadata problems before a tag can fail halfway.
+          tag=latest; case "$RELEASE_TAG" in *-*) tag=next;; esac
+          for pkg in protocol shared sdk; do npm publish --workspace @privanet/$pkg --access public --tag "$tag" --dry-run; done
+          ls -l dist-release
       - uses: actions/upload-artifact@v4
         with:
           name: dist-${{ matrix.label }}
@@ -80,3 +89,25 @@ jobs:
           # A pushed tag must already exist; a dispatch creates it at the exact commit that was built.
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then target="--target $GITHUB_SHA"; else target="--verify-tag"; fi
           gh release create "$RELEASE_TAG" assets/* --title "PrivaNet ${RELEASE_TAG#v}" --notes-file notes.md $target $prerelease
+  publish:
+    # Publishes the consumer packages to the public npm registry when (and only when) an NPM_TOKEN secret exists.
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm, registry-url: 'https://registry.npmjs.org' }
+      - run: npm ci
+      - run: npm run build
+      - name: Publish @privanet/protocol, shared and sdk
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then echo "NPM_TOKEN is not configured: skipping the npm publish (release assets still carry the tarballs)"; exit 0; fi
+          tag=latest; case "$RELEASE_TAG" in *-*) tag=next;; esac
+          # Dependency order: protocol, then shared, then sdk.
+          for pkg in protocol shared sdk; do npm publish --workspace @privanet/$pkg --access public --provenance --tag "$tag"; done

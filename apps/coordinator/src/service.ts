@@ -2,7 +2,7 @@ import { createPublicKey, randomUUID, verify } from 'node:crypto';
 import {
   AppCreateSchema, CompleteSchema, EnrollmentStartSchema, EnrollmentTokenRequestSchema,
   FailureSchema, GoodbyeSchema, HeartbeatSchema, JOB_TYPES, JobSchema, PROTOCOL_VERSION, ProofSchema,
-  ReleaseSchema, RenewSchema, SERVICE_VERSION, SubmitSchema,
+  ReleaseSchema, RenewSchema, SERVICE_VERSION, SubmitSchema, requiresClientIdentity,
 } from '@privanet/protocol';
 import type { Challenge, Job, JobError, Lease, NodeView, Session } from '@privanet/protocol';
 import { ApiError, canonicalPublicKey, hash, secret } from '@privanet/shared';
@@ -104,7 +104,8 @@ export class Coordinator {
   }
   createApplication(input: unknown) {
     const request = AppCreateSchema.parse(input); const token = secret(); const applicationId = randomUUID();
-    this.store.saveApplication({ id: applicationId, tokenHash: hash(token), ...request, revoked: false });
+    const { fetchIdentity, ...rest } = request;
+    this.store.saveApplication({ id: applicationId, tokenHash: hash(token), ...rest, ...(fetchIdentity ? { fetchIdentity } : {}), revoked: false });
     return { applicationId, token };
   }
   authenticateApplication(token: string): ApplicationRecord {
@@ -165,6 +166,8 @@ export class Coordinator {
   submit(app: ApplicationRecord, input: unknown): Job {
     const request = SubmitSchema.parse(input);
     if (!app.allowedJobTypes.includes(request.type)) reject(403, 'JOB_TYPE_FORBIDDEN');
+    // Fail at submission, not on a node: an application that acts on the outside world must have a registered identity.
+    if (requiresClientIdentity(request.type) && !app.fetchIdentity) reject(403, 'FETCH_IDENTITY_REQUIRED');
     return this.store.transaction(() => {
       const previous = this.store.findSubmission(app.id, request.idempotencyKey);
       if (previous) {
@@ -213,7 +216,11 @@ export class Coordinator {
       const next: JobRecord = { ...job, status: 'LEASED', attempts: job.attempts + 1,
         assignedNodeId: nodeId, leaseId, leaseExpiresAt: expiresAt, leasedAt: this.now(), error: null };
       this.store.saveJob(next);
-      return { jobId: job.id, type: job.type, input: job.input, protocolVersion: PROTOCOL_VERSION, leaseId, expiresAt, attempt: next.attempts };
+      // The identity comes from the application record, never from the job, and is sent only for capabilities that need it,
+      // so v0.2 nodes (which parse leases strictly and cannot advertise such a capability) never see the extra field.
+      const identity = requiresClientIdentity(job.type) ? this.store.getApplication(job.applicationId)?.fetchIdentity : undefined;
+      if (requiresClientIdentity(job.type) && !identity) reject(409, 'FETCH_IDENTITY_REQUIRED');
+      return { jobId: job.id, type: job.type, input: job.input, protocolVersion: PROTOCOL_VERSION, leaseId, expiresAt, attempt: next.attempts, ...(identity ? { client: identity } : {}) };
     });
   }
   complete(nodeId: string, id: string, input: unknown): void {

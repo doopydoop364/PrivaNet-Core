@@ -169,3 +169,7 @@ A release is cut when a roadmap phase completes. Steps:
 3. `.github/workflows/release.yml` verifies the tag matches `package.json`, runs lint/typecheck/tests on Linux, macOS and Windows, stages a self-contained distribution per OS with `scripts/package-release.mjs` (built `dist/`, `zod`, launchers in `bin/`, docs), smoke-tests it, and publishes a GitHub release with `.tar.gz` (Linux, macOS) and `.zip` (Windows) archives, `SHA256SUMS.txt` and the changelog section as notes.
 
 The archives are pure JavaScript and need Node.js 24.4+ on `PATH`; they contain no secrets, databases or identities.
+
+## Fetch capability (0.3.0-alpha.1)
+
+Code: `apps/node/src/fetch/`. Tests: `tests/fetch-unit.test.ts` (address, URL, robots, digest), `tests/fetch-handler.test.ts` (loopback servers, `unsafeLocal`), `tests/fetch-e2e.test.ts` (Coordinator + node + SDK, TLS fixture in `tests/tls-fixture.ts`, test-only key). Enable on a node by listing `web.fetch.v1` in its job types; tune the `fetch` section of the resource policy file.

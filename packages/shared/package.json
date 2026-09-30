@@ -1,6 +1,7 @@
 {
   "name": "@privanet/shared",
-  "version": "0.2.1",
+  "version": "0.3.0-alpha.1",
+  "description": "PrivaNet shared client internals: bounded HTTPS/loopback transport, identity helpers and secret handling. Used by @privanet/sdk.",
   "type": "module",
   "exports": {
     ".": {
@@ -9,10 +10,32 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.map",
+    "!dist/**/*.tsbuildinfo",
+    "!dist/**/*.d.ts.map"
   ],
+  "engines": {
+    "node": ">=24.4"
+  },
+  "sideEffects": false,
   "dependencies": {
-    "@privanet/protocol": "0.2.1",
+    "@privanet/protocol": "0.3.0-alpha.1",
     "zod": "^4.6.5"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doopydoop364/PrivaNet-Core.git",
+    "directory": "packages/shared"
+  },
+  "homepage": "https://github.com/doopydoop364/PrivaNet-Core#readme",
+  "bugs": {
+    "url": "https://github.com/doopydoop364/PrivaNet-Core/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "privanet"
+  ]
 }

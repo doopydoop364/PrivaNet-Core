@@ -1,6 +1,6 @@
 # Application boundary: what PrivaNet-Core owns and what applications own
 
-Status: **architecture decision (ADR 005), proposed for confirmation. Documentation only; nothing here is implemented.** It settles where application-specific work lives, and evaluates the open question of where first-party job definitions live. Related: [ADR 001](architecture.md#decisions-adr-001), [ADR 005](architecture.md#adr-005-applications-are-external-core-owns-generic-capabilities), [PrivaSearch integration contract](PRIVASEARCH_INTEGRATION.md).
+Status: **architecture decision (ADR 005): ACCEPTED.** The Core-owned registry of generic, function-named first-party capabilities is confirmed, and `web.fetch.v1` is its first application-facing entry (implemented in v0.3.0-alpha.1). Extension point E1 (application fetch identity) is implemented; E2 to E9 are still planned. It settles where application-specific work lives, and evaluates the open question of where first-party job definitions live. Related: [ADR 001](architecture.md#decisions-adr-001), [ADR 005](architecture.md#adr-005-applications-are-external-core-owns-generic-capabilities), [PrivaSearch integration contract](PRIVASEARCH_INTEGRATION.md).
 
 ## 1. The repositories
 
@@ -94,7 +94,7 @@ The constraints that matter, all from the current design:
 | Coupling cost | A Core change and release per new capability. Acceptable because new *capabilities* are rare; new *applications* mostly reuse existing ones |
 | Verdict | **Recommended for anything that performs I/O or otherwise needs owner-level trust** |
 
-### Recommendation
+### Decision (accepted)
 
 1. **Now (Phase 3): Option C, applied strictly.** Core keeps the closed, reviewed capability registry. A job type qualifies only if it is a **generic capability named for what it does, not who calls it**. So the constrained web fetch is `web.fetch.v1` (provisional id), **not** `privasearch.crawl.v1`. PrivaSearch is its first consumer, and PrivaSearch-specific behaviour (frontier, crawl policy, recrawl policy, priorities, robots *policy*, parsing policy) stays in PrivaSearch. Other applications (an archive, a feed reader) can use the same capability under their own scoped credentials.
 2. **Never Option B for registration**, and **never Option A for I/O-performing handlers.** Networking and storage primitives are always first-party Core code.
@@ -117,7 +117,7 @@ These are the platform features an application like PrivaSearch legitimately nee
 
 | # | Extension point | Why it is generic |
 | --- | --- | --- |
-| E1 | **Application client identity in the lease**: an admin-registered, bounded identity on the application record (a product token and an information URL) that the Coordinator stamps into the lease, so a fetch capability can build a truthful `User-Agent` and robots token without the job choosing it | Any application performing outbound requests needs an accountable identity; the job cannot spoof another application's |
+| E1 | **Implemented (v0.3.0-alpha.1).** **Application client identity in the lease**: an admin-registered, bounded identity on the application record (a product token and an information URL) that the Coordinator stamps into the lease, so a fetch capability can build a truthful `User-Agent` and robots token without the job choosing it | Any application performing outbound requests needs an accountable identity; the job cannot spoof another application's |
 | E2 | **Job cancellation** (`POST /v1/jobs/{id}/cancel`, delivered to a running node through lease renewal) | Any application with a backlog needs it |
 | E3 | **Per-application or per-type retention** and optional result scrubbing after acknowledgement | Data-minimisation for every application |
 | E4 | **Scheduler concurrency keys** (do not lease two jobs with the same key at once) | Politeness for fetches, but equally useful for per-resource serialisation |

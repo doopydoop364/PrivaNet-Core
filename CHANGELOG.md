@@ -12,6 +12,27 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 - PrivaSearch integration contract (`docs/PRIVASEARCH_INTEGRATION.md`, ADR 004, fetch threat table, Phase 3 roadmap update): the constrained fetch job, SSRF and robots boundaries, digest results, permissions, retry/checkpoint semantics, resource estimates, required PrivaNet-Core changes, MVP sequence and a hand-off prompt for the separate PrivaSearch repository. Design only: no job type, handler or protocol change was made.
 - Reconciled the documentation with the v0.2.1 implementation: security model (two handlers, lease renewal risk, plaintext job data and checkpoints, `availableForMs` disclosure, OS-specific and test-coverage caveats), architecture, protocol (rotate route, renew, no job cancellation), development guide (graceful node drain), resources (implemented telemetry), roadmap summary, deployment status, implementation report (marked as v0.1 history with a v0.2.1 status note and current verification), `.env.example` (four missing variables) and a README status matrix (implemented, tested, partially tested, planned, unsupported). No code or behaviour changes.
 
+## [0.3.0-alpha.1] - 2026-09-30
+
+Phase 3 slice: the first real application capability, `web.fetch.v1`, plus installable consumer packages. Protocol version 1; all wire changes are additive and optional, so v0.2.x nodes and clients keep working (an old node simply lacks the capability).
+
+### Added
+- `web.fetch.v1` (ADR 005, accepted): a constrained GET returning a bounded digest (status, final URL, content type, title, description, canonical, robots meta, text, links). Twelve typed outcomes; fetch failures are results, not job failures. Not checkpointable; realistic resource estimate.
+- SSRF defences: scheme and port allowlist, no credentials, DNS resolve then vet every address, connect to the vetted IP, re-check the remote address, IPv4-mapped/NAT64/6to4 handling, same-origin redirects only (max 3), no proxy or cookies, decompression bounds.
+- robots.txt enforced at fetch time on the node, with a per-host rate limiter as defence in depth.
+- Application fetch identity (`fetchIdentity` on the application record), stamped by the Coordinator into the lease; submissions without it fail with 403 `FETCH_IDENTITY_REQUIRED`. The User-Agent and robots token come from it; nothing is hard-coded.
+- Owner-local node policy `fetch` section, including an `unsafeLocal` escape hatch that exists only in the node policy file.
+- `@privanet/protocol`, `@privanet/shared` and `@privanet/sdk` publish metadata, release tarballs, an npm publish job gated on `NPM_TOKEN`, and `docs/PACKAGES.md` (install, compatibility, version mismatch, publishing).
+
+### Changed
+- `LeaseSchema.client` and `AppCreateSchema.fetchIdentity` (optional). Version `0.3.0-alpha.1`.
+
+### Known limits
+- Owner-network isolation depends on node policy; no third-party nodes yet. HTML digest is not a full parser. No job cancellation.
+
+### Tests
+- New unit, handler, TLS and end-to-end suites (`tests/fetch-*.test.ts`, `tests/packages.test.ts`) drive the real Coordinator, authenticated node and SDK against loopback servers.
+
 ## [0.2.1] - 2026-09-29
 
 Completes Phase 2 (Adaptive Resource Engine) and closes the operational items left open in Phase 1. Protocol version 1; all wire changes are additive and optional, so v0.2.0 nodes still work.

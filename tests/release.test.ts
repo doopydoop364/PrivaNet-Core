@@ -19,7 +19,7 @@ const packages = ['package.json', ...['apps/coordinator', 'apps/node', 'packages
 
 test('release metadata: every package, the wire version constant, the lockfile and the changelog agree on one version', async () => {
   const version = json('package.json').version;
-  assert.match(version, /^\d+\.\d+\.\d+$/);
+  assert.match(version, /^\d+\.\d+\.\d+(-[a-z]+\.\d+)?$/);
   for (const path of packages) {
     const manifest = json(path); assert.equal(manifest.version, version, path);
     for (const [name, wanted] of Object.entries((manifest.dependencies ?? {}) as Record<string, string>)) if (name.startsWith('@privanet/')) assert.equal(wanted, version, `${path} -> ${name}`);
@@ -67,7 +67,7 @@ async function until(logs: string[], event: string, child: ChildProcess) {
 }
 
 test('staged distributions contain what they should and nothing they should not (all three platforms)', async t => {
-  const out = await mkdtemp(join(tmpdir(), 'privanet-stage-')); t.after(() => rm(out, { recursive: true, force: true }));
+  const out = await mkdtemp(join(tmpdir(), 'privanet-stage-')); t.after(() => rm(out, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }));
   const version = json('package.json').version;
   for (const platform of ['linux', 'macos', 'windows']) {
     const stage = (await exec(process.execPath, ['scripts/package-release.mjs', platform, out], { cwd: root })).stdout.trim();
@@ -93,7 +93,7 @@ test('staged distributions contain what they should and nothing they should not 
 
 test('the packaged distribution runs on its own: Coordinator, node, admin, demo, a long checkpointable job, drain and backup, with no repository on the module path', async t => {
   const out = await mkdtemp(join(tmpdir(), 'privanet-dist-')); const logs: string[] = []; const children: ChildProcess[] = [];
-  t.after(async () => { for (const child of children) if (child.exitCode === null) { child.kill('SIGKILL'); await new Promise(resolve => child.once('close', resolve)); } await rm(out, { recursive: true, force: true }); });
+  t.after(async () => { for (const child of children) if (child.exitCode === null) { child.kill('SIGKILL'); await new Promise(resolve => child.once('close', resolve)); } await rm(out, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }); });
   const platform = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux';
   const stage = (await exec(process.execPath, ['scripts/package-release.mjs', platform, out], { cwd: root })).stdout.trim();
   assert.equal(stage.startsWith(root), false, 'the staged copy must live outside the repository so it cannot borrow its node_modules');

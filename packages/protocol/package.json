@@ -1,6 +1,7 @@
 {
   "name": "@privanet/protocol",
-  "version": "0.2.1",
+  "version": "0.3.0-alpha.1",
+  "description": "PrivaNet wire protocol: strict Zod schemas, the job-type registry and protocol version 1.",
   "type": "module",
   "exports": {
     ".": {
@@ -9,9 +10,31 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.map",
+    "!dist/**/*.tsbuildinfo",
+    "!dist/**/*.d.ts.map"
   ],
+  "engines": {
+    "node": ">=24.4"
+  },
+  "sideEffects": false,
   "dependencies": {
     "zod": "^4.6.5"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doopydoop364/PrivaNet-Core.git",
+    "directory": "packages/protocol"
+  },
+  "homepage": "https://github.com/doopydoop364/PrivaNet-Core#readme",
+  "bugs": {
+    "url": "https://github.com/doopydoop364/PrivaNet-Core/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "privanet"
+  ]
 }

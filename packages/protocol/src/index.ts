@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const PROTOCOL_VERSION = 1 as const;
-export const SERVICE_VERSION = '0.2.1';
+export const SERVICE_VERSION = '0.3.0-alpha.1';
 export const MAX_BODY_BYTES = 32 * 1024;
 export const ProtocolSchema = z.literal(PROTOCOL_VERSION);
 export const IdSchema = z.uuid();
@@ -43,11 +43,91 @@ const HASHCHAIN_RESOURCES: ResourceEstimate = Object.freeze({
   cpu: 'medium', memoryBytes: 16 * 1024 * 1024, diskBytes: 1024 * 1024, diskIo: 'low', networkBytes: 4096,
   expectedDurationMs: 30000, preemptible: true, checkpointable: true,
 });
+/**
+ * The identity an application presents when it makes outbound requests through a node (a fetch capability).
+ * It is registered by an administrator on the application record and stamped into the lease by the
+ * Coordinator; a job can never choose or override it, so one application cannot impersonate another.
+ */
+export const FetchIdentitySchema = z.strictObject({
+  /** Product token used in the User-Agent and matched against robots.txt groups, for example a crawler name. */
+  product: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,31}$/),
+  /** Where a site owner can learn about the crawler and reach its operator. HTTPS, no credentials. */
+  infoUrl: z.string().max(200).refine(value => {
+    try { const url = new URL(value); return url.protocol === 'https:' && url.username === '' && url.password === '' && url.hostname.includes('.') && url.hash === ''; } catch { return false; }
+  }, 'infoUrl must be an https URL without credentials'),
+});
+export type FetchIdentity = z.infer<typeof FetchIdentitySchema>;
+
+/** Results must fit one 32 KiB completion body; the fetch result is bounded well inside that. */
+export const FETCH_MAX_RESULT_BYTES = 28000;
+/**
+ * Input of the constrained web-fetch capability. Deliberately absent: method, headers, cookies, body, proxy,
+ * port, IP address, resolver hints, TLS options, user agent, robots switches. Every field only lowers a cap;
+ * the node applies defaults and enforces its own hard maxima (the smaller value wins). Fields have no schema
+ * defaults so typed callers may omit them.
+ */
+export const FetchInputSchema = z.strictObject({
+  url: z.string().min(8).max(2048),
+  mode: z.enum(['DIGEST', 'PROBE']).optional(),
+  validators: z.strictObject({
+    etag: z.string().max(200).regex(/^(?:W\/)?"[\x21\x23-\x7e]*"$/).optional(),
+    lastModified: z.string().max(40).regex(/^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/).optional(),
+  }).optional(),
+  maxRedirects: z.number().int().min(0).max(3).optional(),
+  timeoutMs: z.number().int().min(1000).max(30000).optional(),
+  maxBodyBytes: z.number().int().min(4096).max(1048576).optional(),
+  maxTextBytes: z.number().int().min(0).max(10240).optional(),
+  maxLinks: z.number().int().min(0).max(100).optional(),
+});
+export const FETCH_OUTCOMES = [
+  'FETCHED', 'NOT_MODIFIED', 'PROBED', 'REDIRECT', 'ROBOTS_DISALLOWED', 'ROBOTS_UNAVAILABLE', 'BLOCKED_TARGET',
+  'RATE_LIMITED', 'UNSUPPORTED_CONTENT_TYPE', 'TOO_LARGE', 'HTTP_ERROR', 'FETCH_FAILED',
+] as const;
+const FetchUrl = z.string().min(8).max(2048);
+const Sha256 = z.string().regex(/^[a-f0-9]{64}$/);
+export const FetchOutputSchema = z.strictObject({
+  outcome: z.enum(FETCH_OUTCOMES),
+  requestedUrl: FetchUrl, finalUrl: FetchUrl.optional(), redirectTarget: FetchUrl.optional(),
+  redirects: z.array(z.strictObject({ url: FetchUrl, status: z.number().int().min(300).max(399) })).max(3),
+  httpStatus: z.number().int().min(100).max(599).optional(),
+  fetchedAtMs: TimeSchema, durationMs: z.number().int().min(0).max(120000),
+  contentType: z.string().max(100).optional(), charset: z.string().max(40).optional(),
+  bodyBytes: z.number().int().min(0).max(1048576).optional(), bodyTruncated: z.boolean().optional(),
+  contentSha256: Sha256.optional(),
+  etag: z.string().max(200).optional(), lastModified: z.string().max(40).optional(),
+  retryAfterSec: z.number().int().min(0).max(86400).optional(),
+  robots: z.strictObject({
+    verdict: z.enum(['ALLOWED', 'DISALLOWED', 'UNAVAILABLE']),
+    fetchedAtMs: TimeSchema.optional(), sha256: Sha256.optional(), crawlDelaySec: z.number().min(0).max(300).optional(),
+  }),
+  indexing: z.strictObject({ noindex: z.boolean(), nofollow: z.boolean(), noarchive: z.boolean() }).optional(),
+  page: z.strictObject({
+    title: z.string().max(300).optional(), description: z.string().max(500).optional(),
+    canonicalUrl: FetchUrl.optional(), language: z.string().max(35).optional(),
+    text: z.string().max(10240).optional(), textTruncated: z.boolean().optional(),
+    links: z.array(z.strictObject({ url: FetchUrl, nofollow: z.boolean() })).max(100), linksTruncated: z.boolean(),
+  }).optional(),
+  error: z.strictObject({ code: z.enum(['DNS', 'CONNECT', 'TLS', 'TIMEOUT', 'RESET', 'PROTOCOL', 'DECODE', 'INTERNAL']), retryable: z.boolean() }).optional(),
+}).refine(result => Buffer.byteLength(JSON.stringify(result)) <= FETCH_MAX_RESULT_BYTES, 'result too large');
+export type FetchInput = z.infer<typeof FetchInputSchema>;
+export type FetchOutput = z.infer<typeof FetchOutputSchema>;
+/**
+ * A short, stateless, preemptible HTTP GET. Not checkpointable: a partial HTTP response is not safely resumable, so
+ * a retry restarts from a clean state. Bounds mirror the node's hard limits; the declared duration is the worst case.
+ */
+const FETCH_RESOURCES: ResourceEstimate = Object.freeze({
+  cpu: 'low', memoryBytes: 48 * 1024 * 1024, diskBytes: 0, diskIo: 'none', networkBytes: 2 * 1024 * 1024,
+  expectedDurationMs: 30000, preemptible: true, checkpointable: false,
+});
 export const JOB_TYPES = Object.freeze({
   'system.echo.v1': Object.freeze({ version: 1, capability: 'system.echo.v1', input: EchoSchema, output: EchoSchema, resources: ECHO_RESOURCES }),
   'system.hashchain.v1': Object.freeze({ version: 1, capability: 'system.hashchain.v1', input: HashChainInputSchema, output: HashChainOutputSchema, resources: HASHCHAIN_RESOURCES }),
+  // A generic, function-named capability (ADR 005). `requiresClientIdentity`: only applications with a registered fetch identity may submit it.
+  'web.fetch.v1': Object.freeze({ version: 1, capability: 'web.fetch.v1', input: FetchInputSchema, output: FetchOutputSchema, resources: FETCH_RESOURCES, requiresClientIdentity: true }),
 });
 export type JobType = keyof typeof JOB_TYPES;
+/** True for capabilities that act on the outside world on an application's behalf and so need its registered identity. */
+export const requiresClientIdentity = (type: JobType): boolean => { const definition = JOB_TYPES[type]; return 'requiresClientIdentity' in definition && definition.requiresClientIdentity === true; };
 export type JobInputMap = { [T in JobType]: z.infer<(typeof JOB_TYPES)[T]['input']> };
 export type JobOutputMap = { [T in JobType]: z.infer<(typeof JOB_TYPES)[T]['output']> };
 // Every wire schema derives from the registry: adding a job type means adding one entry
@@ -137,7 +217,7 @@ export const NodeViewSchema = z.strictObject({
   currentJobs: z.number().int().min(0).max(1), jobSlots: z.literal(1), resources: ResourceReportSchema.optional(),
 });
 export const NodesSchema = z.strictObject({ nodes: z.array(NodeViewSchema).max(1000) });
-export const AppCreateSchema = z.strictObject({ name: z.string().min(1).max(80), allowedJobTypes: z.array(JobTypeSchema).max(JOB_TYPE_IDS.length) });
+export const AppCreateSchema = z.strictObject({ name: z.string().min(1).max(80), allowedJobTypes: z.array(JobTypeSchema).max(JOB_TYPE_IDS.length), fetchIdentity: FetchIdentitySchema.optional() });
 export const AppCredentialSchema = z.strictObject({ applicationId: IdSchema, token: SecretSchema });
 export const SubmitSchema = registered(z.strictObject({
   type: JobTypeSchema, input: z.unknown(), idempotencyKey: z.string().min(1).max(128).regex(/^[a-zA-Z0-9_.:-]+$/),
@@ -152,6 +232,8 @@ export const JobSchema = registered(z.strictObject({
 export const LeaseSchema = registered(z.strictObject({
   jobId: IdSchema, type: JobTypeSchema, input: z.unknown(), protocolVersion: ProtocolSchema,
   leaseId: IdSchema, expiresAt: TimeSchema, attempt: z.number().int().positive(),
+  /** Present only on leases of capabilities that require an application identity (v0.3); older nodes never receive such a lease. */
+  client: FetchIdentitySchema.optional(),
 }));
 export const LeaseResponseSchema = z.strictObject({ lease: LeaseSchema.nullable() });
 /** The result is validated against the leased job's registered output schema by the Coordinator. */

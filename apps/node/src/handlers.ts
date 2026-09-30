@@ -2,14 +2,14 @@ import { createHash } from 'node:crypto';
 import { setImmediate as yieldToLoop } from 'node:timers/promises';
 import { z } from 'zod';
 import { JOB_TYPES } from '@privanet/protocol';
-import type { JobInputMap, JobOutputMap, JobType, Lease } from '@privanet/protocol';
+import type { FetchIdentity, JobInputMap, JobOutputMap, JobType, Lease } from '@privanet/protocol';
 import type { Checkpoint } from './checkpoint.js';
 /**
  * `signal` aborts when the node must hand the job back (preemption or shutdown). Long handlers must honour it.
  * `checkpoint` exists only for job types registered `checkpointable`. `transfer` must be awaited before a
  * handler moves data over the network: it enforces the owner's bandwidth limit and monthly allowance.
  */
-export interface HandlerContext { signal: AbortSignal; checkpoint?: Checkpoint; transfer?: (bytes: number) => Promise<void> }
+export interface HandlerContext { signal: AbortSignal; checkpoint?: Checkpoint; transfer?: (bytes: number) => Promise<void>; /** The application's registered fetch identity, stamped into the lease by the Coordinator; only for capabilities that require it. */ client?: FetchIdentity }
 export type Handlers = { [T in JobType]: (input: JobInputMap[T], context: HandlerContext) => JobOutputMap[T] | Promise<JobOutputMap[T]> };
 
 const sha256 = (data: Buffer | string) => createHash('sha256').update(data).digest();
@@ -36,13 +36,15 @@ async function hashChain(input: JobInputMap['system.hashchain.v1'], { signal, ch
 export const defaultHandlers: Handlers = {
   'system.echo.v1': input => ({ message: input.message }),
   'system.hashchain.v1': hashChain,
+  // The fetch capability needs owner policy, so the node's main wires the real handler; without that it refuses to run.
+  'web.fetch.v1': () => { throw new Error('FETCH_NOT_CONFIGURED'); },
 };
 export interface HandlerServices { checkpoint?: Checkpoint; transfer?: (bytes: number) => Promise<void> }
 export async function executeLease(lease: Lease, enabled: readonly JobType[], signal: AbortSignal = new AbortController().signal, handlers: Handlers = defaultHandlers, services: HandlerServices = {}) {
   if (!enabled.includes(lease.type)) throw new Error('Capability disabled');
   const definition = JOB_TYPES[lease.type];
   const input = definition.input.parse(lease.input);
-  const context: HandlerContext = { signal, ...(services.checkpoint && definition.resources.checkpointable ? { checkpoint: services.checkpoint } : {}), ...(services.transfer ? { transfer: services.transfer } : {}) };
+  const context: HandlerContext = { signal, ...(lease.client ? { client: lease.client } : {}), ...(services.checkpoint && definition.resources.checkpointable ? { checkpoint: services.checkpoint } : {}), ...(services.transfer ? { transfer: services.transfer } : {}) };
   return definition.output.parse(await (handlers[lease.type] as (input: unknown, context: HandlerContext) => unknown)(input, context));
 }
 /** Job types this build can execute; used to keep the registry and handlers in lockstep. */

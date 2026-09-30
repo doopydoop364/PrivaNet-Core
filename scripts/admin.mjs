@@ -10,7 +10,11 @@ async function main() {
   const types = process.env.PRIVANET_JOB_TYPES ? process.env.PRIVANET_JOB_TYPES.split(',') : ['system.echo.v1'];
   let result;
   if (operation === 'enrollment') result = await transport.request('POST', '/v1/admin/enrollment-tokens', EnrollmentTokenSchema, { expiresInMs: 60000, capabilities: types }, token);
-  else if (operation === 'application') result = await transport.request('POST', '/v1/admin/applications', AppCredentialSchema, { name: value ?? 'demo', allowedJobTypes: types }, token);
+  else if (operation === 'application') {
+    // An application that uses a fetch capability registers its identity here (product token for the User-Agent and robots.txt, plus an information URL); the Coordinator stamps it into leases.
+    const identity = process.env.PRIVANET_FETCH_PRODUCT ? { fetchIdentity: { product: process.env.PRIVANET_FETCH_PRODUCT, infoUrl: process.env.PRIVANET_FETCH_INFO_URL ?? '' } } : {};
+    result = await transport.request('POST', '/v1/admin/applications', AppCredentialSchema, { name: value ?? 'demo', allowedJobTypes: types, ...identity }, token);
+  }
   else if (operation === 'nodes') result = await transport.request('GET', '/v1/admin/nodes', NodesSchema, undefined, token);
   else if (operation === 'revoke-node') result = await transport.request('POST', `/v1/admin/nodes/${NodeIdSchema.parse(value)}/revoke`, AckSchema, {}, token);
   else if (operation === 'revoke-application') result = await transport.request('POST', `/v1/admin/applications/${IdSchema.parse(value)}/revoke`, AckSchema, {}, token);

@@ -249,3 +249,7 @@ Graceful planned shutdown should not be treated like an unexpected node disappea
 - historical resource forecasting
 
 All later optimization must preserve the owner's hard limits and priority.
+
+## `web.fetch.v1` estimate
+
+Low CPU, 48 MiB memory, no disk, up to 2 MiB network, 30 s, preemptible, not checkpointable (a preempted fetch is simply retried). Owner limits and the `fetch` policy section apply as for any job.
