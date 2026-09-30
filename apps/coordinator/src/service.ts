@@ -4,7 +4,7 @@ import {
   FailureSchema, GoodbyeSchema, HeartbeatSchema, JOB_TYPES, JobSchema, PROTOCOL_VERSION, ProofSchema,
   ReleaseSchema, RenewSchema, SERVICE_VERSION, SubmitSchema, requiresClientIdentity,
 } from '@privanet/protocol';
-import type { Challenge, Job, JobError, Lease, NodeView, Session } from '@privanet/protocol';
+import type { Challenge, Job, JobError, JobType, Lease, NodeView, Session } from '@privanet/protocol';
 import { ApiError, canonicalPublicKey, hash, secret } from '@privanet/shared';
 import type { ApplicationRecord, ChallengeRecord, JobRecord, NodeRecord, Store } from './model.js';
 import { ResourceAwareScheduler } from './scheduler.js';
@@ -178,7 +178,7 @@ export class Coordinator {
       const job: JobRecord = { id: randomUUID(), ...request, applicationId: app.id, protocolVersion: PROTOCOL_VERSION,
         createdAt: this.now(), completedAt: null, status: 'QUEUED', attempts: 0, result: null, error: null,
         assignedNodeId: null, leaseId: null, leaseExpiresAt: null };
-      this.store.saveJob(job); this.notifyWork(); return this.view(job);
+      this.store.saveJob(job); this.notifyWork(job.type); return this.view(job);
     });
   }
   getJob(app: ApplicationRecord, id: string): Job {
@@ -191,11 +191,21 @@ export class Coordinator {
     const exhausted = job.attempts >= this.policy.maxAttempts;
     this.store.saveJob({ ...job, status: exhausted ? 'FAILED' : 'QUEUED', completedAt: exhausted ? this.now() : null,
       assignedNodeId: null, leaseId: null, leaseExpiresAt: null, error: { code } });
-    if (!exhausted) this.notifyWork(); else this.notifyJobFinished(job.id);
+    if (!exhausted) this.notifyWork(job.type); else this.notifyJobFinished(job.id);
   }
-  private readonly workListeners = new Set<() => void>();
-  /** Calls `listener` (asynchronously, never inside a transaction) whenever a job becomes leasable: submitted, released or requeued. Returns the unsubscribe function. */
-  onWork(listener: () => void): () => void { this.workListeners.add(listener); return () => { this.workListeners.delete(listener); }; }
+  private readonly workListeners = new Map<string, Set<{ capabilities: readonly string[]; wake: () => void }>>();
+  /**
+   * Calls `wake` (asynchronously, never inside a transaction) when a job this node could run becomes leasable: submitted, released or requeued.
+   * Returns the unsubscribe function. Each work event wakes at most one waiter per capable node: every lane of a node asks the same
+   * scheduler question about the same node, so waking the others only repeats the work (measured: waking every waiting request on each
+   * submission made the cost of a job grow with the number of waiting lanes and halved throughput at 128 of them).
+   */
+  onWork(nodeId: string, capabilities: readonly string[], wake: () => void): () => void {
+    const waiter = { capabilities, wake }; let set = this.workListeners.get(nodeId);
+    if (!set) { set = new Set(); this.workListeners.set(nodeId, set); }
+    set.add(waiter);
+    return () => { const current = this.workListeners.get(nodeId); current?.delete(waiter); if (current?.size === 0) this.workListeners.delete(nodeId); };
+  }
   private readonly jobListeners = new Map<string, Set<() => void>>();
   /** Calls `listener` (asynchronously) when the job reaches a final state. Returns the unsubscribe function. */
   onJobFinished(id: string, listener: () => void): () => void {
@@ -203,26 +213,35 @@ export class Coordinator {
     set.add(listener); return () => { const current = this.jobListeners.get(id); current?.delete(listener); if (current?.size === 0) this.jobListeners.delete(id); };
   }
   private notifyJobFinished(id: string): void { for (const listener of [...(this.jobListeners.get(id) ?? [])]) queueMicrotask(listener); }
-  private notifyWork(): void { for (const listener of [...this.workListeners]) queueMicrotask(listener); }
+  private notifyWork(type: JobType): void {
+    const capability = JOB_TYPES[type].capability;
+    for (const [nodeId, set] of this.workListeners) {
+      for (const waiter of set) if (waiter.capabilities.includes(capability)) { set.delete(waiter); if (set.size === 0) this.workListeners.delete(nodeId); queueMicrotask(waiter.wake); break; }
+    }
+  }
   private lastRetentionAt = 0;
-  maintain(): void {
-    this.store.transaction(() => {
+  maintain(): void { this.sweep(); }
+  /** Housekeeping and expiry; returns the pending jobs as they stand afterwards so a caller that needs them does not read and parse them again. */
+  private sweep(): JobRecord[] {
+    return this.store.transaction(() => {
       this.store.prune(this.now());
       // The retention sweep scans finished jobs, so it runs at most once a minute.
       if (this.policy.retentionMs > 0 && this.now() - this.lastRetentionAt >= 60000) { this.lastRetentionAt = this.now(); this.store.deleteTerminalJobs(this.now() - this.policy.retentionMs); }
-      for (const job of this.store.listPendingJobs()) {
-        if (job.status === 'LEASED' && job.leaseExpiresAt !== null && job.leaseExpiresAt <= this.now()) this.retry(job, 'LEASE_EXPIRED');
-        else if (job.status === 'QUEUED' && job.attempts >= this.policy.maxAttempts) this.retry(job, job.error?.code ?? 'LEASE_EXPIRED');
+      const pending = this.store.listPendingJobs(); let changed = false;
+      for (const job of pending) {
+        if (job.status === 'LEASED' && job.leaseExpiresAt !== null && job.leaseExpiresAt <= this.now()) { this.retry(job, 'LEASE_EXPIRED'); changed = true; }
+        else if (job.status === 'QUEUED' && job.attempts >= this.policy.maxAttempts) { this.retry(job, job.error?.code ?? 'LEASE_EXPIRED'); changed = true; }
       }
+      return changed ? this.store.listPendingJobs() : pending;
     });
   }
   lease(nodeId: string): Lease | null {
     return this.store.transaction(() => {
-      this.maintain();
+      const pending = this.sweep();
       const node = this.store.getNode(nodeId);
       if (!node || node.revoked) reject(401, 'UNAUTHORIZED_NODE');
       if (this.status(node) !== 'ONLINE') return null;
-      const job = this.scheduler.choose(node, this.store.listPendingJobs());
+      const job = this.scheduler.choose(node, pending);
       if (!job) return null;
       const leaseId = randomUUID(); const expiresAt = this.now() + this.policy.leaseMs;
       const next: JobRecord = { ...job, status: 'LEASED', attempts: job.attempts + 1,
@@ -285,7 +304,7 @@ export class Coordinator {
     this.store.saveJob({ ...job, status: exhausted ? 'FAILED' : 'QUEUED', completedAt: exhausted ? this.now() : null,
       attempts: Math.max(0, job.attempts - 1), releases, assignedNodeId: null, leaseId: null, leaseExpiresAt: null,
       error: exhausted ? { code: 'RELEASE_LIMIT' } : null });
-    if (!exhausted) this.notifyWork(); else this.notifyJobFinished(job.id);
+    if (!exhausted) this.notifyWork(job.type); else this.notifyJobFinished(job.id);
   }
   /** Planned departure: return the node's leases without penalty and record that it left on purpose. */
   goodbye(nodeId: string, input: unknown): void {

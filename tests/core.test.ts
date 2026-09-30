@@ -196,3 +196,32 @@ test('lowered retry policy after restart cannot issue an excess attempt', t => {
   assert.equal(restarted.getJob(f.app, job.id).status, 'FAILED');
   assert.equal(restarted.getJob(f.app, job.id).attempts, 1);
 });
+
+test('a work event wakes at most one waiter per capable node, never one that cannot run the job, and unsubscribing is safe', async t => {
+  const f = fixture(); t.after(() => f.store.close());
+  const a = f.enroll(); const b = f.enroll(); const c = f.enroll(['system.hashchain.v1']);
+  const woken = new Map<string, number>(); const off: (() => void)[] = [];
+  const wait = (nodeId: string, capabilities: string[], lanes: number) => { for (let i = 0; i < lanes; i++) off.push(f.core.onWork(nodeId, capabilities, () => woken.set(nodeId, (woken.get(nodeId) ?? 0) + 1))); };
+  wait(a.session.nodeId, ['system.echo.v1'], 3); wait(b.session.nodeId, ['system.echo.v1'], 2); wait(c.session.nodeId, ['system.hashchain.v1'], 2);
+  const settle = () => new Promise<void>(resolve => setImmediate(resolve));
+  f.submit('one'); await settle();
+  assert.deepEqual([woken.get(a.session.nodeId), woken.get(b.session.nodeId), woken.get(c.session.nodeId)], [1, 1, undefined], 'one lane of each capable node, none of the incapable one');
+  f.submit('two'); await settle();
+  assert.deepEqual([woken.get(a.session.nodeId), woken.get(b.session.nodeId)], [2, 2]);
+  f.submit('three'); await settle();
+  assert.deepEqual([woken.get(a.session.nodeId), woken.get(b.session.nodeId)], [3, 2], 'a node with no waiting lane left is skipped');
+  f.submit('four'); await settle();
+  assert.equal(woken.get(a.session.nodeId), 3, 'woken waiters are gone; nothing wakes twice');
+  for (const unsubscribe of off) unsubscribe(); // already-woken waiters unsubscribe again without harm
+  f.submit('five'); await settle();
+  assert.equal(woken.get(a.session.nodeId), 3);
+});
+
+test('lease attempts that find nothing are cheap: they neither write nor change any job', t => {
+  const f = fixture(); t.after(() => f.store.close()); const n = f.enroll(); f.core.heartbeat(n.session.nodeId, heartbeat());
+  for (let i = 0; i < 50; i++) assert.equal(f.core.lease(n.session.nodeId), null);
+  const job = f.submit(); const lease = f.core.lease(n.session.nodeId); assert(lease); assert.equal(lease.jobId, job.id);
+  assert.equal(f.core.lease(n.session.nodeId), null, 'a leased job is not handed out twice');
+  f.advance(200); // the lease (50 ms) expired: the same call that sweeps it also re-offers it
+  const again = f.core.lease(n.session.nodeId); assert(again); assert.equal(again.jobId, job.id); assert.equal(again.attempt, 2);
+});
