@@ -1,6 +1,6 @@
 {
   "name": "@privanet/protocol",
-  "version": "0.3.0-alpha.2",
+  "version": "0.3.0-alpha.3",
   "description": "PrivaNet wire protocol: strict Zod schemas, the job-type registry and protocol version 1.",
   "license": "Apache-2.0",
   "type": "module",

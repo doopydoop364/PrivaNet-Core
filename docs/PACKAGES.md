@@ -27,12 +27,12 @@ Until the packages are on the registry, and permanently as a fallback (an air-ga
 
 ```json
 { "dependencies": {
-  "@privanet/protocol": "https://github.com/doopydoop364/PrivaNet-Core/releases/download/v0.3.0-alpha.2/privanet-protocol-0.3.0-alpha.2.tgz",
-  "@privanet/shared": "https://github.com/doopydoop364/PrivaNet-Core/releases/download/v0.3.0-alpha.2/privanet-shared-0.3.0-alpha.2.tgz",
-  "@privanet/sdk": "https://github.com/doopydoop364/PrivaNet-Core/releases/download/v0.3.0-alpha.2/privanet-sdk-0.3.0-alpha.2.tgz" } }
+  "@privanet/protocol": "https://github.com/doopydoop364/PrivaNet-Core/releases/download/v0.3.0-alpha.3/privanet-protocol-0.3.0-alpha.3.tgz",
+  "@privanet/shared": "https://github.com/doopydoop364/PrivaNet-Core/releases/download/v0.3.0-alpha.3/privanet-shared-0.3.0-alpha.3.tgz",
+  "@privanet/sdk": "https://github.com/doopydoop364/PrivaNet-Core/releases/download/v0.3.0-alpha.3/privanet-sdk-0.3.0-alpha.3.tgz" } }
 ```
 
-A local `file:` dependency on a sibling checkout is acceptable for development and integration testing. Neither is the primary distribution: the target is a plain versioned dependency (`"@privanet/sdk": "^0.3.0"`). `0.3.0-alpha.1` tarballs carry no license file; use `0.3.0-alpha.2` or newer.
+A local `file:` dependency on a sibling checkout is acceptable for development and integration testing. Neither is the primary distribution: the target is a plain versioned dependency (`"@privanet/sdk": "^0.3.0"`). `0.3.0-alpha.1` tarballs carry no license file; use `0.3.0-alpha.3` or newer.
 
 ## Compatibility expectations
 
