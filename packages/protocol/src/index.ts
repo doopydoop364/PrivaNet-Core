@@ -196,9 +196,11 @@ export type ResourceReport = z.infer<typeof ResourceReportSchema>;
 /** ACTIVE accepts work; DRAINING finishes/releases work and asks for none. Departure is a separate goodbye. */
 export const LifecycleSchema = z.enum(['ACTIVE', 'DRAINING']);
 // Additive within protocol 1: both fields are optional, so nodes that predate them keep working.
+/** Most concurrent jobs one node may run. A node advertises how many it will run; owner limits still bound them (the scheduler reserves the estimates of running jobs against the reported budget). */
+export const MAX_JOB_SLOTS = 64;
 export const HeartbeatSchema = z.strictObject({
   protocolVersion: ProtocolSchema, daemonVersion: VersionSchema, capabilities: CapabilitiesSchema,
-  jobSlots: z.literal(1), currentJobs: z.number().int().min(0).max(1),
+  jobSlots: z.number().int().min(1).max(MAX_JOB_SLOTS), currentJobs: z.number().int().min(0).max(MAX_JOB_SLOTS),
   lifecycle: LifecycleSchema.optional(), resources: ResourceReportSchema.optional(),
 });
 export const ReleaseReasonSchema = z.enum(['DRAINING', 'PREEMPTED', 'SHUTDOWN']);
@@ -214,7 +216,7 @@ export const NodeStatusSchema = z.enum(['ONLINE', 'STALE', 'OFFLINE', 'DRAINING'
 export const NodeViewSchema = z.strictObject({
   nodeId: NodeIdSchema, capabilities: CapabilitiesSchema, daemonVersion: VersionSchema,
   protocolVersion: ProtocolSchema, lastHeartbeatAt: TimeSchema.nullable(), status: NodeStatusSchema,
-  currentJobs: z.number().int().min(0).max(1), jobSlots: z.literal(1), resources: ResourceReportSchema.optional(),
+  currentJobs: z.number().int().min(0).max(MAX_JOB_SLOTS), jobSlots: z.number().int().min(1).max(MAX_JOB_SLOTS), resources: ResourceReportSchema.optional(),
 });
 export const NodesSchema = z.strictObject({ nodes: z.array(NodeViewSchema).max(1000) });
 export const AppCreateSchema = z.strictObject({ name: z.string().min(1).max(80), allowedJobTypes: z.array(JobTypeSchema).max(JOB_TYPE_IDS.length), fetchIdentity: FetchIdentitySchema.optional() });

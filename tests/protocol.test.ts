@@ -26,7 +26,8 @@ test('unknown type, unknown fields, malformed input and oversized values fail cl
 });
 test('unsupported protocol, capability and excessive resource claims rejected', () => {
   const heartbeat = { protocolVersion: 1, daemonVersion: '0.1.0', capabilities: ['system.echo.v1'], jobSlots: 1, currentJobs: 0 };
-  for (const input of [{ ...heartbeat, protocolVersion: 2 }, { ...heartbeat, capabilities: ['compute.anything'] }, { ...heartbeat, jobSlots: 2 }, { ...heartbeat, hostname: 'private' }]) assert.equal(HeartbeatSchema.safeParse(input).success, false);
+  for (const input of [{ ...heartbeat, protocolVersion: 2 }, { ...heartbeat, capabilities: ['compute.anything'] }, { ...heartbeat, jobSlots: 0 }, { ...heartbeat, jobSlots: 65 }, { ...heartbeat, jobSlots: 1.5 }, { ...heartbeat, currentJobs: 65 }, { ...heartbeat, hostname: 'private' }]) assert.equal(HeartbeatSchema.safeParse(input).success, false);
+  for (const slots of [1, 2, 16, 64]) assert.equal(HeartbeatSchema.safeParse({ ...heartbeat, jobSlots: slots, currentJobs: slots }).success, true, `${slots} slots are valid`);
   assert.equal(EnrollmentStartSchema.safeParse({ token: 'not-a-token' }).success, false);
 });
 test('transport refuses insecure remote destinations, localhost DNS, URL secrets and unsafe paths', () => {

@@ -98,7 +98,7 @@ are retained until the retention period ends; future bulk objects belong in a da
 
 An injectable scheduler policy filters for authenticated ONLINE non-revoked
 nodes, permitted capabilities and coordinator-counted active leases below the
-operator's advertised slot limit (currently always one slot), a permitted resource budget that covers the job's declared estimate (v0.2), and a schedule that does not end before the job's declared duration (v0.2.1). A node keeps a running job's lease alive by renewing it (v0.2.1), so jobs may outlast one lease period. It chooses the oldest eligible
+operator's advertised slot limit (one by default; up to 64 when the owner opts in, with the estimates of the node's running jobs reserved against its reported budget), a permitted resource budget that covers the job's declared estimate (v0.2), and a schedule that does not end before the job's declared duration (v0.2.1). A node keeps a running job's lease alive by renewing it (v0.2.1), so jobs may outlast one lease period. It chooses the oldest eligible
 queued job when that node polls. Multiple nodes compete transactionally; no
 special preference/bypass for localhost. Advertised resources are untrusted
 hints, not accounting evidence. Job lifecycle/fencing is in [protocol](protocol.md).
