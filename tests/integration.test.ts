@@ -325,3 +325,15 @@ test('a job that outlasts many leases finishes on its first attempt because the 
   let h = createHash('sha256').update('lease').digest(); for (let i = 0; i < iterations; i++) h = createHash('sha256').update(h).digest();
   assert.deepEqual(done.result, { digest: h.toString('hex'), iterations });
 });
+
+test('a busy node polls again at once after finishing a job, so throughput is not capped at one job per poll interval', async t => {
+  const f = await fixture(t); const app = await f.app();
+  const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token });
+  const node = await enrolled(f, { pollMs: 3000, heartbeatMs: 1000 }); // a 3 s interval would need 60 s for 20 jobs if it slept after each one
+  const jobs = []; for (let i = 0; i < 20; i++) jobs.push(await sdk.submit('system.echo.v1', { message: `m${i}` }, `busy-${i}`));
+  const abort = new AbortController(); const running = node.run(abort.signal); const started = Date.now();
+  try {
+    await Promise.all(jobs.map(job => sdk.waitForResult(job.id, { timeoutMs: 10000, pollMs: 20 })));
+    const took = Date.now() - started; assert.ok(took < 6000, `20 queued jobs took ${took} ms with a 3000 ms poll interval`);
+  } finally { abort.abort(); await running; } // never leave the node polling if the assertion fails
+});
