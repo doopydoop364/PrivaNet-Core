@@ -59,6 +59,14 @@ The shipped policies (memory and CPU reserves zeroed so a busy CI machine never 
 - **Correctness:** all 4,000 pages fetched, each result belongs to its own job, no application-visible error, and exactly 4,000 completions (1,271 by the server node, 2,729 by the desktop): no duplicate, no loss. 9 jobs needed a retry; the desktop was told it had lost 8 leases and its stale work was refused.
 - **Cost of the control plane** over the 177 s run: Coordinator 41 s CPU and 132 MiB resident; Caddy 19 s CPU, 50 MiB; server node 15 s CPU, 123 MiB; desktop node 29 s CPU, 132 MiB. The Coordinator used about 23% of one core at roughly 1,600 pages a minute with TLS in front of it. Latency p50 2.4 s, p95 8.8 s (queueing behind the concurrency limits, inflated by the outage).
 
+### PrivaSearch on the desktop (Option A), through a Coordinator restart
+
+PrivaSearch's real crawl command ran on the **desktop** host against the server's Coordinator over TLS (nodes: the conservative server node and the larger desktop node; site: eight names on a third host). Twenty seconds in, the Coordinator was killed and restarted six seconds later (PrivaSearch `tests/lan-crawl.mjs`, experiment 9 in its `docs/measurements.md`):
+
+- The platform recovered in seconds: nodes reconnected, the SDK's waits survived, sessions and jobs persisted.
+- **PrivaSearch 0.3.1 took 54 s to index its next page**, because it made every URL wait a flat 60 s after a transport failure. That is an application policy, not a platform fault, and was fixed in PrivaSearch 0.3.2 with a pipeline-level backoff: **1.0 s** to the next page, 856 pages fetched, 0 invalid results, 15 submissions retried, and a dead Coordinator is no longer hammered. **Use PrivaSearch 0.3.2 or newer.**
+- **All of the work went to the desktop node; the server node received none.** The Coordinator hands a job to whichever capable node asks first and does not balance load, so when the desktop can absorb the whole workload the conservative server node stays idle. For a control-plane host that is the desirable outcome, but do not expect an even split; the server node contributes when the desktop is busy or away (as in the workload above, where the pulled cable moved all the work to it).
+
 This measured the deployment, not the platform: it is not a throughput benchmark and found no bottleneck.
 
 ## Network model (from the code)
