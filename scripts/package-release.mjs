@@ -26,6 +26,7 @@ for (const script of ['admin.mjs', 'demo.mjs', 'backup.mjs']) cpSync(join('scrip
 for (const file of ['LICENSE', 'README.md', 'ROADMAP.md', 'CHANGELOG.md']) cpSync(file, join(stage, file));
 cpSync('docs', join(stage, 'docs'), { recursive: true });
 cpSync('.env.example', join(stage, '.env.example'));
+cpSync('deploy', join(stage, 'deploy'), { recursive: true }); // service, proxy, policy and environment examples (docs/FIRST_DEPLOYMENT.md)
 
 const entries = { 'privanet-coordinator': 'coordinator', 'privanet-node': 'node' };
 for (const [command, name] of Object.entries(entries)) {

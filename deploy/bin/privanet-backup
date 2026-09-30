@@ -1,0 +1,13 @@
+#!/bin/sh
+# Consistent online backup of the Coordinator database (safe while it runs). Default destination: /var/backups/privanet/coordinator-<timestamp>.sqlite
+#   sudo privanet-backup [destination-file]
+# The backup holds job and node metadata and credential hashes: store it as sensitive. Node identities are separate (each node's state directory).
+set -eu
+env_file=${PRIVANET_ENV_FILE:-/etc/privanet/coordinator.env}
+home=${PRIVANET_HOME:-/opt/privanet}
+node_bin=${PRIVANET_NODE_BIN:-/opt/node/bin/node}
+[ -r "$env_file" ] || { echo "cannot read $env_file (run with sudo)" >&2; exit 2; }
+set -a; . "$env_file"; set +a
+destination=${1:-/var/backups/privanet/coordinator-$(date +%Y%m%dT%H%M%S).sqlite}
+umask 077; mkdir -p "$(dirname "$destination")"
+exec "$node_bin" "$home/tools/backup.mjs" "$destination"

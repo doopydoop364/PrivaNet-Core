@@ -1,0 +1,14 @@
+#!/bin/sh
+# Runs the PrivaNet admin tool on the Coordinator host: reads the Coordinator's environment file (so the admin secret never appears on a command line
+# or in shell history) and talks to the Coordinator's loopback listener, the only place the admin API is reachable.
+#   sudo privanet-admin nodes | enrollment | application NAME | revoke-node ID | revoke-application ID | rotate-application ID
+# Settings the admin tool reads from the environment: PRIVANET_JOB_TYPES, PRIVANET_ENROLLMENT_TTL_MS, PRIVANET_FETCH_PRODUCT, PRIVANET_FETCH_INFO_URL.
+set -eu
+env_file=${PRIVANET_ENV_FILE:-/etc/privanet/coordinator.env}
+home=${PRIVANET_HOME:-/opt/privanet}
+node_bin=${PRIVANET_NODE_BIN:-/opt/node/bin/node}
+[ -r "$env_file" ] || { echo "cannot read $env_file (run with sudo)" >&2; exit 2; }
+set -a; . "$env_file"; set +a
+PRIVANET_COORDINATOR_URL="http://127.0.0.1:${PRIVANET_PORT:-4010}"; export PRIVANET_COORDINATOR_URL
+PRIVANODE_ALLOW_INSECURE_LOOPBACK=true; export PRIVANODE_ALLOW_INSECURE_LOOPBACK
+exec "$node_bin" "$home/tools/admin.mjs" "$@"

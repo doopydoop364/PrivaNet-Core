@@ -67,7 +67,7 @@ test('server node (conservative) and desktop node (larger): both work, limits di
   const results = summary.results as { outcome: string; requestedUrl: string }[];
   const outcomes: Record<string, number> = {}; for (const r of results) outcomes[r.outcome] = (outcomes[r.outcome] ?? 0) + 1;
   assert.ok(results.every((r, i) => r.requestedUrl === inputs[i]?.url), 'each result belongs to its own job');
-  assert.equal(outcomes.OK, total, `every page fetched, outcomes ${JSON.stringify(outcomes)}`);
+  assert.equal(outcomes.FETCHED, total, `every page fetched, outcomes ${JSON.stringify(outcomes)}`);
   await sleep(1500);
   const completedSrv = srv.completions.length; const completedDsk = dsk.completions.length;
   assert.equal(completedSrv + completedDsk, total, 'each job was completed by exactly one node');
