@@ -12,7 +12,7 @@ The Coordinator and PrivaNode (`apps/*`) are **not** consumer packages. They shi
 
 ## Registry mechanism
 
-**Public npm**, under the `@privanet` scope. Reasons: this is a public project, it needs no installation token for consumers, and it keeps the package names independent of the GitHub account name (GitHub Packages would require the scope to equal the repository owner, and consumers would need a token even for public packages). The release workflow publishes with provenance when an `NPM_TOKEN` secret exists (see [Publishing](#publishing)).
+**Public npm**, under the `@privanet` scope. Reasons: this is a public project, it needs no installation token for consumers, and it keeps the package names independent of the GitHub account name (GitHub Packages would require the scope to equal the repository owner, and consumers would need a token even for public packages). The release workflow publishes with provenance through **npm trusted publishing** (GitHub OIDC, no long-lived token), with an optional token fallback (see [Publishing](#publishing)). The packages are licensed under [Apache-2.0](../LICENSE) and each tarball contains the license text.
 
 ```bash
 npm install @privanet/sdk            # pulls @privanet/protocol and @privanet/shared
@@ -21,18 +21,18 @@ npm install @privanet/protocol       # only if you use the schemas or types dire
 
 Pre-releases use the `next` dist-tag (`npm install @privanet/sdk@next`); stable releases use `latest`. Every package of a release has the **same version as PrivaNet-Core**, and the internal dependencies are pinned to that exact version, so one `npm install` always yields a matching set.
 
-### Until the packages are on the registry
+### Release tarballs (fallback source, always kept)
 
-Every GitHub release carries the packed tarballs (`privanet-sdk-<version>.tgz`, `privanet-protocol-<version>.tgz`, `privanet-shared-<version>.tgz`) next to the platform archives and `SHA256SUMS.txt`. A consumer may depend on the release-asset URLs as a **temporary bridge**:
+Until the packages are on the registry, and permanently as a fallback (an air-gapped install, a registry outage, or verifying a download against `SHA256SUMS.txt`), every GitHub release carries the packed tarballs (`privanet-sdk-<version>.tgz`, `privanet-protocol-<version>.tgz`, `privanet-shared-<version>.tgz`) next to the platform archives and `SHA256SUMS.txt`. A consumer may depend on the release-asset URLs:
 
 ```json
 { "dependencies": {
-  "@privanet/protocol": "https://github.com/doopydoop364/PrivaNet-Core/releases/download/v0.3.0-alpha.1/privanet-protocol-0.3.0-alpha.1.tgz",
-  "@privanet/shared": "https://github.com/doopydoop364/PrivaNet-Core/releases/download/v0.3.0-alpha.1/privanet-shared-0.3.0-alpha.1.tgz",
-  "@privanet/sdk": "https://github.com/doopydoop364/PrivaNet-Core/releases/download/v0.3.0-alpha.1/privanet-sdk-0.3.0-alpha.1.tgz" } }
+  "@privanet/protocol": "https://github.com/doopydoop364/PrivaNet-Core/releases/download/v0.3.0-alpha.2/privanet-protocol-0.3.0-alpha.2.tgz",
+  "@privanet/shared": "https://github.com/doopydoop364/PrivaNet-Core/releases/download/v0.3.0-alpha.2/privanet-shared-0.3.0-alpha.2.tgz",
+  "@privanet/sdk": "https://github.com/doopydoop364/PrivaNet-Core/releases/download/v0.3.0-alpha.2/privanet-sdk-0.3.0-alpha.2.tgz" } }
 ```
 
-A local `file:` dependency on a sibling checkout is acceptable for development and integration testing. Neither is the distribution architecture: the target is a plain versioned dependency (`"@privanet/sdk": "^0.3.0"`).
+A local `file:` dependency on a sibling checkout is acceptable for development and integration testing. Neither is the primary distribution: the target is a plain versioned dependency (`"@privanet/sdk": "^0.3.0"`). `0.3.0-alpha.1` tarballs carry no license file; use `0.3.0-alpha.2` or newer.
 
 ## Compatibility expectations
 
@@ -47,9 +47,23 @@ A local `file:` dependency on a sibling checkout is acceptable for development a
 1. Bump the version in every package (they move together) and add the dated `CHANGELOG.md` section. The release-readiness tests fail if they disagree.
 2. Merge through a green PR, then tag or dispatch the Release workflow (`workflow_dispatch` with the tag name).
 3. The workflow verifies, on Linux, macOS and Windows, lint, typecheck and the whole suite; stages the platform archives; `npm pack`s the three packages onto the release assets; and runs `npm publish --dry-run` for each.
-4. The `publish` job then publishes `protocol`, `shared` and `sdk` in dependency order with `--provenance`, using `--tag next` for pre-releases. It does nothing (and says so) unless the repository has an `NPM_TOKEN` secret.
+4. The `publish` job then publishes `protocol`, `shared` and `sdk` in dependency order with `--provenance`, using `--tag next` for pre-releases. It skips a version that is already on npm, so a re-run is safe. The GitHub release and its tarballs are created **before and independently of** this job, so an npm problem never blocks or removes a release.
+5. The job runs only when the repository **variable** `NPM_PUBLISH` is `true`, so releases stay green until the one-time setup below is done.
 
-**One-time setup by the repository owner** (not something the workflow can do): create the `privanet` organisation (or otherwise own the `@privanet` scope) on npmjs.com, create an automation token with publish rights, and add it as the `NPM_TOKEN` repository secret. Nothing else in the design depends on how that is done; npm trusted publishing is a drop-in alternative to the token.
+### One-time npm setup (by the repository owner; the workflow cannot do this)
+
+Preferred: **trusted publishing**, with no long-lived token stored in GitHub.
+
+1. On npmjs.com create the `privanet` organisation (or otherwise own the `@privanet` scope), public.
+2. **Bootstrap.** npm can only attach a trusted publisher to a package that already exists, so the very first version of each of the three packages must be published once by an owner, either by hand from the release tarballs (`npm publish privanet-protocol-<version>.tgz --access public --tag next`, then `shared`, then `sdk`) or by temporarily setting an `NPM_TOKEN` secret (a granular automation token limited to the `@privanet` scope) and `NPM_PUBLISH=true`, then deleting the token afterwards.
+3. For each of `@privanet/protocol`, `@privanet/shared` and `@privanet/sdk`, open the package **Settings, Trusted Publisher, GitHub Actions** and register: owner `doopydoop364`, repository `PrivaNet-Core`, workflow filename `release.yml` (no environment). Optionally, then set the package's publishing access to require two-factor authentication and disallow tokens.
+4. Set the repository variable `NPM_PUBLISH` to `true` (Settings, Secrets and variables, Actions, Variables). Later releases publish through GitHub's OIDC identity: `npm publish` runs on npm 11.5.1 or newer with `id-token: write`, gets a short-lived credential, and attaches provenance.
+
+Fallback: an `NPM_TOKEN` repository secret (granular, publish-only, scoped to `@privanet`) is used only if it exists. Prefer removing it once trusted publishing works. Nothing else in the design depends on which path is used.
+
+## License
+
+`Apache-2.0`. The repository has the standard `LICENSE` file, every `package.json` declares `"license": "Apache-2.0"`, and each published package tarball and each staged platform archive contains the license text. Third-party dependencies (for example `zod`) keep their own licenses and are not relicensed.
 
 ## Verified in CI
 

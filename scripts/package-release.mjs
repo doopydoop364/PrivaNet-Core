@@ -18,11 +18,12 @@ for (const [name, source] of Object.entries(workspaces)) {
   const target = join(modules, '@privanet', name);
   mkdirSync(target, { recursive: true });
   cpSync(join(source, 'package.json'), join(target, 'package.json'));
+  cpSync('LICENSE', join(target, 'LICENSE')); // Apache-2.0 travels with every package it covers
   cpSync(join(source, 'dist'), join(target, 'dist'), { recursive: true, filter: path => !path.endsWith('.tsbuildinfo') && !path.endsWith('.map') });
 }
 cpSync('node_modules/zod', join(modules, 'zod'), { recursive: true });
 for (const script of ['admin.mjs', 'demo.mjs', 'backup.mjs']) cpSync(join('scripts', script), join(stage, 'tools', script));
-for (const file of ['README.md', 'ROADMAP.md', 'CHANGELOG.md']) cpSync(file, join(stage, file));
+for (const file of ['LICENSE', 'README.md', 'ROADMAP.md', 'CHANGELOG.md']) cpSync(file, join(stage, file));
 cpSync('docs', join(stage, 'docs'), { recursive: true });
 cpSync('.env.example', join(stage, '.env.example'));
 

@@ -90,7 +90,12 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then target="--target $GITHUB_SHA"; else target="--verify-tag"; fi
           gh release create "$RELEASE_TAG" assets/* --title "PrivaNet ${RELEASE_TAG#v}" --notes-file notes.md $target $prerelease
   publish:
-    # Publishes the consumer packages to the public npm registry when (and only when) an NPM_TOKEN secret exists.
+    # Publishes @privanet/protocol, shared and sdk to the public npm registry.
+    # Preferred: npm trusted publishing (GitHub OIDC): no long-lived token. Each package must have this repository and
+    # the workflow file `release.yml` registered as its trusted publisher on npmjs.com (see docs/PACKAGES.md).
+    # Fallback: an NPM_TOKEN secret, used only if it exists. Runs only when the repository variable NPM_PUBLISH is 'true',
+    # so a release stays green until the one-time npm setup is done. The GitHub release tarballs are unaffected.
+    if: ${{ vars.NPM_PUBLISH == 'true' }}
     needs: release
     runs-on: ubuntu-latest
     permissions:
@@ -99,15 +104,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 24, cache: npm, registry-url: 'https://registry.npmjs.org' }
+        with: { node-version: 24, cache: npm }
+      # Trusted publishing needs npm 11.5.1 or newer.
+      - run: npm install -g npm@^11.5.1 && npm --version
       - run: npm ci
       - run: npm run build
       - name: Publish @privanet/protocol, shared and sdk
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Empty when no token is configured, which leaves npm on the OIDC trusted-publisher path.
+          FALLBACK_NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         shell: bash
         run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then echo "NPM_TOKEN is not configured: skipping the npm publish (release assets still carry the tarballs)"; exit 0; fi
+          set -euo pipefail
+          if [ -n "$FALLBACK_NPM_TOKEN" ]; then echo "Using the NPM_TOKEN fallback"; npm config set "//registry.npmjs.org/:_authToken" "$FALLBACK_NPM_TOKEN"; else echo "Using npm trusted publishing (OIDC)"; fi
+          version="${RELEASE_TAG#v}"
           tag=latest; case "$RELEASE_TAG" in *-*) tag=next;; esac
-          # Dependency order: protocol, then shared, then sdk.
-          for pkg in protocol shared sdk; do npm publish --workspace @privanet/$pkg --access public --provenance --tag "$tag"; done
+          for pkg in protocol shared sdk; do   # dependency order
+            if npm view "@privanet/$pkg@$version" version >/dev/null 2>&1; then echo "@privanet/$pkg@$version is already on npm: skipping"; continue; fi
+            npm publish --workspace "@privanet/$pkg" --access public --tag "$tag" --provenance
+          done

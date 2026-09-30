@@ -25,6 +25,24 @@ test('publishable packages are consumer-ready: metadata, exports, file lists, al
   for (const app of ['coordinator', 'node']) assert.equal(JSON.parse(readFileSync(join(root, 'apps', app, 'package.json'), 'utf8')).private, true, `${app} is not a consumer package`);
 });
 
+test('licensing: Apache-2.0 everywhere it applies, the standard text, one identical LICENSE per publishable package, and no relicensing of third-party code', () => {
+  const text = readFileSync(join(root, 'LICENSE'), 'utf8');
+  assert.match(text, /^\s+Apache License\r?\n\s+Version 2\.0, January 2004/); assert.match(text, /END OF TERMS AND CONDITIONS/); assert.match(text, /Copyright \[yyyy\] \[name of copyright owner\]/, 'the standard appendix stays unfilled: the license text is not edited');
+  for (const path of ['package.json', 'apps/coordinator/package.json', 'apps/node/package.json', ...publishable.map(name => `packages/${name}/package.json`)])
+    assert.equal((JSON.parse(readFileSync(join(root, path), 'utf8')) as { license?: string }).license, 'Apache-2.0', path);
+  for (const name of publishable) assert.equal(readFileSync(join(root, 'packages', name, 'LICENSE'), 'utf8'), text, `packages/${name}/LICENSE must equal the root LICENSE`);
+  assert.match(readFileSync(join(root, 'README.md'), 'utf8'), /Apache License, Version 2\.0/); // stated in the README
+  assert.equal(existsSync(join(root, 'node_modules', 'zod', 'LICENSE')), true); // third-party licenses are left in place, untouched by us
+});
+
+test('the npm publish job uses trusted publishing (OIDC) with an optional token fallback, is opt-in, and never blocks the GitHub release', () => {
+  const workflow = readFileSync(join(root, '.github', 'workflows', 'release.yml'), 'utf8'); const publish = workflow.slice(workflow.indexOf('\n  publish:'));
+  assert.match(publish, /id-token: write/); assert.match(publish, /--provenance/); assert.match(publish, /vars\.NPM_PUBLISH == 'true'/); assert.match(publish, /needs: release/);
+  assert.match(publish, /npm@\^11\.5\.1/, 'trusted publishing needs npm 11.5.1 or newer'); assert.match(publish, /already on npm: skipping/, 'a re-run must be idempotent');
+  assert.doesNotMatch(publish, /registry-url/, 'no placeholder token file that could shadow OIDC');
+  assert.match(workflow, /gh release create/); assert.ok(workflow.indexOf('gh release create') < workflow.indexOf('\n  publish:'), 'the GitHub release (with the tarballs) is created before, and independent of, the npm publish');
+});
+
 test('the packed tarballs install into a fresh project, contain only built output, resolve with types, and enforce the contract at compile time', { timeout: 240000 }, async t => {
   const work = await mkdtemp(join(tmpdir(), 'privanet-pack-')); t.after(() => rm(work, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }));
   const packs = join(work, 'packs'); await mkdir(packs); const tarballs: string[] = [];
@@ -32,7 +50,7 @@ test('the packed tarballs install into a fresh project, contain only built outpu
     const out = await exec(npm, ['pack', '--json', '--pack-destination', packs, '--workspace', `@privanet/${name}`], { cwd: root, shell: process.platform === 'win32', maxBuffer: 10 * 1024 * 1024 });
     const info = (JSON.parse(out.stdout) as Array<{ filename: string; files: Array<{ path: string }> }>)[0]!; tarballs.push(join(packs, info.filename));
     const paths = info.files.map(f => f.path);
-    assert.ok(paths.includes('package.json') && paths.includes('dist/index.js') && paths.includes('dist/index.d.ts'), `${name}: ${paths.join(',')}`);
+    assert.ok(paths.includes('package.json') && paths.includes('dist/index.js') && paths.includes('dist/index.d.ts') && paths.includes('LICENSE'), `${name}: ${paths.join(',')}`);
     for (const p of paths) { assert.doesNotMatch(p, /\.map$|\.tsbuildinfo$|(^|\/)(src|tests?)\//, `${name} ships ${p}`); assert.ok(p === 'package.json' || p === 'README.md' || p === 'LICENSE' || p.startsWith('dist/'), `${name} ships unexpected ${p}`); }
   }
   const project = join(work, 'consumer'); await mkdir(project); await writeFile(join(project, 'package.json'), JSON.stringify({ name: 'consumer', private: true, type: 'module' }));

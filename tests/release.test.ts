@@ -73,8 +73,8 @@ test('staged distributions contain what they should and nothing they should not 
     const stage = (await exec(process.execPath, ['scripts/package-release.mjs', platform, out], { cwd: root })).stdout.trim();
     assert.equal(stage, join(out, `privanet-${version}-${platform}`));
     const files = walk(stage).map(path => relative(stage, path).replaceAll('\\', '/'));
-    for (const required of ['RUNNING.txt', 'README.md', 'ROADMAP.md', 'CHANGELOG.md', '.env.example', 'docs/deployment.md', 'docs/TREASURY.md',
-      'tools/admin.mjs', 'tools/demo.mjs', 'tools/backup.mjs', 'node_modules/zod/package.json', ...['protocol', 'sdk', 'shared'].map(name => `node_modules/@privanet/${name}/dist/index.js`)])
+    for (const required of ['LICENSE', 'RUNNING.txt', 'README.md', 'ROADMAP.md', 'CHANGELOG.md', '.env.example', 'docs/deployment.md', 'docs/TREASURY.md',
+      'tools/admin.mjs', 'tools/demo.mjs', 'tools/backup.mjs', 'node_modules/zod/package.json', ...['protocol', 'sdk', 'shared'].map(name => `node_modules/@privanet/${name}/dist/index.js`), ...['protocol', 'sdk', 'shared', 'coordinator', 'node'].map(name => `node_modules/@privanet/${name}/LICENSE`)])
       assert.ok(files.includes(required), `${platform} is missing ${required}`);
     assert.ok(files.includes(`bin/privanet-coordinator${platform === 'windows' ? '.cmd' : ''}`)); assert.ok(files.includes(`bin/privanet-node${platform === 'windows' ? '.cmd' : ''}`));
     assert.ok(files.includes('node_modules/@privanet/coordinator/dist/main.js')); assert.ok(files.includes('node_modules/@privanet/node/dist/main.js'));

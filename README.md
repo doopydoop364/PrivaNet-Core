@@ -24,6 +24,10 @@ Version **0.2.1**: Phase 1 (Core Foundation) and Phase 2 (Adaptive Resource Engi
 
 Security caveats that remain: nodes and applications are untrusted and a node can fabricate schema-valid results (no execution attestation, no reputation); no public Sybil resistance; SQLite is a single-process prototype, not HA; no distributed-storage guarantees; no mTLS or per-message signatures; no independent security review; job data is plaintext. Details: [security](docs/security.md), [deployment](docs/deployment.md).
 
+## License
+
+PrivaNet-Core is licensed under the [Apache License, Version 2.0](LICENSE) (`Apache-2.0`). This covers the code in this repository, including the published `@privanet/protocol`, `@privanet/shared` and `@privanet/sdk` packages, which each ship the license text. Third-party dependencies keep their own licenses; nothing here relicenses them.
+
 ## Development
 
 Node **24.4+**, npm. Current validation environment is recorded in
