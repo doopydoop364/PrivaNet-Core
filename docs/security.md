@@ -96,7 +96,7 @@ Requirements for any future treasury code: idempotency, transactional updates, e
 
 ## Fetch job threats (planned)
 
-Status: **planned.** No fetch job type or handler exists, so none of these apply to the current code. They are recorded for the generic `web.fetch.v1` capability (provisional id) described in [PRIVASEARCH_INTEGRATION.md](PRIVASEARCH_INTEGRATION.md), whose first consumer is the separate PrivaSearch application. The governing rule: the fetch job is a constrained GET for permissioned applications, never a general proxy, and it contains no application policy ([APPLICATION_BOUNDARY.md](APPLICATION_BOUNDARY.md)).
+Status: **implemented in v0.3.0-alpha.1** (`apps/node/src/fetch/`; tests in `tests/fetch-*.test.ts`). These tests are not a security review; residual risks: TLS uses the system trust store, robots are advisory, a node's owner network is only as isolated as its policy. The generic `web.fetch.v1` capability described in [PRIVASEARCH_INTEGRATION.md](PRIVASEARCH_INTEGRATION.md), whose first consumer is the separate PrivaSearch application. The governing rule: the fetch job is a constrained GET for permissioned applications, never a general proxy, and it contains no application policy ([APPLICATION_BOUNDARY.md](APPLICATION_BOUNDARY.md)).
 
 | Threat | Why it matters | Planned direction |
 | --- | --- | --- |

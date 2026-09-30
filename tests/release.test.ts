@@ -19,7 +19,7 @@ const packages = ['package.json', ...['apps/coordinator', 'apps/node', 'packages
 
 test('release metadata: every package, the wire version constant, the lockfile and the changelog agree on one version', async () => {
   const version = json('package.json').version;
-  assert.match(version, /^\d+\.\d+\.\d+$/);
+  assert.match(version, /^\d+\.\d+\.\d+(-[a-z]+\.\d+)?$/);
   for (const path of packages) {
     const manifest = json(path); assert.equal(manifest.version, version, path);
     for (const [name, wanted] of Object.entries((manifest.dependencies ?? {}) as Record<string, string>)) if (name.startsWith('@privanet/')) assert.equal(wanted, version, `${path} -> ${name}`);

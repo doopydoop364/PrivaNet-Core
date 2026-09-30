@@ -93,6 +93,6 @@ test('compatibility: old nodes and old stored records keep working after the upg
   f.core.complete(node.session.nodeId, job.id, { leaseId: lease.leaseId, result: { message: 'old' } });
   assert.equal(f.core.getJob(f.app, job.id).status, 'COMPLETED');
   // The registry still carries the original job type unchanged; new types are additions only.
-  assert.deepEqual(Object.keys(JOB_TYPES).sort(), ['system.echo.v1', 'system.hashchain.v1']);
+  assert.deepEqual(Object.keys(JOB_TYPES).sort(), ['system.echo.v1', 'system.hashchain.v1', 'web.fetch.v1']); // new capabilities are additions only
   assert.equal(JOB_TYPES['system.echo.v1'].version, 1);
 });

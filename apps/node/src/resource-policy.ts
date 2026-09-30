@@ -44,6 +44,24 @@ export const ResourcePolicySchema = z.strictObject({
   monthlyTransferBytes: z.number().int().min(0).max(2 ** 50).nullable().default(10 * GiB),
   /** Optional link speed; enables network-pressure awareness by comparing the host's traffic with it. */
   linkBytesPerSec: z.number().int().min(1).max(2 ** 40).optional(),
+  /**
+   * Limits for the constrained web-fetch capability (`web.fetch.v1`). These can only tighten what the capability
+   * already enforces. `unsafeLocal` is an owner-only development escape hatch that DISABLES SSRF protection for the
+   * ranges, ports and names it lists (for example to test against a local server); it can never come from a job,
+   * the Coordinator or the environment, and the node logs a fixed event at startup when it is set.
+   */
+  fetch: z.strictObject({
+    denyHosts: z.array(z.string().min(3).max(253)).max(200).default([]),
+    allowHosts: z.array(z.string().min(3).max(253)).max(200).optional(),
+    minHostDelayMs: z.number().int().min(0).max(60000).default(1000),
+    maxRequestsPerMinute: z.number().int().min(1).max(6000).default(60),
+    hardTimeoutMs: z.number().int().min(1000).max(60000).default(30000),
+    unsafeLocal: z.strictObject({
+      allowedCidrs: z.array(z.string().min(3).max(60)).max(16).default([]),
+      allowedPorts: z.array(z.number().int().min(1).max(65535)).max(16).default([]),
+      hostMap: z.record(z.string().min(3).max(253), z.string().min(2).max(60)).default({}),
+    }).optional(),
+  }).prefault({}),
   /** How long HIGH pressure must persist before running preemptible jobs are handed back. */
   preemptAfterMs: z.number().int().min(0).max(600000).default(10000),
 });

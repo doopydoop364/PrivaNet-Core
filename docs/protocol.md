@@ -100,3 +100,10 @@ accepted, changed completion is a conflict. Expired completion is rejected even
 when nobody has yet acquired a replacement lease. Since v0.2.1 a node running a long job renews its lease with `POST node/jobs/:id/renew` `{leaseId}` (response `{expiresAt}`), roughly every third of a lease period. Renewal is fenced exactly like completion (authenticated, assigned node, matching lease ID, lease not yet expired; otherwise 409 `LEASE_CONFLICT`), the Coordinator chooses the new expiry (`now` plus the lease period), and a single lease can be kept alive at most `PRIVANET_MAX_LEASE_MS` (default one hour; 409 `LEASE_LIMIT`), so a stuck node cannot hold a job forever. A node that loses its lease stops the handler and does not hand the job back. Handlers must yield to the event loop (as hash-chain does) so renewals and heartbeats run. Execution is at-least-once; future handlers need
 idempotency by job ID and cannot infer exactly-once side effects from fencing.
 Node restart may lose an unreported result; its lease expires and retries.
+
+## Additions in 0.3.0-alpha.1 (protocol version stays 1)
+
+- `POST /v1/admin/applications` accepts an optional `fetchIdentity` (`product`, `infoUrl`).
+- The lease may carry an optional `client` object, present only for job types that require an application identity (`web.fetch.v1`). Old nodes never receive it for types they do not run.
+- New job type `web.fetch.v1` (see [PRIVASEARCH_INTEGRATION.md](PRIVASEARCH_INTEGRATION.md)); submission by an application with no registered identity fails with 403 `FETCH_IDENTITY_REQUIRED`.
+- Package compatibility and version-mismatch handling: [PACKAGES.md](PACKAGES.md).
