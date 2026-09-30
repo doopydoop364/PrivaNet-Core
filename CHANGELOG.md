@@ -8,6 +8,7 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 ## [Unreleased]
 
 ### Added
+- **Job reads that wait for the result.** `GET /v1/jobs/{id}?waitMs=N` (0 to 8000) holds the read until the job finishes or the time is up. `waitForResult` in `@privanet/sdk` uses it, so an application no longer polls the Coordinator every poll interval per job (measured: with 128 jobs waiting on one busy node, Coordinator CPU was 35 s over a 139 s run, almost all of it status polls). Additive within protocol 1 and bounded (ownership checked first, credential re-checked on wake, no work for closed connections, at most 4096 held-open reads by default); the SDK falls back to plain polling against an older Coordinator. See `docs/protocol.md`.
 - **Lease requests that wait for work.** `POST /v1/node/jobs/lease` takes an optional `waitMs` (0 to 8000): the Coordinator holds the request until a job is leasable for that node or the time is up. A job is picked up the moment it is submitted or requeued instead of at the node's next poll, and an idle node makes one request per wait instead of one per poll interval. Additive within protocol 1: old nodes send `{}` and work unchanged; a new node falls back to plain polling against an older Coordinator. Bounded (strict field, 8 s ceiling, at most 512 held-open requests by default, credential re-checked on every wake, no lease to a closed connection). New node setting `PRIVANODE_LEASE_WAIT_MS` (default 5000, capped by the heartbeat interval; 0 disables). See `docs/protocol.md`.
 
 ### Fixed

@@ -235,6 +235,8 @@ export const LeaseSchema = registered(z.strictObject({
   /** Present only on leases of capabilities that require an application identity (v0.3); older nodes never receive such a lease. */
   client: FetchIdentitySchema.optional(),
 }));
+/** Longest `GET /v1/jobs/{id}?waitMs=` may wait for the job to finish (same ceiling as a lease wait). */
+export const MAX_JOB_WAIT_MS = 8000;
 /** Longest a lease request may wait for work. Kept below the Coordinator's request timeout so a waiting request is never cut off. */
 export const MAX_LEASE_WAIT_MS = 8000;
 /** Body of `POST /v1/node/jobs/lease`. `{}` (as v0.1 to v0.3.0-alpha.2 nodes send) is a plain poll; `waitMs` (additive, optional) asks the Coordinator to hold the request until work exists or the time is up. */

@@ -31,7 +31,7 @@ async function listen(server: Server, port = 0): Promise<string> {
 async function close(server: Server) {
   await new Promise<void>((resolve, reject) => { server.close(error => error ? reject(error) : resolve()); server.closeAllConnections(); });
 }
-async function fixture(t: TestContext, authRequestsPerMinute = 120, policy: Partial<Policy> = {}, serverOptions: { maxLeaseWaiters?: number } = {}) {
+async function fixture(t: TestContext, authRequestsPerMinute = 120, policy: Partial<Policy> = {}, serverOptions: { maxLeaseWaiters?: number; maxJobWaiters?: number } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'privanet-http-')); const db = join(dir, 'coordinator.sqlite');
   const logs: unknown[] = []; const admin = secret(); let store = new SqliteStore(db); let core = new Coordinator(store, policy);
   let server = createCoordinatorServer(core, { adminSecret: admin, log: e => logs.push(e), authRequestsPerMinute, ...serverOptions });
@@ -403,4 +403,56 @@ test('against an older Coordinator that rejects waitMs, the node falls back to p
   await node.tick(); assert.ok(events.includes('node.lease_wait_unsupported'), 'the node noticed and stopped asking');
   const job = await sdk.submit('system.echo.v1', { message: 'old coordinator' }, 'compat'); await node.tick();
   assert.equal((await sdk.getJob(job.id)).status, 'COMPLETED');
+});
+
+test('waiting for a job result: the read returns the moment the job finishes, and the SDK needs no polling to notice', { timeout: 30000 }, async t => {
+  const f = await fixture(t); const app = await f.app(); const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token });
+  const node = await enrolled(f, { leaseWaitMs: 0 }); await node.tick();
+  const job = await sdk.submit('system.echo.v1', { message: 'wait for me' }, 'job-wait');
+  const started = Date.now(); const waiting = sdk.waitForResult(job.id, { timeoutMs: 20000, pollMs: 10000 }); // a poll interval this long would take 10 s if the SDK still polled
+  await delay(300); await node.tick(); // completes the job while the read is held open
+  assert.deepEqual(await waiting, { message: 'wait for me' }); const took = Date.now() - started;
+  assert.ok(took < 3000, `the result arrived after ${took} ms with a 10 s poll interval`);
+  // A finished job is answered at once even when a wait is requested.
+  const before = Date.now(); assert.equal((await sdk.getJob(job.id, undefined, 5000)).status, 'COMPLETED'); assert.ok(Date.now() - before < 1000);
+  // A wait that ends unfinished returns the job as it is, not an error.
+  const idle = await sdk.submit('system.echo.v1', { message: 'nobody takes this' }, 'job-idle'); const t0 = Date.now();
+  const still = await sdk.getJob(idle.id, undefined, 300); assert.equal(still.status, 'QUEUED'); assert.ok(Date.now() - t0 >= 250 && Date.now() - t0 < 2000);
+});
+
+test('the job wait query is strict, owner-only, bounded, re-authenticated on wake, and released when the client leaves', { timeout: 30000 }, async t => {
+  const f = await fixture(t, 120, {}, { maxJobWaiters: 1 }); const app = await f.app(); const other = await f.app();
+  const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token }); const stranger = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: other.token });
+  const job = await sdk.submit('system.echo.v1', { message: 'mine' }, 'strict-1');
+  // Unknown or malformed query strings are unknown routes or bad requests, never silently ignored.
+  await assert.rejects(f.transport.request('GET', `/v1/jobs/${job.id}?waitMs=9000` as `/v1/${string}`, JobSchema, undefined, app.token), errorCode('INVALID_REQUEST'));
+  for (const bad of ['?wait=5', '?waitMs=abc', '?waitMs=', '?waitMs=5&x=1', '?x=1']) await assert.rejects(new Transport({ url: f.url, allowInsecureLoopback: true }).request('GET', `/v1/jobs/${job.id}${bad}` as `/v1/${string}`, JobSchema, undefined, app.token), (e: unknown) => e instanceof Error, bad);
+  // Another application cannot wait on (or read) this job: ownership is checked before anything is held open.
+  await assert.rejects(stranger.getJob(job.id, undefined, 2000), errorCode('NOT_FOUND'));
+  // The waiter bound: with one slot taken, a second read is answered at once; the slot frees when the first client leaves.
+  const abort = new AbortController(); const first = sdk.getJob(job.id, abort.signal, 4000).catch(() => 'aborted'); await delay(150);
+  const t0 = Date.now(); assert.equal((await sdk.getJob(job.id, undefined, 4000)).status, 'QUEUED'); assert.ok(Date.now() - t0 < 1000, 'over the waiter bound the read is answered at once');
+  abort.abort(); await first; await delay(150);
+  const t1 = Date.now(); await sdk.getJob(job.id, undefined, 400); assert.ok(Date.now() - t1 >= 300, 'the slot was released when the first client disconnected, so this read waits');
+  // Revocation while waiting: the credential is re-checked when the read wakes.
+  const pending = sdk.getJob(job.id, undefined, 5000).then(() => 'ok' as const, (e: unknown) => e); await delay(150);
+  await f.transport.request('POST', `/v1/admin/applications/${app.applicationId}/revoke`, AckSchema, {}, f.admin);
+  const node = await enrolled(f); await node.tick(); await node.tick(); // completing the job wakes the held read
+  const outcome = await pending; assert.ok(outcome !== 'ok', 'a revoked application must not receive the result');
+});
+
+test('against an older Coordinator that answers 404 to a waited job read, the SDK falls back to plain polling; a job that is really missing still fails', { timeout: 30000 }, async t => {
+  const f = await fixture(t); const app = await f.app();
+  const proxy = createServer((req, res) => { void (async () => {
+    if ((req.url ?? '').includes('?')) { res.writeHead(404, { 'Content-Type': 'application/json', 'X-PrivaNet-Protocol': '1' }); res.end(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'route not found' } })); return; }
+    const chunks: Buffer[] = []; for await (const c of req) chunks.push(c as Buffer);
+    const upstream = await fetch(f.url + (req.url ?? ''), { method: req.method ?? 'GET', headers: Object.fromEntries(Object.entries(req.headers).filter(([k]) => ['content-type', 'authorization', 'x-privanet-protocol'].includes(k)).map(([k, v]) => [k, String(v)])), ...(req.method === 'POST' ? { body: Buffer.concat(chunks) } : {}) });
+    const text = await upstream.text(); res.writeHead(upstream.status, { 'Content-Type': 'application/json', 'X-PrivaNet-Protocol': '1' }); res.end(text);
+  })(); });
+  const proxyUrl = await listen(proxy); t.after(() => close(proxy));
+  const sdk = new PrivaNetClient({ url: proxyUrl, allowInsecureLoopback: true, token: app.token });
+  const node = await enrolled(f); await node.tick();
+  const job = await sdk.submit('system.echo.v1', { message: 'old server' }, 'compat-wait'); const waiting = sdk.waitForResult(job.id, { timeoutMs: 10000, pollMs: 50 });
+  await delay(200); await node.tick(); assert.deepEqual(await waiting, { message: 'old server' });
+  await assert.rejects(sdk.waitForResult('00000000-0000-4000-8000-000000000000', { timeoutMs: 3000, pollMs: 50 }), errorCode('NOT_FOUND'));
 });
