@@ -13,6 +13,19 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 - PrivaSearch integration contract (`docs/PRIVASEARCH_INTEGRATION.md`, ADR 004, fetch threat table, Phase 3 roadmap update): the constrained fetch job, SSRF and robots boundaries, digest results, permissions, retry/checkpoint semantics, resource estimates, required PrivaNet-Core changes, MVP sequence and a hand-off prompt for the separate PrivaSearch repository. Design only: no job type, handler or protocol change was made.
 - Reconciled the documentation with the v0.2.1 implementation: security model (two handlers, lease renewal risk, plaintext job data and checkpoints, `availableForMs` disclosure, OS-specific and test-coverage caveats), architecture, protocol (rotate route, renew, no job cancellation), development guide (graceful node drain), resources (implemented telemetry), roadmap summary, deployment status, implementation report (marked as v0.1 history with a v0.2.1 status note and current verification), `.env.example` (four missing variables) and a README status matrix (implemented, tested, partially tested, planned, unsupported). No code or behaviour changes.
 
+## [0.3.0-alpha.2] - 2026-09-30
+
+Licensing and publishing release. Protocol version 1, no behaviour change: nodes and clients of `0.3.0-alpha.1` interoperate unchanged.
+
+### Added
+- **License: Apache-2.0.** The standard `LICENSE` file at the repository root and in each published package (`@privanet/protocol`, `@privanet/shared`, `@privanet/sdk`), and `"license": "Apache-2.0"` in every `package.json`. The license text also ships in every staged platform archive and inside each packed tarball. Third-party dependencies keep their own licenses; nothing is relicensed.
+- **npm trusted publishing.** The Release workflow's `publish` job now publishes the three packages to public npm through GitHub OIDC with provenance and no long-lived token (npm 11.5.1 or newer), with an `NPM_TOKEN` fallback if that secret exists. It is opt-in through the repository variable `NPM_PUBLISH`, skips versions already on npm, and runs after, and independently of, the GitHub release. The GitHub release tarballs stay as release artifacts and a fallback installation source.
+- Tests for license consistency (fields, identical `LICENSE` files, standard text, tarball and distribution contents) and for the shape of the publish job.
+
+### Changed
+- `docs/PACKAGES.md`: public npm as the registry, the one-time npm setup (organisation, bootstrap publish, trusted-publisher registration), tarballs documented as a permanent fallback.
+- The `0.3.0-alpha.1` tarballs carry no license file; `0.3.0-alpha.2` is the first release that does.
+
 ## [0.3.0-alpha.1] - 2026-09-30
 
 Phase 3 slice: the first real application capability, `web.fetch.v1`, plus installable consumer packages. Protocol version 1; all wire changes are additive and optional, so v0.2.x nodes and clients keep working (an old node simply lacks the capability).
