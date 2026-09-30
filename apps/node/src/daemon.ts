@@ -32,6 +32,8 @@ export class PrivaNode {
   private enrollmentToken: string | undefined;
   private busy = false;
   private currentJobs = 0;
+  /** True when the last tick finished a job (completed or handler-failed), so the run loop may poll again at once. */
+  private finishedJob = false;
   private draining = false;
   private readonly hardStop = new AbortController();
   constructor(private readonly options: NodeOptions) {
@@ -84,7 +86,7 @@ export class PrivaNode {
   get isDraining() { return this.draining; }
   async tick(): Promise<void> {
     if (this.busy) throw new Error('Daemon already polling');
-    this.busy = true;
+    this.busy = true; this.finishedJob = false;
     try {
       if (!this.session || this.session.expiresAt <= Date.now() + 1000) await this.connect();
       this.options.engine?.update();
@@ -134,11 +136,11 @@ export class PrivaNode {
         checkpoints?.clear(lease.jobId);
         await this.transport.request('POST', `/v1/node/jobs/${lease.jobId}/fail`, AckSchema,
           { leaseId: lease.leaseId, error: { code: this.capabilities.includes(lease.type) ? 'HANDLER_FAILED' : 'CAPABILITY_DISABLED' } }, session.token);
-        this.log({ event: 'job.handler_failed' }); return;
+        this.log({ event: 'job.handler_failed' }); this.finishedJob = true; return;
       } finally { clearInterval(renewer); if (watcher) clearInterval(watcher); }
       meter?.record(JSON.stringify(result).length);
       await this.transport.request('POST', `/v1/node/jobs/${lease.jobId}/complete`, AckSchema, { leaseId: lease.leaseId, result }, session.token);
-      checkpoints?.clear(lease.jobId); this.log({ event: 'job.completed' });
+      checkpoints?.clear(lease.jobId); this.log({ event: 'job.completed' }); this.finishedJob = true;
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) this.session = undefined;
       throw error;
@@ -155,6 +157,9 @@ export class PrivaNode {
         if (error instanceof ApiError && [400, 403, 426].includes(error.status)) throw error;
         failures++; this.log({ event: 'node.connection_failed', code: error instanceof ApiError ? error.code : 'TRANSPORT_ERROR' });
       }
+      // After a finished job there is probably more queued: poll again immediately instead of idling for a full interval.
+      // Sleeping only when a poll finds nothing (or fails) keeps an idle node quiet without capping a busy node at one job per interval.
+      if (this.finishedJob && !failures) { await new Promise<void>(resolve => setImmediate(resolve)); continue; }
       const backoff = failures ? Math.min(30000, this.pollMs * 2 ** Math.min(failures, 8)) : this.pollMs;
       try { await delay(backoff + (failures ? Math.floor(Math.random() * 250) : 0), undefined, { signal }); }
       catch { if (!signal.aborted) throw new Error('Daemon timer failed'); }
