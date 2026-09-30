@@ -125,7 +125,7 @@ sudo journalctl -u privanet-node -n 20               # expect {"event":"node.enr
 sudo editor /etc/privanet/node.env          # now delete the PRIVANODE_ENROLLMENT_TOKEN line (single use; it was consumed)
 ```
 
-The server node connects through the proxy like any other node. It is scheduled exactly like the desktop's node: the Coordinator gives it no special treatment for being on the same machine. The policy is deliberately conservative, see "Resource policies". Turn it off at any time with `sudo systemctl disable --now privanet-node`; nothing else changes.
+The server node connects through the proxy like any other node. It is scheduled exactly like the desktop's node: the Coordinator gives it no special treatment for being on the same machine, and it does not balance load between nodes (a job goes to whichever capable node asks first), so while your desktop can absorb the work this node may receive little or none. The policy is deliberately conservative, see "Resource policies". Turn it off at any time with `sudo systemctl disable --now privanet-node`; nothing else changes.
 
 ### 7. Look at it
 
@@ -233,7 +233,7 @@ Alternatives considered: native TLS in the Coordinator (not implemented; the pro
 
 PrivaSearch is a separate application in its own repository; it never installs into PrivaNet-Core. Wherever it runs, it uses the same SDK and the same `https://10.0.0.68` interface.
 
-- **A. On the desktop** talking to the server's Coordinator: set `PRIVANET_COORDINATOR_URL`-style configuration to `https://10.0.0.68` and `NODE_EXTRA_CA_CERTS` to the root certificate. The desktop can then both work for the network and submit to it. (Tested: [DEPLOYMENT_VALIDATION.md](DEPLOYMENT_VALIDATION.md).)
+- **A. On the desktop** (PrivaSearch 0.3.2 or newer, which backs off briefly instead of waiting a minute per URL when the Coordinator restarts) talking to the server's Coordinator: set `PRIVANET_COORDINATOR_URL`-style configuration to `https://10.0.0.68` and `NODE_EXTRA_CA_CERTS` to the root certificate. The desktop can then both work for the network and submit to it. (Tested: [DEPLOYMENT_VALIDATION.md](DEPLOYMENT_VALIDATION.md).)
 - **B. Later, as its own service on the server**: the same settings, its own user and unit; only a deployment choice.
 - **C. On another machine entirely**: the same.
 
