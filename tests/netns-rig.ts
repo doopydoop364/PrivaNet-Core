@@ -69,7 +69,7 @@ const occurrences = (logs: string[], event: string) => logs.join('').split(`"eve
  *   desktop 10.77.0.2  PrivaNode(s); firewall admits nothing inbound but replies
  * The Coordinator, node, admin CLI and Caddy run exactly as shipped, from a staged release directory.
  */
-export async function startLan(options: { release?: string; leaseMs?: number; staleMs?: number; offlineMs?: number; coordinatorEnv?: NodeJS.ProcessEnv } = {}): Promise<Lan> {
+export async function startLan(options: { release?: string; /** A different (older) release for the Coordinator and the admin tool. */ coordinatorRelease?: string; leaseMs?: number; staleMs?: number; offlineMs?: number; coordinatorEnv?: NodeJS.ProcessEnv } = {}): Promise<Lan> {
   const id = randomBytes(3).toString('hex'); const dir = await mkdtemp(join(tmpdir(), 'privanet-lan-'));
   const serverNs = `pns${id}`; const desktopNs = `pnd${id}`; const webNs = `pnw${id}`; const vs = `vs${id}`; const vd = `vd${id}`; const vw = `vw${id}`; const bridge = `pnb${id}`;
   const children: ChildProcess[] = []; const coordinatorLogs: string[] = []; const caddyLogs: string[] = [];
@@ -78,7 +78,7 @@ export async function startLan(options: { release?: string; leaseMs?: number; st
     const out = join(dir, 'release');
     release = (await exec(process.execPath, ['scripts/package-release.mjs', 'linux', out], { cwd: repo })).stdout.trim();
   }
-  const rel = release;
+  const rel = release; const coordinatorRel = options.coordinatorRelease ?? rel;
   const mkHost = (name: string, ns: string, ip: string): Host => ({
     name, ns, ip,
     spawn: (command, args, env, logs) => {
@@ -130,7 +130,7 @@ export async function startLan(options: { release?: string; leaseMs?: number; st
         PRIVANODE_HEARTBEAT_MS: '500', PRIVANODE_POLL_MS: '100', ...extra }),
       startCoordinator: async () => {
         const before = occurrences(coordinatorLogs, 'coordinator.started');
-        coordinator = server.spawn(join(rel, 'bin', 'privanet-coordinator'), [], coordEnv, coordinatorLogs); await waitFor(coordinatorLogs, 'coordinator.started', before);
+        coordinator = server.spawn(join(coordinatorRel, 'bin', 'privanet-coordinator'), [], coordEnv, coordinatorLogs); await waitFor(coordinatorLogs, 'coordinator.started', before);
       },
       stopCoordinator: async signal => { await stopChild(coordinator, signal); coordinator = undefined; },
       startCaddy: async () => {
@@ -138,7 +138,7 @@ export async function startLan(options: { release?: string; leaseMs?: number; st
         await eventually('Caddy to serve TLS', async () => { if (!existsSync(caCert)) return undefined; const r = await lan.httpsGet(desktop, `${url}/v1/health`, { timeoutMs: 3000 }); return 'status' in r ? true : undefined; }, 30000, 250);
       },
       stopCaddy: async () => { await stopChild(caddy); caddy = undefined; },
-      admin: async (args, env) => JSON.parse((await server.run(process.execPath, [join(rel, 'tools', 'admin.mjs'), ...args],
+      admin: async (args, env) => JSON.parse((await server.run(process.execPath, [join(coordinatorRel, 'tools', 'admin.mjs'), ...args],
         { PRIVANET_ADMIN_SECRET: adminSecret, PRIVANET_COORDINATOR_URL: 'http://127.0.0.1:4010', PRIVANODE_ALLOW_INSECURE_LOOPBACK: 'true', ...env })) as string) as unknown,
       enrollment: async capabilities => EnrollmentTokenSchema.parse(await lan.admin(['enrollment'], { PRIVANET_JOB_TYPES: capabilities, PRIVANET_ENROLLMENT_TTL_MS: '900000' })).token,
       nodeViews: async () => NodesSchema.parse(await lan.admin(['nodes'])).nodes,

@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import type { ChildProcess } from 'node:child_process';
 import type { Lan } from './netns-rig.js';
 import { eventually, netnsUnavailable, sleep, startLan } from './netns-rig.js';
@@ -17,7 +21,7 @@ const serverPolicy = { reserveMemoryBytes: 0, safetyMarginBytes: 0, maxMemoryByt
 async function withLan(t: test.TestContext, options: Parameters<typeof startLan>[0] = {}): Promise<Lan> {
   const lan = await startLan(options); t.after(() => lan.stop()); return lan;
 }
-async function startNode(lan: Lan, name: string, options: { capabilities?: string; policy?: object; enroll?: boolean; slots?: number; env?: NodeJS.ProcessEnv; host?: 'desktop' | 'server' } = {}) {
+async function startNode(lan: Lan, name: string, options: { capabilities?: string; policy?: object; enroll?: boolean; slots?: number; env?: NodeJS.ProcessEnv; host?: 'desktop' | 'server'; release?: string } = {}) {
   const host = options.host === 'server' ? lan.server : lan.desktop; const logs: string[] = [];
   const stateDir = join(lan.dir, `node-${name}`); await mkdir(lan.dir, { recursive: true });
   await writeFile(join(lan.dir, `${name}.policy.json`), JSON.stringify(options.policy ?? serverPolicy));
@@ -25,7 +29,7 @@ async function startNode(lan: Lan, name: string, options: { capabilities?: strin
   const token = options.enroll === false ? undefined : await lan.enrollment(capabilities);
   const env = lan.nodeEnv(name, { PRIVANODE_CAPABILITIES: capabilities, PRIVANODE_POLICY_FILE: join(lan.dir, `${name}.policy.json`), PRIVANODE_JOB_SLOTS: String(options.slots ?? 1),
     ...(token ? { PRIVANODE_ENROLLMENT_TOKEN: token } : {}), ...(options.host === 'server' ? { PRIVANODE_COORDINATOR_URL: lan.url } : {}), ...options.env });
-  const child = host.spawn(join(lan.release, 'bin', 'privanet-node'), [], env, logs);
+  const child = host.spawn(join(options.release ?? lan.release, 'bin', 'privanet-node'), [], env, logs);
   return { child, logs, stateDir, env, host, count: (event: string) => logs.join('').split(`"event":"${event}"`).length - 1 };
 }
 const nodeIdOf = async (stateDir: string) => (JSON.parse(await readFile(join(stateDir, 'identity.json'), 'utf8')) as { nodeId: string }).nodeId;
@@ -127,4 +131,68 @@ test('identity and state: a node keeps its identity across restarts, a rebuilt C
   const rebuilt = await startNode(lan, 'fresh', { capabilities: 'system.echo.v1', enroll: false });
   await new Promise<void>(resolve => rebuilt.child.once('close', () => resolve()));
   assert.equal(rebuilt.child.exitCode, 78); assert.equal(rebuilt.count('node.coordinator_binding_changed'), 1);
+});
+
+test('a node that starts while the Coordinator is down waits with backoff, never crashes, and connects when it returns', { skip, timeout: 120000 }, async t => {
+  const lan = await withLan(t);
+  const first = await startNode(lan, 'desk', { capabilities: 'system.echo.v1' }); await eventually('enrolment', () => first.count('node.enrolled') > 0 || undefined);
+  const nodeId = await nodeIdOf(first.stateDir); await stopChild(first.child); await lan.stopCoordinator();
+  const node = await startNode(lan, 'desk', { capabilities: 'system.echo.v1', enroll: false });
+  await eventually('failures to be logged', () => node.count('node.connection_failed') >= 2 || undefined, 30000);
+  const failuresAt = node.count('node.connection_failed'); await sleep(6000);
+  assert.equal(node.child.exitCode, null, 'still running'); assert.ok(node.count('node.connection_failed') - failuresAt <= 6, 'backing off, not spinning');
+  await lan.startCoordinator(); await eventually('the node to connect', () => node.count('node.authenticated') > 0 || undefined, 60000);
+  await eventually('online', () => online(lan, nodeId));
+});
+
+test('the shipped operator wrappers work against the shipped example configuration', { skip, timeout: 120000 }, async t => {
+  const lan = await withLan(t);
+  const envFile = join(lan.dir, 'coordinator.env');
+  const example = (await readFile(join(lan.release, 'deploy', 'env', 'coordinator.env.example'), 'utf8')).replace('PRIVANET_ADMIN_SECRET=', `PRIVANET_ADMIN_SECRET=${lan.adminSecret}`)
+    .replace('/var/lib/privanet/coordinator', join(lan.dir, 'coordinator'));
+  await writeFile(envFile, example);
+  const wrapperEnv = { PRIVANET_ENV_FILE: envFile, PRIVANET_HOME: lan.release, PRIVANET_NODE_BIN: process.execPath };
+  const nodes = JSON.parse(await lan.server.run(join(lan.release, 'deploy', 'bin', 'privanet-admin'), ['nodes'], wrapperEnv)) as { nodes: unknown[] };
+  assert.deepEqual(nodes, { nodes: [] });
+  const token = JSON.parse(await lan.server.run(join(lan.release, 'deploy', 'bin', 'privanet-admin'), ['enrollment'], { ...wrapperEnv, PRIVANET_JOB_TYPES: 'system.echo.v1' })) as { token: string };
+  assert.match(token.token, /^[a-f0-9]{64}$/);
+  const backup = join(lan.dir, 'backups', 'c.sqlite');
+  const out = await lan.server.run(join(lan.release, 'deploy', 'bin', 'privanet-backup'), [backup], wrapperEnv);
+  assert.match(out, /backup\.created/); assert.ok(existsSync(backup));
+  assert.equal(out.includes(lan.adminSecret), false, 'the wrappers never print the secret');
+});
+
+// Mixed versions, with the real binaries of an older release (v0.3.0-alpha.2, before lease waits and job slots): the upgrade path in docs/FIRST_DEPLOYMENT.md.
+async function oldRelease(): Promise<string | undefined> {
+  const fixed = process.env.PRIVANET_OLD_RELEASE_DIR; if (fixed) return fixed;
+  const base = join(tmpdir(), 'privanet-old-release'); const dir = join(base, 'privanet-0.3.0-alpha.2-linux');
+  if (existsSync(join(dir, 'bin', 'privanet-node'))) return dir;
+  try {
+    const run = promisify(execFile); await mkdir(base, { recursive: true });
+    await run('curl', ['-fsSL', '-o', join(base, 'old.tgz'), 'https://github.com/doopydoop364/PrivaNet-Core/releases/download/v0.3.0-alpha.2/privanet-0.3.0-alpha.2-linux.tar.gz'], { timeout: 120000 });
+    await run('tar', ['xzf', join(base, 'old.tgz'), '-C', base]); return existsSync(dir) ? dir : undefined;
+  } catch { return undefined; }
+}
+const old = skip ? undefined : await oldRelease();
+const mixedSkip = skip ?? (old ? undefined : 'the older release could not be downloaded (set PRIVANET_OLD_RELEASE_DIR)');
+
+test('mixed versions: a new Coordinator serves an old node, and an old Coordinator serves a new node and a new application', { skip: mixedSkip, timeout: 240000 }, async t => {
+  assert.ok(old);
+  // New Coordinator, old node: the old node sends plain lease requests and one-slot heartbeats and works unchanged.
+  const a = await withLan(t);
+  const appA = await a.application('mixed-a', 'system.echo.v1,system.hashchain.v1');
+  const oldNode = await startNode(a, 'old', { release: old }); await eventually('old node enrols', () => oldNode.count('node.enrolled') > 0 || undefined);
+  const idOld = await nodeIdOf(oldNode.stateDir); await eventually('old node online', () => online(a, idOld));
+  const fromOld = await a.client(a.desktop, appA.token, { type: 'system.hashchain.v1', inputs: Array.from({ length: 6 }, (_, i) => ({ seed: `m${i}`, iterations: 50000 })), inflight: 3, keyPrefix: 'mixed-a' });
+  assert.equal(fromOld.errors, 0); assert.deepEqual(fromOld.results[5], { digest: chain('m5', 50000), iterations: 50000 }); assert.ok(oldNode.count('job.completed') >= 1);
+  await a.stop();
+  // Old Coordinator, new node and new SDK: the node falls back to plain polling and one slot, the SDK to plain job reads.
+  const b = await withLan(t, { coordinatorRelease: old });
+  const appB = await b.application('mixed-b', 'system.echo.v1,system.hashchain.v1');
+  const newNode = await startNode(b, 'new', { slots: 4 }); await eventually('new node enrols', () => newNode.count('node.enrolled') > 0 || undefined);
+  const idNew = await nodeIdOf(newNode.stateDir); await eventually('new node online', () => online(b, idNew));
+  const fromNew = await b.client(b.desktop, appB.token, { type: 'system.hashchain.v1', inputs: Array.from({ length: 6 }, (_, i) => ({ seed: `n${i}`, iterations: 50000 })), inflight: 3, keyPrefix: 'mixed-b' });
+  assert.equal(fromNew.errors, 0); assert.deepEqual(fromNew.results[5], { digest: chain('n5', 50000), iterations: 50000 });
+  assert.match(newNode.logs.join(''), /node\.(lease_wait_unsupported|job_slots_unsupported)/, 'the new node noticed the old Coordinator and fell back');
+  assert.equal(newNode.child.exitCode, null);
 });
