@@ -1,12 +1,12 @@
 import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ZodError } from 'zod';
-import { AuthStartSchema, IdSchema, MAX_BODY_BYTES, NodeIdSchema, PROTOCOL_VERSION } from '@privanet/protocol';
+import { AuthStartSchema, IdSchema, LeaseRequestSchema, MAX_BODY_BYTES, NodeIdSchema, PROTOCOL_VERSION } from '@privanet/protocol';
 import { ApiError, equalSecret } from '@privanet/shared';
 import type { Coordinator } from './service.js';
 
 export interface LogEvent { event: string; code?: string }
-export interface ServerOptions { adminSecret: string; log?: (entry: LogEvent) => void; authRequestsPerMinute?: number }
+export interface ServerOptions { adminSecret: string; log?: (entry: LogEvent) => void; authRequestsPerMinute?: number; maxLeaseWaiters?: number }
 function body(req: IncomingMessage): Promise<unknown> {
   if (req.headers['content-type'] !== 'application/json') throw new ApiError(415, 'CONTENT_TYPE', 'expected application/json');
   return new Promise((resolve, reject) => {
@@ -38,6 +38,8 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
   const limit = options.authRequestsPerMinute ?? 120;
   if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('Invalid authentication rate limit');
   const buckets = new Map<string, { count: number; starts: number }>();
+  // Requests currently held open waiting for work. Bounded so idle nodes cannot exhaust sockets or memory; over the bound a request is answered at once like a plain poll.
+  const maxWaiters = options.maxLeaseWaiters ?? 512; let waiters = 0;
   function rate(req: IncomingMessage) {
     const key = req.socket.remoteAddress ?? 'unknown'; const now = Date.now();
     let bucket = buckets.get(key);
@@ -94,8 +96,23 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
           const node = core.authenticateNode(token);
           if (req.method === 'POST' && path === '/v1/node/heartbeat') { const input = await body(req); core.authenticateNode(token); core.heartbeat(node.nodeId, input); send(res, 200, { ok: true }); return; }
           if (req.method === 'POST' && path === '/v1/node/jobs/lease') {
-            if (JSON.stringify(await body(req)) !== '{}') throw new ApiError(400, 'INVALID_REQUEST', 'expected empty object');
-            core.authenticateNode(token); send(res, 200, { lease: core.lease(node.nodeId) }); return;
+            const { waitMs = 0 } = LeaseRequestSchema.parse(await body(req));
+            core.authenticateNode(token); let lease = core.lease(node.nodeId);
+            if (!lease && waitMs > 0 && waiters < maxWaiters) {
+              waiters++;
+              try {
+                // The response's 'close' fires when the node's connection ends before we answer (an IncomingMessage 'close' fires when the body is read, which is not a disconnect).
+                const deadline = Date.now() + waitMs; let gone = false; res.once('close', () => { gone = true; });
+                while (!lease && !gone && Date.now() < deadline) {
+                  // Sleep until work appears, the deadline passes or the node disconnects; then re-check the credential (revocation) and try again.
+                  await new Promise<void>(resolve => { const timer = setTimeout(finish, Math.max(1, deadline - Date.now())); const off = core.onWork(finish); res.once('close', finish);
+                    function finish() { clearTimeout(timer); off(); res.off('close', finish); resolve(); } });
+                  if (gone || res.destroyed) break;
+                  core.authenticateNode(token); lease = core.lease(node.nodeId);
+                }
+              } finally { waiters--; }
+            }
+            if (!res.destroyed) send(res, 200, { lease }); return;
           }
           if (req.method === 'POST' && path === '/v1/node/goodbye') {
             const input = await body(req); core.authenticateNode(token); core.goodbye(node.nodeId, input);

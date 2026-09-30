@@ -107,6 +107,17 @@ This protocol is the **control plane**. It carries bounded JSON: submissions, le
 
 Compatibility posture for that future: a job's `result` is `unknown` on the wire and validated against the per-type output schema, so a result may later be inline or carry an optional bounded reference, added to a type additively or through a new versioned type id; new optional lease, heartbeat and capability fields follow the same additive rule. Unresolved: the Coordinator has no signing key today, so the form of a transfer authorization is an open Phase 4 design question.
 
+## Lease requests that wait for work (unreleased, protocol version stays 1)
+
+`POST /v1/node/jobs/lease` accepts an optional `waitMs` (integer 0 to 8000): `{}` is a plain poll exactly as before; `{"waitMs": 5000}` asks the Coordinator to hold the request until a job is leasable for this node or the time is up, then answer `{lease}` (null on timeout). Effect: a job is picked up the moment it is submitted or requeued instead of at the node's next poll, and an idle node makes one request per wait instead of one per poll interval. Bounds and safety:
+- the field is strict and bounded (`waitMs` above 8000, negative, fractional or an unknown field is 400 `INVALID_REQUEST`); 8000 ms is below the Coordinator's 10 s request timeout;
+- the node's credential is re-checked every time the request wakes, so a node revoked while waiting gets 401, not a job;
+- a request whose connection closed is never leased to (a job submitted in the very instant of a disconnect can still be leased to the dead connection; that lease simply expires and the job is retried);
+- the number of held-open requests is bounded (default 512, `maxLeaseWaiters`); over the bound a request is answered at once like a plain poll;
+- wake-ups come from job submission, release and requeue; each waiter then re-runs the normal scheduler decision, so eligibility (capabilities, budgets, schedule) is unchanged.
+
+Compatibility: an old node sends `{}` and works unchanged. A new node against an older Coordinator gets 400 for `waitMs`, logs `node.lease_wait_unsupported`, and polls plainly from then on. The node's library default is no waiting; the daemon defaults `PRIVANODE_LEASE_WAIT_MS` to 5000, capped by the heartbeat interval so availability stays fresh, and a drain wakes an idle wait at once.
+
 ## Additions in 0.3.0-alpha.1 (protocol version stays 1)
 
 - `POST /v1/admin/applications` accepts an optional `fetchIdentity` (`product`, `infoUrl`).

@@ -31,10 +31,10 @@ async function listen(server: Server, port = 0): Promise<string> {
 async function close(server: Server) {
   await new Promise<void>((resolve, reject) => { server.close(error => error ? reject(error) : resolve()); server.closeAllConnections(); });
 }
-async function fixture(t: TestContext, authRequestsPerMinute = 120, policy: Partial<Policy> = {}) {
+async function fixture(t: TestContext, authRequestsPerMinute = 120, policy: Partial<Policy> = {}, serverOptions: { maxLeaseWaiters?: number } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'privanet-http-')); const db = join(dir, 'coordinator.sqlite');
   const logs: unknown[] = []; const admin = secret(); let store = new SqliteStore(db); let core = new Coordinator(store, policy);
-  let server = createCoordinatorServer(core, { adminSecret: admin, log: e => logs.push(e), authRequestsPerMinute });
+  let server = createCoordinatorServer(core, { adminSecret: admin, log: e => logs.push(e), authRequestsPerMinute, ...serverOptions });
   const url = await listen(server); const transport = new Transport({ url, allowInsecureLoopback: true });
   t.after(async () => { await close(server); store.close(); await rm(dir, { recursive: true, force: true }); });
   return { dir, db, url, transport, admin, logs, get core() { return core; },
@@ -336,4 +336,71 @@ test('a busy node polls again at once after finishing a job, so throughput is no
     await Promise.all(jobs.map(job => sdk.waitForResult(job.id, { timeoutMs: 10000, pollMs: 20 })));
     const took = Date.now() - started; assert.ok(took < 6000, `20 queued jobs took ${took} ms with a 3000 ms poll interval`);
   } finally { abort.abort(); await running; } // never leave the node polling if the assertion fails
+});
+
+
+test('a lease request can wait for work: the job is picked up the moment it is submitted, not at the next poll; an idle wait ends at its deadline', { timeout: 30000 }, async t => {
+  const f = await fixture(t); const app = await f.app(); const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token });
+  const idle = await enrolled(f, { leaseWaitMs: 400, heartbeatMs: 5000 }, 'idle');
+  const idleStart = Date.now(); await idle.tick(); const idleMs = Date.now() - idleStart;
+  assert.ok(idleMs >= 350 && idleMs < 2500, `an idle wait ended after ${idleMs} ms, expected about 400`);
+  const node = await enrolled(f, { leaseWaitMs: 4000, heartbeatMs: 5000 }, 'waiter'); await node.tick(); // enroll and connect; the queue is empty, so this waits out the deadline
+  const waiting = node.tick(); await new Promise(resolve => setTimeout(resolve, 200));
+  const started = Date.now(); const job = await sdk.submit('system.echo.v1', { message: 'now' }, 'wake');
+  await waiting; const pickup = Date.now() - started;
+  assert.ok(pickup < 1500, `the waiting node took ${pickup} ms to pick up a new job`); assert.equal((await sdk.getJob(job.id)).status, 'COMPLETED');
+});
+
+test('waitMs is strict and bounded; a plain empty body still works, so older nodes are unaffected', async t => {
+  const f = await fixture(t); const grant = await f.grant();
+  const node = new PrivaNode({ url: f.url, allowInsecureLoopback: true, stateDir: join(f.dir, 'strict'), capabilities: ['system.echo.v1'], enrollmentToken: grant.token }); await node.tick();
+  // Authenticate as this node by hand to send raw lease bodies.
+  const { session } = node as unknown as { session: { token: string } };
+  for (const body of [{ waitMs: 8001 }, { waitMs: -1 }, { waitMs: 1.5 }, { waitMs: '5' }, { waitMs: 1, extra: true }, { extra: 1 }])
+    await assert.rejects(f.transport.request('POST', '/v1/node/jobs/lease', LeaseResponseSchema, body, session.token), errorCode('INVALID_REQUEST'), JSON.stringify(body));
+  assert.deepEqual(await f.transport.request('POST', '/v1/node/jobs/lease', LeaseResponseSchema, {}, session.token), { lease: null });
+  assert.deepEqual(await f.transport.request('POST', '/v1/node/jobs/lease', LeaseResponseSchema, { waitMs: 0 }, session.token), { lease: null });
+});
+
+test('a waiting lease is never handed to a node that disconnected or was revoked, and a drain wakes an idle wait at once', { timeout: 30000 }, async t => {
+  const f = await fixture(t); const app = await f.app(); const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token });
+  // Drain: the idle wait is aborted immediately; nothing is leased afterwards.
+  const draining = await enrolled(f, { leaseWaitMs: 4000, heartbeatMs: 5000 }, 'draining'); await draining.tick();
+  const idleWait = draining.tick(); await new Promise(resolve => setTimeout(resolve, 150)); const t0 = Date.now(); draining.drain(); await idleWait;
+  assert.ok(Date.now() - t0 < 1000, 'a drain must not wait out the lease deadline');
+  await new Promise(resolve => setTimeout(resolve, 100)); // let the Coordinator observe the closed connection (a job submitted in the same instant as a disconnect can be leased to the dead connection; the lease then simply expires)
+  const job = await sdk.submit('system.echo.v1', { message: 'stay queued' }, 'after-drain'); await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal((await sdk.getJob(job.id)).status, 'QUEUED', 'a drained (disconnected) waiter must not take the job');
+  // Revocation while waiting: the credential is re-checked on wake, so the revoked node gets 401, not the job.
+  const doomed = await enrolled(f, { leaseWaitMs: 4000, heartbeatMs: 5000 }, 'doomed'); await doomed.tick();
+  const nodeId = (doomed.status as { nodeId: string | null }).nodeId; assert.ok(nodeId);
+  const pending = doomed.tick().then(() => 'ok' as const, (error: unknown) => error); await new Promise(resolve => setTimeout(resolve, 150));
+  await f.transport.request('POST', `/v1/admin/nodes/${nodeId}/revoke`, AckSchema, {}, f.admin);
+  await sdk.submit('system.echo.v1', { message: 'to the revoked node' }, 'after-revoke');
+  const outcome = await pending; assert.ok(outcome !== 'ok' && errorCode('UNAUTHORIZED_NODE')(outcome), `a revoked waiter must fail with 401, got ${String(outcome)}`);
+});
+
+test('the number of held-open lease requests is bounded: over the bound a request is answered at once like a plain poll', async t => {
+  const f = await fixture(t, 120, {}, { maxLeaseWaiters: 0 }); const grant = await f.grant();
+  const node = new PrivaNode({ url: f.url, allowInsecureLoopback: true, stateDir: join(f.dir, 'cap'), capabilities: ['system.echo.v1'], enrollmentToken: grant.token, leaseWaitMs: 4000, heartbeatMs: 5000 });
+  await node.tick(); const started = Date.now(); await node.tick(); assert.ok(Date.now() - started < 1500, 'with no waiter capacity the request returns at once');
+});
+
+test('against an older Coordinator that rejects waitMs, the node falls back to plain polling and keeps working', async t => {
+  const f = await fixture(t); const app = await f.app(); const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token });
+  // A proxy that behaves like v0.3.0-alpha.2: a lease body other than {} is a 400.
+  const proxy = createServer((req, res) => {
+    const chunks: Buffer[] = []; req.on('data', (c: Buffer) => chunks.push(c)); req.on('end', () => { void (async () => {
+      const body = Buffer.concat(chunks);
+      if (req.url === '/v1/node/jobs/lease' && body.toString() !== '{}') { res.writeHead(400, { 'Content-Type': 'application/json', 'X-PrivaNet-Protocol': '1' }); res.end(JSON.stringify({ error: { code: 'INVALID_REQUEST', message: 'expected empty object' } })); return; }
+      const upstream = await fetch(f.url + (req.url ?? ''), { method: req.method ?? 'GET', headers: Object.fromEntries(Object.entries(req.headers).filter(([k]) => ['content-type', 'authorization', 'x-privanet-protocol'].includes(k)).map(([k, v]) => [k, String(v)])), ...(req.method === 'POST' ? { body } : {}) });
+      const text = await upstream.text(); res.writeHead(upstream.status, { 'Content-Type': 'application/json', 'X-PrivaNet-Protocol': '1' }); res.end(text);
+    })(); });
+  });
+  const proxyUrl = await listen(proxy); t.after(() => close(proxy));
+  const grant = await f.grant(); const events: string[] = [];
+  const node = new PrivaNode({ url: proxyUrl, allowInsecureLoopback: true, stateDir: join(f.dir, 'old'), capabilities: ['system.echo.v1'], enrollmentToken: grant.token, leaseWaitMs: 300, heartbeatMs: 5000, log: e => events.push(e.event) });
+  await node.tick(); assert.ok(events.includes('node.lease_wait_unsupported'), 'the node noticed and stopped asking');
+  const job = await sdk.submit('system.echo.v1', { message: 'old coordinator' }, 'compat'); await node.tick();
+  assert.equal((await sdk.getJob(job.id)).status, 'COMPLETED');
 });

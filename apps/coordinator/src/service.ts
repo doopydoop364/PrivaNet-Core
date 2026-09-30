@@ -178,7 +178,7 @@ export class Coordinator {
       const job: JobRecord = { id: randomUUID(), ...request, applicationId: app.id, protocolVersion: PROTOCOL_VERSION,
         createdAt: this.now(), completedAt: null, status: 'QUEUED', attempts: 0, result: null, error: null,
         assignedNodeId: null, leaseId: null, leaseExpiresAt: null };
-      this.store.saveJob(job); return this.view(job);
+      this.store.saveJob(job); this.notifyWork(); return this.view(job);
     });
   }
   getJob(app: ApplicationRecord, id: string): Job {
@@ -191,7 +191,12 @@ export class Coordinator {
     const exhausted = job.attempts >= this.policy.maxAttempts;
     this.store.saveJob({ ...job, status: exhausted ? 'FAILED' : 'QUEUED', completedAt: exhausted ? this.now() : null,
       assignedNodeId: null, leaseId: null, leaseExpiresAt: null, error: { code } });
+    if (!exhausted) this.notifyWork();
   }
+  private readonly workListeners = new Set<() => void>();
+  /** Calls `listener` (asynchronously, never inside a transaction) whenever a job becomes leasable: submitted, released or requeued. Returns the unsubscribe function. */
+  onWork(listener: () => void): () => void { this.workListeners.add(listener); return () => { this.workListeners.delete(listener); }; }
+  private notifyWork(): void { for (const listener of [...this.workListeners]) queueMicrotask(listener); }
   private lastRetentionAt = 0;
   maintain(): void {
     this.store.transaction(() => {
@@ -273,6 +278,7 @@ export class Coordinator {
     this.store.saveJob({ ...job, status: exhausted ? 'FAILED' : 'QUEUED', completedAt: exhausted ? this.now() : null,
       attempts: Math.max(0, job.attempts - 1), releases, assignedNodeId: null, leaseId: null, leaseExpiresAt: null,
       error: exhausted ? { code: 'RELEASE_LIMIT' } : null });
+    if (!exhausted) this.notifyWork();
   }
   /** Planned departure: return the node's leases without penalty and record that it left on purpose. */
   goodbye(nodeId: string, input: unknown): void {
