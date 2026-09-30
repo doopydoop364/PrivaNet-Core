@@ -107,6 +107,10 @@ Operators define a bandwidth ceiling and a monthly transfer allowance (implement
 
 Resource accounting must measure actual useful bytes rather than advertised bandwidth.
 
+Future direct data transfers (Phase 4 and 5, [DATA_PLANE.md](DATA_PLANE.md)) consume the same owner limits: a valid transfer authorization never overrides the bandwidth ceiling, the monthly transfer allowance, the disk limits, the schedule or a paused contribution. Authorizations describe what a transfer may do; only the owner's policy decides whether the node does it. Bytes will be metered from verified transfers, not from issued authorizations.
+
+A node running beside the Coordinator on an always-on server is an optional, separate contribution with conservative limits, so the control plane's availability wins over contributed work; the Coordinator never depends on that node ([DATA_PLANE.md](DATA_PLANE.md#11-deployment-model)).
+
 ## Battery-powered devices
 
 Portable systems should support policies such as:

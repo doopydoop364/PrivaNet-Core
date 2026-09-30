@@ -13,6 +13,18 @@ Status: operator guidance for the v0.2.1 Coordinator. The Coordinator is a singl
 | Forwarded headers | Ignored on purpose (`X-Forwarded-For` is never trusted). |
 | Queue and retention | `PRIVANET_MAX_PENDING_PER_APP` (default 10000) rejects further submissions with 429 `QUEUE_LIMIT`; `PRIVANET_RETENTION_MS` (default 30 days, 0 = keep forever) deletes finished jobs and their results. After retention a duplicate submission with an old idempotency key creates a new job, so keep retention longer than your clients' retry window. |
 
+## First deployment shape and the control plane
+
+The Coordinator is the **control plane** and is sized for control traffic (submissions, heartbeats, leases, scheduling, later placement and accounting metadata), not for bulk data: its limits are 32 KiB request and 512 KiB response bodies, and future large payloads are meant to move directly between applications and nodes rather than through it ([DATA_PLANE.md](DATA_PLANE.md)). A modest always-on machine is therefore the intended host.
+
+```text
+Always-on server
+  |- Coordinator          HIGH priority, always available (state, auth, scheduler, leases)
+  `- PrivaNode (optional) LOW / adaptive priority, spare resources only, separate process, state and credential
+```
+
+Give the server's node conservative limits so the Coordinator's availability wins; the Coordinator does not depend on it, and it authenticates and is scheduled like any remote node (no localhost special case). Applications may run on the same machine or anywhere else; that is a deployment choice, and they always reach the Coordinator through the SDK.
+
 ## Reverse-proxy review findings
 
 1. **All clients share the proxy's address.** Because forwarded headers are ignored, the per-address authentication limit sees every client as the proxy. One abusive client can exhaust the shared budget and lock everyone out of authentication. Do the real per-client limiting at the proxy, and raise `PRIVANET_AUTH_REQUESTS_PER_MINUTE` to a value the proxy's own limit keeps safe. Do not expose the Coordinator listener to anything except the proxy.

@@ -101,6 +101,12 @@ when nobody has yet acquired a replacement lease. Since v0.2.1 a node running a 
 idempotency by job ID and cannot infer exactly-once side effects from fencing.
 Node restart may lose an unreported result; its lease expires and retries.
 
+## Control plane and the future data plane
+
+This protocol is the **control plane**. It carries bounded JSON: submissions, leases, heartbeats, results within the per-type output schema, and later placement and transfer authorizations. It is deliberately not a bulk-data channel (32 KiB request bodies, 512 KiB responses). Future large payloads move directly between authorized participants (application to node, node to node) under short-lived, narrowly scoped Coordinator-issued transfer authorizations; the Coordinator remains the authority and never relays the bytes. This is a design direction ([DATA_PLANE.md](DATA_PLANE.md), ADR 006) and adds nothing to protocol 1 today.
+
+Compatibility posture for that future: a job's `result` is `unknown` on the wire and validated against the per-type output schema, so a result may later be inline or carry an optional bounded reference, added to a type additively or through a new versioned type id; new optional lease, heartbeat and capability fields follow the same additive rule. Unresolved: the Coordinator has no signing key today, so the form of a transfer authorization is an open Phase 4 design question.
+
 ## Additions in 0.3.0-alpha.1 (protocol version stays 1)
 
 - `POST /v1/admin/applications` accepts an optional `fetchIdentity` (`product`, `infoUrl`).

@@ -319,6 +319,9 @@ Then measure against milestones of 1,000, 10,000 and 100,000 pages using exactly
 
 ## Implementation notes (v0.3.0-alpha.1)
 
+**Results stay inline.** Digests (at most 28,000 bytes) keep returning through the Coordinator. The control-plane/data-plane split ([DATA_PLANE.md](DATA_PLANE.md)) does not change that; larger-result references would be considered only if crawl measurements show they are needed.
+
+
 Where the shipped `web.fetch.v1` refines the design above:
 
 - **Schemas** live in `@privanet/protocol` (`FetchInputSchema`, `FetchOutputSchema`, `FetchIdentitySchema`, `FETCH_OUTCOMES`, `FETCH_MAX_RESULT_BYTES`) and are the authoritative contract; applications import them instead of mirroring. Input fields have no schema defaults (all optional except `url`) so typed callers can omit them; the node applies the defaults and its own hard maxima.

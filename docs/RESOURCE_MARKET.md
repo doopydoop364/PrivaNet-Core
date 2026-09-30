@@ -364,7 +364,7 @@ design consequences are:
 | --- | --- |
 | Fake demand; wash activity | Circulation ledger makes it zero-sum; subsidies bounded and account-gated; reward only for policy-valid consumption |
 | Fake contribution; falsified telemetry | Never reward self-reported figures; independent measurement (both ends, challenges, spot checks, redundancy) |
-| Colluding nodes/clients; bandwidth farming | Rewardable traffic must be Coordinator-authorised for an application purpose; cap or exclude traffic between related parties; anomaly detection |
+| Colluding nodes/clients; bandwidth farming | Rewardable traffic must be Coordinator-authorised for an application purpose and evidenced by verified data-plane transfers rather than issued authorizations (see [DATA_PLANE.md](DATA_PLANE.md#10-accounting-implications-phase-7-and-later)); cap or exclude traffic between related parties; anomaly detection |
 | Useless compute jobs | Job types come from the typed registry, applications pay for them, and verification defines rewardable work |
 | Storage churn only to earn | Reward stored-and-retained data over time, charge for churn and repair, discount short-lived storage |
 | Sybil nodes | Enrollment control now; identity cost and reputation in Phase 10; never let identity count alone buy influence over the clearing price |

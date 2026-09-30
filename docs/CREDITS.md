@@ -40,7 +40,7 @@ Different resource classes should remain independently measurable before convers
 Examples:
 
 - storage actually occupied over time
-- bandwidth actually served
+- bandwidth actually served (verified useful bytes from data-plane transfers, not issued transfer authorizations; see [DATA_PLANE.md](DATA_PLANE.md#10-accounting-implications-phase-7-and-later))
 - verified compute/jobs completed
 - crawler/indexing work
 - repair traffic
