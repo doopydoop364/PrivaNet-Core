@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import type { Lan } from './netns-rig.js';
@@ -45,4 +45,86 @@ test('a desktop on another host enrolls over TLS, runs a job, and needs no inbou
   const listeners = await lan.desktop.run('sh', ['-c', 'cat /proc/net/tcp /proc/net/tcp6 | awk \'$4=="0A"\' | wc -l']);
   assert.equal(Number(listeners.trim()), 0, 'the worker host has no listening TCP socket');
   assert.ok(lan.server.ip !== lan.desktop.ip);
+});
+
+test('the LAN is not trusted: TLS is verified, the admin API and the Coordinator\'s own port are unreachable from it, and plain HTTP is refused by the node', { skip }, async t => {
+  const lan = await withLan(t);
+  const health = await lan.httpsGet(lan.desktop, `${lan.url}/v1/health`);
+  assert.ok('status' in health && health.status === 200, `with the local CA the desktop reaches the Coordinator over TLS at the IP address, got ${JSON.stringify(health)}`);
+  const unverified = await lan.httpsGet(lan.desktop, `${lan.url}/v1/health`, { ca: false });
+  assert.ok('error' in unverified && /CERT|SELF_SIGNED|UNABLE_TO_VERIFY/.test(unverified.error), `without the CA the certificate is rejected, got ${JSON.stringify(unverified)}`);
+  const admin = await lan.httpsGet(lan.desktop, `${lan.url}/v1/admin/nodes`, { bearer: lan.adminSecret });
+  assert.ok('status' in admin && admin.status === 403, `the admin API is refused at the proxy even with the right secret, got ${JSON.stringify(admin)}`);
+  for (const target of ['http://10.77.0.1:4010/v1/health', 'http://10.77.0.1/v1/health', 'http://10.77.0.1:8080/']) {
+    const direct = await lan.httpsGet(lan.desktop, target, { timeoutMs: 1500 });
+    assert.ok('error' in direct, `${target} must not answer from the LAN, got ${JSON.stringify(direct)}`);
+  }
+  // A node refuses plain HTTP to a LAN address even when the loopback exception is switched on.
+  const plain = await startNode(lan, 'plain', { enroll: false, env: { PRIVANODE_COORDINATOR_URL: 'http://10.77.0.1', PRIVANODE_ALLOW_INSECURE_LOOPBACK: 'true' } });
+  await new Promise<void>(resolve => plain.child.once('close', () => resolve()));
+  assert.equal(plain.count('node.startup_failed'), 1); assert.notEqual(plain.child.exitCode, 0);
+});
+
+test('a node that does not trust the CA never enrols, says why, and leaves the enrollment token unused', { skip }, async t => {
+  const lan = await withLan(t);
+  const capabilities = 'system.echo.v1'; const token = await lan.enrollment(capabilities);
+  const untrusting = await startNode(lan, 'notrust', { enroll: false, capabilities, env: { NODE_EXTRA_CA_CERTS: '', PRIVANODE_ENROLLMENT_TOKEN: token } });
+  await eventually('a logged TLS failure', () => untrusting.logs.join('').includes('"reason":"TLS_CERTIFICATE"') || undefined);
+  assert.equal(untrusting.child.exitCode, null, 'it keeps retrying instead of crashing'); assert.equal(untrusting.count('node.enrolled'), 0);
+  await stopChild(untrusting.child);
+  // The same token still works for a node that does trust the CA.
+  const trusting = await startNode(lan, 'trust', { enroll: false, capabilities, env: { PRIVANODE_ENROLLMENT_TOKEN: token } });
+  await eventually('enrolment with the CA', () => trusting.count('node.enrolled') > 0 || undefined);
+});
+
+test('Coordinator outages: a node that starts during one, loses the Coordinator idle or mid-job, and an application all recover with no operator action', { skip, timeout: 240000 }, async t => {
+  const lan = await withLan(t, { leaseMs: 3000 });
+  const app = await lan.application('outage-app', 'system.echo.v1,system.hashchain.v1');
+  const node = await startNode(lan, 'desk'); await eventually('enrolment', () => node.count('node.enrolled') > 0 || undefined);
+  const nodeId = await nodeIdOf(node.stateDir); await eventually('online', () => online(lan, nodeId));
+  const pid = node.child.pid;
+  // Lost while idle (the node is holding a lease request open): it logs, backs off, stays up, and reconnects by itself.
+  await lan.stopCoordinator('SIGTERM');
+  await eventually('a logged connection failure', () => node.count('node.connection_failed') > 0 || undefined);
+  assert.match(node.logs.join(''), /"code":"INVALID_RESPONSE"/, 'a proxy 502 is reported as such, not as a parse error');
+  await sleep(1500); assert.equal(node.child.exitCode, null); assert.equal(node.child.pid, pid);
+  await lan.startCoordinator();
+  await eventually('reconnect', () => online(lan, nodeId), 30000);
+  assert.equal(node.child.pid, pid, 'the same process reconnected; nothing restarted it');
+  assert.equal(await nodeIdOf(node.stateDir), nodeId, 'same identity');
+  // Lost while Caddy (the TLS front) is down: connection refused, reported as such.
+  await lan.stopCaddy(); await eventually('a refused connection', () => node.logs.join('').includes('"reason":"CONNECTION_REFUSED"') || undefined, 20000);
+  await lan.startCaddy(); await eventually('reconnect after Caddy', async () => (await lan.httpsGet(lan.desktop, `${lan.url}/v1/health`)).hasOwnProperty('status') || undefined);
+  await eventually('online again', () => online(lan, nodeId), 30000);
+  // Lost in the middle of a job, with an application waiting through the outage on another call: one correct result, no error for the application.
+  const work = lan.client(lan.desktop, app.token, { type: 'system.hashchain.v1', inputs: [{ seed: 'outage', iterations: 3_000_000 }], inflight: 1, keyPrefix: 'outage', timeoutMs: 150000 }, 200000);
+  await eventually('the job to be running', async () => (await lan.nodeViews()).find(n => n.nodeId === nodeId)?.currentJobs === 1 || undefined, 30000);
+  await lan.stopCoordinator('SIGKILL'); await sleep(4000); await lan.startCoordinator();
+  const summary = await work;
+  assert.equal(summary.errors, 0); assert.deepEqual(summary.results[0], { digest: chain('outage', 3_000_000), iterations: 3_000_000 });
+  assert.equal(node.child.pid, pid);
+  assert.ok(node.count('job.completed') >= 1);
+});
+
+test('identity and state: a node keeps its identity across restarts, a rebuilt Coordinator is refused with exit status 78, and a revoked node stays out', { skip, timeout: 240000 }, async t => {
+  const lan = await withLan(t);
+  const node = await startNode(lan, 'desk', { capabilities: 'system.echo.v1' }); await eventually('enrolment', () => node.count('node.enrolled') > 0 || undefined);
+  const nodeId = await nodeIdOf(node.stateDir); const identity = await readFile(join(node.stateDir, 'identity.json'), 'utf8');
+  await stopChild(node.child);
+  const again = await startNode(lan, 'desk', { capabilities: 'system.echo.v1', enroll: false });
+  await eventually('re-authentication, not re-enrolment', () => again.count('node.authenticated') > 0 || undefined);
+  assert.equal(again.count('node.enrolled'), 0); assert.equal(await readFile(join(again.stateDir, 'identity.json'), 'utf8'), identity);
+  assert.equal((await lan.nodeViews()).length, 1, 'no second node record');
+  // Revoked: refused now and after a Coordinator restart.
+  await lan.admin(['revoke-node', nodeId]);
+  await eventually('the revoked node to be refused', () => again.logs.join('').includes('UNAUTHORIZED_NODE') || undefined);
+  await lan.stopCoordinator(); await lan.startCoordinator(); await sleep(3000);
+  assert.notEqual((await lan.nodeViews()).find(n => n.nodeId === nodeId)?.status, 'ONLINE');
+  await stopChild(again.child);
+  // A Coordinator rebuilt from nothing has a different ID: the node refuses it, stops, and exits with the configuration status.
+  const fresh = await startNode(lan, 'fresh', { capabilities: 'system.echo.v1' }); await eventually('enrolment', () => fresh.count('node.enrolled') > 0 || undefined);
+  await stopChild(fresh.child); await lan.stopCoordinator(); await rm(join(lan.dir, 'coordinator'), { recursive: true, force: true }); await lan.startCoordinator();
+  const rebuilt = await startNode(lan, 'fresh', { capabilities: 'system.echo.v1', enroll: false });
+  await new Promise<void>(resolve => rebuilt.child.once('close', () => resolve()));
+  assert.equal(rebuilt.child.exitCode, 78); assert.equal(rebuilt.count('node.coordinator_binding_changed'), 1);
 });

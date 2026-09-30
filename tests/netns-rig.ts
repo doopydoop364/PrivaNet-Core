@@ -33,7 +33,7 @@ export interface Host {
   run(command: string, args: string[], env?: NodeJS.ProcessEnv, timeoutMs?: number): Promise<string>;
 }
 export interface Lan {
-  dir: string; release: string; server: Host; desktop: Host; url: string; caCert: string;
+  dir: string; adminSecret: string; release: string; server: Host; desktop: Host; /** A third machine on the LAN that plays the public web. */ web: Host; url: string; caCert: string;
   /** Environment for a PrivaNode on the desktop: URL, CA trust, state directory. */
   nodeEnv(name: string, extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
   coordinatorLogs: string[]; caddyLogs: string[];
@@ -47,7 +47,10 @@ export interface Lan {
   /** A short node process on the given host that performs one HTTPS request and prints status and body. */
   httpsGet(host: Host, url: string, options?: { ca?: boolean; bearer?: string; timeoutMs?: number }): Promise<{ status: number; body: string } | { error: string }>;
   /** Run an application (the SDK) on a host and return its summary; see tests/lan-client.mjs. */
-  client(host: Host, appToken: string, spec: unknown, timeoutMs?: number): Promise<{ results: unknown[]; errors: number; ms: number; p50: number | null; p95: number | null }>;
+  client(host: Host, appToken: string, spec: unknown, timeoutMs?: number): Promise<{ results: unknown[]; errors: number; attempts: number[]; ms: number; p50: number | null; p95: number | null }>;
+  /** A small website on the web host: pages /p/N after `delayMs`. */
+  startSite(delayMs: number): Promise<void>;
+  pids(): { coordinator: number | undefined; caddy: number | undefined };
   link(up: boolean): Promise<void>;
   children: ChildProcess[];
   stop(): Promise<void>;
@@ -68,7 +71,7 @@ const occurrences = (logs: string[], event: string) => logs.join('').split(`"eve
  */
 export async function startLan(options: { release?: string; leaseMs?: number; staleMs?: number; offlineMs?: number; coordinatorEnv?: NodeJS.ProcessEnv } = {}): Promise<Lan> {
   const id = randomBytes(3).toString('hex'); const dir = await mkdtemp(join(tmpdir(), 'privanet-lan-'));
-  const serverNs = `pns${id}`; const desktopNs = `pnd${id}`; const vs = `vs${id}`; const vd = `vd${id}`;
+  const serverNs = `pns${id}`; const desktopNs = `pnd${id}`; const webNs = `pnw${id}`; const vs = `vs${id}`; const vd = `vd${id}`; const vw = `vw${id}`; const bridge = `pnb${id}`;
   const children: ChildProcess[] = []; const coordinatorLogs: string[] = []; const caddyLogs: string[] = [];
   let release = options.release ?? process.env.PRIVANET_RELEASE_DIR;
   if (!release) {
@@ -83,18 +86,23 @@ export async function startLan(options: { release?: string; leaseMs?: number; st
       if (logs) { child.stdout?.on('data', (c: Buffer) => logs.push(c.toString())); child.stderr?.on('data', (c: Buffer) => logs.push(c.toString())); }
       children.push(child); return child;
     },
-    run: async (command, args, env, timeoutMs = 20000) => (await exec('ip', ['netns', 'exec', ns, command, ...args], { env: { ...process.env, ...env }, timeout: timeoutMs })).stdout,
+    run: async (command, args, env, timeoutMs = 20000) => (await exec('ip', ['netns', 'exec', ns, command, ...args], { env: { ...process.env, ...env }, maxBuffer: 256 * 1024 * 1024, timeout: timeoutMs })).stdout,
   });
-  const server = mkHost('server', serverNs, '10.77.0.1'); const desktop = mkHost('desktop', desktopNs, '10.77.0.2');
+  const server = mkHost('server', serverNs, '10.77.0.1'); const desktop = mkHost('desktop', desktopNs, '10.77.0.2'); const web = mkHost('web', webNs, '10.77.0.3');
   const teardown = async () => {
     for (const child of children) await stopChild(child);
-    for (const ns of [serverNs, desktopNs]) { try { sh('ip', ['netns', 'del', ns]); } catch { /* already gone */ } }
+    for (const ns of [serverNs, desktopNs, webNs]) { try { sh('ip', ['netns', 'del', ns]); } catch { /* already gone */ } }
+    try { sh('ip', ['link', 'del', bridge]); } catch { /* already gone */ }
     await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   };
   try {
-    for (const ns of [serverNs, desktopNs]) sh('ip', ['netns', 'add', ns]);
-    sh('ip', ['link', 'add', vs, 'type', 'veth', 'peer', 'name', vd]);
-    for (const [link, ns, ip] of [[vs, serverNs, server.ip], [vd, desktopNs, desktop.ip]] as const) {
+    for (const ns of [serverNs, desktopNs, webNs]) sh('ip', ['netns', 'add', ns]);
+    // One Ethernet segment, like a home LAN: every host's virtual cable plugs into a bridge.
+    sh('ip', ['link', 'add', bridge, 'type', 'bridge']); sh('ip', ['link', 'set', bridge, 'up']);
+    for (const [link, ns, ip] of [[vs, serverNs, server.ip], [vd, desktopNs, desktop.ip], [vw, webNs, web.ip]] as const) {
+      const peer = `p${link}`;
+      sh('ip', ['link', 'add', link, 'type', 'veth', 'peer', 'name', peer]);
+      sh('ip', ['link', 'set', peer, 'master', bridge]); sh('ip', ['link', 'set', peer, 'up']);
       sh('ip', ['link', 'set', link, 'netns', ns]);
       for (const args of [['addr', 'add', `${ip}/24`, 'dev', link], ['link', 'set', link, 'up'], ['link', 'set', 'lo', 'up']]) sh('ip', ['netns', 'exec', ns, 'ip', ...args]);
     }
@@ -117,7 +125,7 @@ export async function startLan(options: { release?: string; leaseMs?: number; st
     let coordinator: ChildProcess | undefined; let caddy: ChildProcess | undefined;
     const waitFor = (logs: string[], event: string, before: number, ms = 20000) => eventually(event, () => occurrences(logs, event) > before || undefined, ms, 50);
     const lan: Lan = {
-      dir, release: rel, server, desktop, url, caCert, coordinatorLogs, caddyLogs, children,
+      dir, adminSecret, release: rel, server, desktop, web, url, caCert, coordinatorLogs, caddyLogs, children,
       nodeEnv: (name, extra) => ({ PRIVANODE_COORDINATOR_URL: url, NODE_EXTRA_CA_CERTS: caCert, PRIVANODE_STATE_DIR: join(dir, `node-${name}`),
         PRIVANODE_HEARTBEAT_MS: '500', PRIVANODE_POLL_MS: '100', ...extra }),
       startCoordinator: async () => {
@@ -136,13 +144,18 @@ export async function startLan(options: { release?: string; leaseMs?: number; st
       nodeViews: async () => NodesSchema.parse(await lan.admin(['nodes'])).nodes,
       application: async (name, jobTypes, extra) => AppCredentialSchema.parse(await lan.admin(['application', name], { PRIVANET_JOB_TYPES: jobTypes, ...extra })),
       httpsGet: async (host, target, opts = {}) => {
-        const script = `const r = await fetch(process.argv[1], { headers: process.argv[2] ? { Authorization: 'Bearer ' + process.argv[2] } : {}, signal: AbortSignal.timeout(${opts.timeoutMs ?? 5000}) }).catch(e => ({ e })); ` +
+        const script = `const r = await fetch(process.argv[1], { headers: { 'X-PrivaNet-Protocol': '1', ...(process.argv[2] ? { Authorization: 'Bearer ' + process.argv[2] } : {}) }, signal: AbortSignal.timeout(${opts.timeoutMs ?? 5000}) }).catch(e => ({ e })); ` +
           `if (r.e) { console.log(JSON.stringify({ error: String(r.e.cause?.code ?? r.e.name) })); } else { console.log(JSON.stringify({ status: r.status, body: (await r.text()).slice(0, 300) })); }`;
         try { return JSON.parse(await host.run(process.execPath, ['--input-type=module', '-e', script, target, opts.bearer ?? ''], opts.ca === false ? {} : { NODE_EXTRA_CA_CERTS: caCert }, (opts.timeoutMs ?? 5000) + 5000)) as { status: number; body: string } | { error: string }; }
         catch { return { error: 'PROCESS' }; }
       },
-      client: async (host, appToken, spec, timeoutMs = 180000) => JSON.parse(await host.run(process.execPath, [join(repo, 'tests', 'lan-client.mjs'), JSON.stringify(spec)],
-        { PRIVANET_RELEASE_DIR: rel, PRIVANET_COORDINATOR_URL: url, PRIVANET_APP_TOKEN: appToken, NODE_EXTRA_CA_CERTS: caCert }, timeoutMs)) as { results: unknown[]; errors: number; ms: number; p50: number | null; p95: number | null },
+      client: async (host, appToken, spec, timeoutMs = 180000) => { const file = join(dir, `spec-${randomBytes(4).toString('hex')}.json`); await writeFile(file, JSON.stringify(spec)); return JSON.parse(await host.run(process.execPath, [join(repo, 'tests', 'lan-client.mjs'), `@${file}`],
+        { PRIVANET_RELEASE_DIR: rel, PRIVANET_COORDINATOR_URL: url, PRIVANET_APP_TOKEN: appToken, NODE_EXTRA_CA_CERTS: caCert }, timeoutMs)) as { results: unknown[]; errors: number; attempts: number[]; ms: number; p50: number | null; p95: number | null }; },
+      startSite: async delayMs => {
+        const logs: string[] = []; web.spawn(process.execPath, [join(repo, 'tests', 'lan-site.mjs')], { SITE_DELAY_MS: String(delayMs) }, logs);
+        await eventually('the site to start', () => logs.join('').includes('site.started') || undefined);
+      },
+      pids: () => ({ coordinator: coordinator?.pid, caddy: caddy?.pid }),
       link: async up => { sh('ip', ['netns', 'exec', desktopNs, 'ip', 'link', 'set', vd, up ? 'up' : 'down']); if (up) sh('ip', ['netns', 'exec', desktopNs, 'ip', 'addr', 'replace', `${desktop.ip}/24`, 'dev', vd]); },
       stop: teardown,
     };
