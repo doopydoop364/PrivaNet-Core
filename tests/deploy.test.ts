@@ -9,7 +9,7 @@ import { loadConfig as loadNodeConfig } from '@privanet/node/config';
 
 // The deployment files shipped in deploy/ (docs/FIRST_DEPLOYMENT.md) must stay true to the code they configure.
 const root = join(import.meta.dirname, '..', '..');
-const read = (path: string) => readFileSync(join(root, path), 'utf8');
+const read = (path: string) => readFileSync(join(root, path), 'utf8').replace(/\r\n/g, '\n'); // a Windows checkout may convert line endings
 const envKeys = (text: string) => text.split('\n').filter(line => /^[A-Z_]+=/.test(line)).map(line => line.split('=')[0] ?? '');
 const envOf = (text: string, fill: Record<string, string>) => Object.fromEntries(text.split('\n').filter(l => /^[A-Z_]+=/.test(l)).map(l => { const i = l.indexOf('='); return [l.slice(0, i), fill[l.slice(0, i)] ?? l.slice(i + 1)]; }));
 const hex = 'ab'.repeat(32);
