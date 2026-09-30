@@ -98,7 +98,7 @@ test('Coordinator outages: a node that starts during one, loses the Coordinator 
   assert.equal(await nodeIdOf(node.stateDir), nodeId, 'same identity');
   // Lost while Caddy (the TLS front) is down: connection refused, reported as such.
   await lan.stopCaddy(); await eventually('a refused connection', () => node.logs.join('').includes('"reason":"CONNECTION_REFUSED"') || undefined, 20000);
-  await lan.startCaddy(); await eventually('reconnect after Caddy', async () => (await lan.httpsGet(lan.desktop, `${lan.url}/v1/health`)).hasOwnProperty('status') || undefined);
+  await lan.startCaddy(); await eventually('reconnect after Caddy', async () => Object.hasOwn(await lan.httpsGet(lan.desktop, `${lan.url}/v1/health`), 'status') || undefined);
   await eventually('online again', () => online(lan, nodeId), 30000);
   // Lost in the middle of a job, with an application waiting through the outage on another call: one correct result, no error for the application.
   const work = lan.client(lan.desktop, app.token, { type: 'system.hashchain.v1', inputs: [{ seed: 'outage', iterations: 3_000_000 }], inflight: 1, keyPrefix: 'outage', timeoutMs: 150000 }, 200000);

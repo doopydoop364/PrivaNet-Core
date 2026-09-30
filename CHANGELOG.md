@@ -7,6 +7,24 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 
 ## [Unreleased]
 
+## [0.3.0-alpha.5] - 2026-09-30
+
+Deployment-readiness release: a server Coordinator with a separate desktop worker on a LAN, proven with real separate network stacks. Protocol version 1, no wire change: `0.3.0-alpha.4` and `0.3.0-alpha.2` nodes, clients and Coordinators interoperate (checked with real binaries).
+
+### Fixed
+- **A reverse proxy's error page was a parse error.** An empty or HTML 502/503/504 from a proxy in front of a stopped Coordinator made the shared transport throw a bare `SyntaxError`; it is now an `ApiError` (`INVALID_RESPONSE`).
+- **`waitForResult` lost its wait across a Coordinator restart.** It now retries transient failures (connection refused or reset, a request timeout, 502/503/504) with backoff until its own deadline, and still fails fast on real refusals. The exported `isTransientFailure` is the rule.
+- **Node connection failures carry a reason.** `node.connection_failed` adds `reason` from a fixed vocabulary (`TLS_CERTIFICATE`, `DNS`, `CONNECTION_REFUSED`, `TIMEOUT`, `UNREACHABLE`, `CONNECTION_RESET`, `OTHER`); never an address, URL or message.
+- **Configuration errors no longer crash-loop.** The Coordinator and the node log `config_invalid` with the names (never the values) of the offending settings and exit with status 78; a node that meets a different Coordinator than the one it first bound to logs `node.coordinator_binding_changed` and exits 78 rather than retrying forever. The shipped units set `RestartPreventExitStatus=78`.
+- The README described v0.2.1; it now describes this release.
+
+### Added
+- **`docs/FIRST_DEPLOYMENT.md`:** the exact procedure for a server Coordinator (TLS through Caddy, systemd, backup, upgrade) with an optional conservative server node and a separately enrolled desktop node, using only commands that exist.
+- **`docs/DEPLOYMENT_VALIDATION.md`:** separate-host evidence, the network-model audit from the code, the admin and security exposure review, what is unverified, a manual two-machine check, and the readiness verdict (B: ready with manual precautions).
+- **`deploy/`** (shipped in every release archive): `caddy/Caddyfile`, `systemd/privanet-coordinator.service` and `privanet-node.service`, `env/*.env.example`, `policy/server-node.json` (conservative, always-on host) and `policy/desktop-node.json` (larger, adaptive), and the operator wrappers `bin/privanet-admin` and `bin/privanet-backup`.
+- **Network-namespace LAN tests** (`npm run test:lan`, Linux and root, own CI job): a desktop on another host enrols over TLS with no inbound port; the admin API, the Coordinator's own port and plain HTTP are unreachable from the LAN; TLS failures are reported and never enrol; Coordinator and proxy outages (idle, mid-job, node started during one) recover with no action; identity persistence, revocation and a rebuilt Coordinator; mixed versions against the real v0.3.0-alpha.2 binaries; and a two-node workload (conservative server node, larger desktop node, cable pulled and restored: limits respected exactly, no duplicate or lost result).
+- `tests/deploy.test.ts` in the default suite checks the shipped deployment files against the code.
+
 ## [0.3.0-alpha.4] - 2026-09-30
 
 Trusted multi-node validation release. Protocol version 1, no wire change: `0.3.0-alpha.3` nodes, clients and Coordinators interoperate. Highlights: the Coordinator no longer gets slower as nodes add job slots, and there is now a repeatable real-process multi-node test and measurement suite ([docs/MULTI_NODE_VALIDATION.md](docs/MULTI_NODE_VALIDATION.md)).

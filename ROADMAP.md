@@ -123,6 +123,8 @@ Initial PrivaSearch scaling targets are measured milestones rather than attempts
 
 **Multi-node validation (v0.3.0-alpha.4):** trusted, admin-enrolled nodes were validated as real processes (spread, crash failover, Coordinator restart, drain, restart, paused-then-resumed zombie, mixed owner limits, revocation, churn) with no correctness or security defect found, and measurement found and fixed a Coordinator scaling defect with many job slots. Details, numbers and limits: [docs/MULTI_NODE_VALIDATION.md](docs/MULTI_NODE_VALIDATION.md). Untrusted nodes stay in Phase 10.
 
+**Deployment readiness (v0.3.0-alpha.5):** a server Coordinator behind TLS with a separate desktop worker was validated with real separate network stacks and firewalls (no inbound port on the worker, admin API unreachable from the LAN, outage recovery, mixed versions, a two-node workload), with the procedure in [docs/FIRST_DEPLOYMENT.md](docs/FIRST_DEPLOYMENT.md) and the verdict, unverified items and manual check in [docs/DEPLOYMENT_VALIDATION.md](docs/DEPLOYMENT_VALIDATION.md). It proves trusted, owner-run nodes only.
+
 ## Phase 4 — Generic Storage + Data Plane Foundation — Planned
 
 Goal: provide application-independent object/chunk storage through PrivaNet **and the first generic direct-transfer data plane**, so large payloads never transit the Coordinator ([docs/DATA_PLANE.md](docs/DATA_PLANE.md), ADR 006).

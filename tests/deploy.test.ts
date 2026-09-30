@@ -20,7 +20,7 @@ test('the example resource policies are valid, and the server node is stricter t
   const server = ResourcePolicySchema.parse(JSON.parse(read('deploy/policy/server-node.json')));
   const desktop = ResourcePolicySchema.parse(JSON.parse(read('deploy/policy/desktop-node.json')));
   assert.ok(server.maxCpuPercent < desktop.maxCpuPercent && server.reserveCpuPercent > desktop.reserveCpuPercent);
-  assert.ok(server.maxMemoryBytes < desktop.maxMemoryBytes && server.reserveMemoryBytes >= desktop.reserveMemoryBytes);
+  assert.ok(server.maxMemoryBytes < desktop.maxMemoryBytes && server.reserveMemoryBytes >= 3 * 1024 ** 3, 'a small footprint, and memory always left for the Coordinator and the rest of the server');
   assert.ok(server.reserveDiskBytes >= desktop.reserveDiskBytes && (server.maxBandwidthBytesPerSec ?? 0) < (desktop.maxBandwidthBytesPerSec ?? 0));
   assert.equal(server.onBattery, 'disable'); assert.equal(server.defaultLevel, 'ADAPTIVE'); assert.equal(server.schedule.length, 0, 'the server node has no free-running windows');
   assert.equal(desktop.schedule.some(rule => rule.level === 'FULL'), true); assert.equal(desktop.defaultLevel, 'ADAPTIVE', 'outside its windows the desktop adapts to the user');
@@ -34,7 +34,7 @@ test('the environment examples use only names the programs read, and parse once 
   for (const key of envKeys(node)) assert.ok(key === 'NODE_EXTRA_CA_CERTS' || nodeSource.includes(key), `${key} is not read by the PrivaNode`);
   const config = loadCoordinatorConfig(envOf(coordinator, { PRIVANET_ADMIN_SECRET: hex }));
   assert.equal(config.host, '127.0.0.1', 'the Coordinator listens on loopback behind the proxy'); assert.equal(config.port, 4010);
-  const nodeConfig = loadNodeConfig(envOf(node, { PRIVANODE_ENROLLMENT_TOKEN: hex }));
+  const nodeConfig = loadNodeConfig(envOf(node, { PRIVANODE_ENROLLMENT_TOKEN: hex, PRIVANODE_POLICY_FILE: join(root, 'deploy', 'policy', 'server-node.json') }));
   assert.equal(nodeConfig.url, 'https://10.0.0.68'); assert.equal(nodeConfig.allowInsecureLoopback, false);
   assert.throws(() => loadCoordinatorConfig({ PRIVANET_ADMIN_SECRET: hex, PRIVANET_HOST: '10.0.0.68' }), /TLS termination/);
   assert.doesNotThrow(() => loadCoordinatorConfig({ PRIVANET_ADMIN_SECRET: hex, PRIVANET_HOST: '10.0.0.68', PRIVANET_TLS_TERMINATED: 'true' }));
