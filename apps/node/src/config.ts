@@ -14,6 +14,8 @@ const schema = z.object({
   PRIVANODE_DRAIN_TIMEOUT_MS: z.coerce.number().int().min(0).max(600000).default(30000),
   PRIVANODE_HEARTBEAT_MS: interval(5000), PRIVANODE_POLL_MS: interval(1000),
   // How long an idle poll may wait at the Coordinator for work (0 = plain polling). Falls back to plain polling against a Coordinator that does not support it.
+  // Concurrent jobs this node runs (1 to 64). Each running job is still counted against the owner's memory, CPU, disk and network limits.
+  PRIVANODE_JOB_SLOTS: z.coerce.number().int().min(1).max(64).default(1),
   PRIVANODE_LEASE_WAIT_MS: z.coerce.number().int().min(0).max(8000).default(5000),
 });
 /** Reads the owner's resource policy (strict JSON); missing file path means conservative defaults. */
@@ -24,6 +26,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   const c = schema.parse(env);
   const capabilities = CapabilitiesSchema.parse(c.PRIVANODE_CAPABILITIES === '' ? [] : c.PRIVANODE_CAPABILITIES.split(','));
   return { url: c.PRIVANODE_COORDINATOR_URL, allowInsecureLoopback: c.PRIVANODE_ALLOW_INSECURE_LOOPBACK === 'true',
-    stateDir: c.PRIVANODE_STATE_DIR, policy: loadResourcePolicy(c.PRIVANODE_POLICY_FILE), drainTimeoutMs: c.PRIVANODE_DRAIN_TIMEOUT_MS, capabilities, heartbeatMs: c.PRIVANODE_HEARTBEAT_MS, pollMs: c.PRIVANODE_POLL_MS, leaseWaitMs: c.PRIVANODE_LEASE_WAIT_MS,
+    stateDir: c.PRIVANODE_STATE_DIR, policy: loadResourcePolicy(c.PRIVANODE_POLICY_FILE), drainTimeoutMs: c.PRIVANODE_DRAIN_TIMEOUT_MS, capabilities, heartbeatMs: c.PRIVANODE_HEARTBEAT_MS, pollMs: c.PRIVANODE_POLL_MS, leaseWaitMs: c.PRIVANODE_LEASE_WAIT_MS, jobSlots: c.PRIVANODE_JOB_SLOTS,
     ...(c.PRIVANODE_ENROLLMENT_TOKEN ? { enrollmentToken: c.PRIVANODE_ENROLLMENT_TOKEN } : {}) };
 }

@@ -123,7 +123,7 @@ These are the platform features an application like PrivaSearch legitimately nee
 | E4 | **Scheduler concurrency keys** (do not lease two jobs with the same key at once) | Politeness for fetches, but equally useful for per-resource serialisation |
 | E5 | **Per-application request budgets** in the Coordinator | Abuse control; later the attachment point for treasury budgets |
 | E6 | **Batch job status polling** (or long-poll) | Any application with many in-flight jobs |
-| E7 | **Multi-slot nodes** (`jobSlots` above 1) | Throughput for any workload; measure first |
+| E7 | **Implemented (unreleased).** **Multi-slot nodes** (`jobSlots` up to 64, opt-in through `PRIVANODE_JOB_SLOTS`): measured first (a one-slot node handles one job per network round trip, so about 260 pages a minute at 200 ms per request, and running several one-slot processes costs about 80 MiB each) | Throughput for any workload; the scheduler reserves running jobs' estimates against the owner's reported budget |
 | E8 | **Blob references in results** once Phase 4 storage and the direct-transfer data plane exist ([DATA_PLANE.md](DATA_PLANE.md#12-job-result-evolution-is-the-current-model-compatible)); added to a type additively or via a new versioned id, and only when measurements require it | Any application returning bulk data |
 | E9 | **Manifest-declared, sandboxed pure-compute jobs** (research, section 4 point 3) | Lets applications ship compute without touching Core |
 

@@ -19,6 +19,8 @@ import { ResourceEngine } from '@privanet/node/resource-engine';
 import { ResourcePolicySchema } from '@privanet/node/resource-policy';
 import type { HostSample } from '@privanet/node/resource-sampler';
 import { defaultHandlers } from '@privanet/node/handlers';
+import { reserve } from '@privanet/coordinator/scheduler';
+import { JOB_TYPES, NodesSchema as AllNodesSchema } from '@privanet/protocol';
 import { CheckpointStore } from '@privanet/node/checkpoint';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -455,4 +457,77 @@ test('against an older Coordinator that answers 404 to a waited job read, the SD
   const job = await sdk.submit('system.echo.v1', { message: 'old server' }, 'compat-wait'); const waiting = sdk.waitForResult(job.id, { timeoutMs: 10000, pollMs: 50 });
   await delay(200); await node.tick(); assert.deepEqual(await waiting, { message: 'old server' });
   await assert.rejects(sdk.waitForResult('00000000-0000-4000-8000-000000000000', { timeoutMs: 3000, pollMs: 50 }), errorCode('NOT_FOUND'));
+});
+
+/** A handler that takes `ms` and records how many ran at once, to observe real concurrency. */
+function slowEcho(ms: number) {
+  const seen = { running: 0, max: 0, done: 0 };
+  const handlers = { ...defaultHandlers, 'system.echo.v1': async (input: unknown) => {
+    seen.running++; seen.max = Math.max(seen.max, seen.running); await delay(ms); seen.running--; seen.done++; return input; } };
+  return { seen, handlers: handlers as typeof defaultHandlers };
+}
+
+test('a multi-slot node runs several jobs at once in one process, reports its slots, and finishes a queue faster than one slot could', { timeout: 40000 }, async t => {
+  const f = await fixture(t); const app = await f.app(); const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token });
+  const { seen, handlers } = slowEcho(300);
+  const node = await enrolled(f, { jobSlots: 4, leaseWaitMs: 500, heartbeatMs: 1000, pollMs: 50, handlers, engine: engineRig().engine }); // a node reports its permitted budget through its resource engine; without one the Coordinator assumes a tiny legacy budget
+  const jobs = []; for (let i = 0; i < 12; i++) jobs.push(await sdk.submit('system.echo.v1', { message: `m${i}` }, `slot-${i}`));
+  const abort = new AbortController(); const running = node.run(abort.signal); const started = Date.now();
+  try {
+    await Promise.all(jobs.map(job => sdk.waitForResult(job.id, { timeoutMs: 20000 })));
+    const took = Date.now() - started;
+    assert.equal(seen.max, 4, `at most, and exactly, 4 ran at once (saw ${seen.max})`); assert.ok(took < 2500, `12 jobs of 300 ms took ${took} ms on 4 slots (one slot needs at least 3600)`);
+    const view = (await f.transport.request('GET', '/v1/admin/nodes', AllNodesSchema, undefined, f.admin)).nodes[0]; assert.equal(view?.jobSlots, 4);
+  } finally { abort.abort(); await running; }
+});
+
+test('more slots never exceed the owner\'s limits: with memory for one job at a time, a 4-slot node runs one at a time', { timeout: 40000 }, async t => {
+  const f = await fixture(t); const app = await f.app(); const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token });
+  const need = JOB_TYPES['system.echo.v1'].resources.memoryBytes;
+  const rig = engineRig({ maxMemoryBytes: Math.floor(need * 1.5), reserveMemoryBytes: 0, safetyMarginBytes: 0 }); // budget for 1.5 jobs: a second would not fit
+  const { seen, handlers } = slowEcho(120);
+  const node = await enrolled(f, { jobSlots: 4, leaseWaitMs: 400, heartbeatMs: 1000, pollMs: 50, handlers, engine: rig.engine });
+  const jobs = []; for (let i = 0; i < 6; i++) jobs.push(await sdk.submit('system.echo.v1', { message: `m${i}` }, `limit-${i}`));
+  const abort = new AbortController(); const running = node.run(abort.signal);
+  try { await Promise.all(jobs.map(job => sdk.waitForResult(job.id, { timeoutMs: 30000 }))); assert.equal(seen.done, 6); assert.equal(seen.max, 1, `the owner's budget allowed one job at a time, but ${seen.max} ran together`); }
+  finally { abort.abort(); await running; }
+});
+
+test('reserve(): running jobs are subtracted from the reported budget, clamped at zero, and a node with no running job is unchanged', () => {
+  const estimate = JOB_TYPES['system.echo.v1'].resources; const budget = { memoryBudgetBytes: 3 * estimate.memoryBytes, cpuBudgetPercent: 100, diskBudgetBytes: 10, networkBudgetBytes: 2 * estimate.networkBytes };
+  assert.equal(reserve(budget, []), budget);
+  const two = reserve(budget, [estimate, estimate]); assert.equal(two.memoryBudgetBytes, estimate.memoryBytes); assert.equal(two.networkBudgetBytes, 0); assert.equal(two.diskBudgetBytes, 10); assert.ok(two.cpuBudgetPercent < 100);
+  assert.equal(reserve(budget, [estimate, estimate, estimate, estimate]).memoryBudgetBytes, 0);
+  assert.equal(reserve({ memoryBudgetBytes: 1, cpuBudgetPercent: 1 }, [estimate]).diskBudgetBytes, undefined, 'limits the node does not report stay unreported');
+});
+
+test('a graceful drain lets every lane finish its running job, then the node says goodbye', { timeout: 40000 }, async t => {
+  const f = await fixture(t); const app = await f.app(); const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token });
+  const { seen, handlers } = slowEcho(600); const events: string[] = [];
+  const node = await enrolled(f, { jobSlots: 3, leaseWaitMs: 500, heartbeatMs: 1000, pollMs: 50, handlers, engine: engineRig().engine, log: e => events.push(e.event) });
+  const jobs = []; for (let i = 0; i < 3; i++) jobs.push(await sdk.submit('system.echo.v1', { message: `d${i}` }, `drain-${i}`));
+  const abort = new AbortController(); const running = node.run(abort.signal);
+  const until = Date.now() + 10000; while (seen.running < 3 && Date.now() < until) await delay(20); // all three lanes are mid-job
+  assert.equal(seen.running, 3, 'three jobs run at once before the drain');
+  node.drain(); abort.abort(); await running;
+  for (const job of jobs) assert.equal((await sdk.getJob(job.id)).status, 'COMPLETED', 'a drain must not abandon running jobs');
+  assert.ok(events.includes('node.departed'));
+});
+
+test('against an older Coordinator that accepts only one slot, a multi-slot node falls back to one slot and keeps working', { timeout: 40000 }, async t => {
+  const f = await fixture(t); const app = await f.app(); const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token });
+  const proxy = createServer((req, res) => { const chunks: Buffer[] = []; req.on('data', (c: Buffer) => chunks.push(c)); req.on('end', () => { void (async () => {
+    const body = Buffer.concat(chunks);
+    if (req.url === '/v1/node/heartbeat' && !body.toString().includes('"jobSlots":1,')) { res.writeHead(400, { 'Content-Type': 'application/json', 'X-PrivaNet-Protocol': '1' }); res.end(JSON.stringify({ error: { code: 'INVALID_REQUEST', message: 'request schema rejected' } })); return; }
+    const upstream = await fetch(f.url + (req.url ?? ''), { method: req.method ?? 'GET', headers: Object.fromEntries(Object.entries(req.headers).filter(([k]) => ['content-type', 'authorization', 'x-privanet-protocol'].includes(k)).map(([k, v]) => [k, String(v)])), ...(req.method === 'POST' ? { body } : {}) });
+    const text = await upstream.text(); res.writeHead(upstream.status, { 'Content-Type': 'application/json', 'X-PrivaNet-Protocol': '1' }); res.end(text);
+  })(); }); });
+  const proxyUrl = await listen(proxy); t.after(() => close(proxy));
+  const { seen, handlers } = slowEcho(80); const events: string[] = []; const grant = await f.grant();
+  const node = new PrivaNode({ url: proxyUrl, allowInsecureLoopback: true, stateDir: join(f.dir, 'oneslot'), capabilities: ['system.echo.v1'], enrollmentToken: grant.token, jobSlots: 4, leaseWaitMs: 300, heartbeatMs: 1000, pollMs: 30, handlers, log: e => events.push(e.event) });
+  const jobs = []; for (let i = 0; i < 4; i++) jobs.push(await sdk.submit('system.echo.v1', { message: `o${i}` }, `old-${i}`));
+  const abort = new AbortController(); const running = node.run(abort.signal);
+  try { await Promise.all(jobs.map(job => sdk.waitForResult(job.id, { timeoutMs: 20000 }))); } finally { abort.abort(); await running; }
+  assert.ok(events.includes('node.job_slots_unsupported'), 'the node noticed and stopped advertising more than one slot'); assert.equal(seen.done, 4);
+  assert.equal(seen.max, 1, 'after the fallback jobs run one at a time');
 });

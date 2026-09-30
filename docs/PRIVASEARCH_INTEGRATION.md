@@ -280,7 +280,7 @@ Strongly recommended soon after, and **required before untrusted or public nodes
 6. **Per-application or per-type retention** (short retention for crawl jobs) and optionally result scrubbing after acknowledgement.
 7. **Scheduler host-concurrency hint** (a registry-level concurrency key so two jobs for one host are not leased at once) and Coordinator-side per-application request budgets.
 
-Later, as measured need appears: multi-slot nodes (`jobSlots` is fixed at 1 today), batch job status polling, node reputation, a `blobRef` result field once Phase 4 storage exists, and, for application-specific pure compute, the sandboxed manifest mechanism researched in [APPLICATION_BOUNDARY.md](APPLICATION_BOUNDARY.md).
+Later, as measured need appears: multi-slot nodes (implemented after this contract was written; see the changelog), batch job status polling, node reputation, a `blobRef` result field once Phase 4 storage exists, and, for application-specific pure compute, the sandboxed manifest mechanism researched in [APPLICATION_BOUNDARY.md](APPLICATION_BOUNDARY.md).
 
 No protocol hook is added now: adding the registry entry without its handler would advertise a capability that does not exist and would break the registry/handler lockstep test.
 

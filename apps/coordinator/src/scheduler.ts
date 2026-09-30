@@ -25,6 +25,21 @@ export function fitsBudget(estimate: ResourceEstimate, budget: Budget): boolean 
  * schedule turns contribution OFF sooner than that. The node reports only a coarse hint; a job that
  * still overruns is handled by ordinary preemption/release.
  */
+/**
+ * A node may run several jobs at once (jobSlots above 1), and the budget it reports is a snapshot that cannot yet
+ * include a job leased a moment ago. So before placing another job, the estimates of the jobs it is already running
+ * are reserved against that budget: running jobs can never make the node exceed what its owner permitted.
+ * With no running job this is the identity, so single-slot behaviour is unchanged.
+ */
+export function reserve(budget: Budget, running: ResourceEstimate[]): Budget {
+  if (running.length === 0) return budget;
+  const sum = (pick: (estimate: ResourceEstimate) => number) => running.reduce((total, estimate) => total + pick(estimate), 0);
+  return { ...budget,
+    memoryBudgetBytes: Math.max(0, budget.memoryBudgetBytes - sum(e => e.memoryBytes)),
+    cpuBudgetPercent: Math.max(0, budget.cpuBudgetPercent - sum(e => CPU_CLASS_MIN_PERCENT[e.cpu])),
+    ...(budget.diskBudgetBytes === undefined ? {} : { diskBudgetBytes: Math.max(0, budget.diskBudgetBytes - sum(e => e.diskBytes)) }),
+    ...(budget.networkBudgetBytes === undefined ? {} : { networkBudgetBytes: Math.max(0, budget.networkBudgetBytes - sum(e => e.networkBytes)) }) };
+}
 export function outlastsAvailability(estimate: ResourceEstimate, availableForMs: number | undefined): boolean {
   return availableForMs !== undefined && estimate.expectedDurationMs !== null && estimate.expectedDurationMs > availableForMs;
 }
@@ -36,8 +51,9 @@ export function outlastsAvailability(estimate: ResourceEstimate, availableForMs:
 export class ResourceAwareScheduler implements Scheduler {
   choose(node: NodeRecord, pending: JobRecord[]): JobRecord | undefined {
     if ((node.lifecycle ?? 'ACTIVE') !== 'ACTIVE' || node.resources?.contribution === 'PAUSED') return undefined;
-    const active = pending.filter(job => job.status === 'LEASED' && job.assignedNodeId === node.nodeId).length;
-    if (active >= node.jobSlots || node.currentJobs >= node.jobSlots) return undefined;
+    const running = pending.filter(job => job.status === 'LEASED' && job.assignedNodeId === node.nodeId);
+    if (running.length >= node.jobSlots || node.currentJobs >= node.jobSlots) return undefined;
+    const runningEstimates = running.map(job => JOB_TYPES[job.type].resources);
     const general = node.resources ?? LEGACY_BUDGET;
     return pending.find(job => {
       const definition = JOB_TYPES[job.type];
@@ -45,7 +61,7 @@ export class ResourceAwareScheduler implements Scheduler {
       if (outlastsAvailability(definition.resources, node.resources?.availableForMs)) return false;
       // Per-capability limits replace only memory/CPU; disk and network limits are node-wide.
       const specific = node.resources?.perCapability?.[job.type];
-      return fitsBudget(definition.resources, specific ? { ...general, ...specific } : general);
+      return fitsBudget(definition.resources, reserve(specific ? { ...general, ...specific } : general, runningEstimates));
     });
   }
 }
