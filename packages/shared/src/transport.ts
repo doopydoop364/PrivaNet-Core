@@ -55,7 +55,10 @@ export class Transport {
         }
       } finally { await reader.cancel(); }
     }
-    const payload: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    let payload: unknown;
+    try { payload = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+    // A reverse proxy answers an unreachable Coordinator with its own (usually empty or HTML) 502/503/504: that is an API-level refusal, not a parse error.
+    catch { if (!response.ok) throw new ApiError(response.status, 'INVALID_RESPONSE', 'Coordinator rejected request'); throw new ApiError(502, 'INVALID_RESPONSE', 'Coordinator answered with something that is not JSON'); }
     if (!response.ok) {
       const parsed = ErrorSchema.safeParse(payload);
       if (parsed.success) throw new ApiError(response.status, parsed.data.error.code, parsed.data.error.message);

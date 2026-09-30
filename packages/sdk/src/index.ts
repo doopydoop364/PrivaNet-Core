@@ -6,6 +6,15 @@ import type { TransportOptions } from '@privanet/shared';
 export { ApiError };
 export type { Job, JobType, JobInputMap, JobOutputMap } from '@privanet/protocol';
 export interface ClientOptions extends TransportOptions { token: string }
+/**
+ * A failure that says nothing about the job: the Coordinator or the path to it was briefly unavailable (connection refused or reset, a proxy's 502/503/504,
+ * a per-request timeout). A read may safely be repeated; the overall deadline still applies.
+ */
+export function isTransientFailure(error: unknown): boolean {
+  if (error instanceof ApiError) return [502, 503, 504].includes(error.status);
+  if (error instanceof Error && error.name === 'TimeoutError') return true; // this request's own timeout (the caller's overall deadline is checked separately)
+  return error instanceof TypeError && error.cause !== undefined; // undici's "fetch failed": refused, reset, unreachable, DNS, TLS
+}
 export class PrivaNetClient {
   private readonly transport: Transport;
   private readonly token: string;
@@ -28,15 +37,17 @@ export class PrivaNetClient {
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || !Number.isSafeInteger(pollMs) || pollMs < 1) throw new Error('Invalid polling policy');
     const timeout = AbortSignal.timeout(timeoutMs);
     const signal = options.signal ? AbortSignal.any([timeout, options.signal]) : timeout;
-    const started = Date.now();
+    const started = Date.now(); let failures = 0;
     try {
       for (;;) {
         signal.throwIfAborted();
         // Ask the Coordinator to hold the read until the job finishes (one request instead of a poll every pollMs); never longer than the time left.
         const waitMs = this.jobWaitSupported ? Math.min(5000, Math.max(0, timeoutMs - (Date.now() - started) - 250)) : 0;
         const asked = Date.now(); let job: Job;
-        try { job = await this.getJob(id, signal, waitMs > 100 ? waitMs : undefined); }
+        try { job = await this.getJob(id, signal, waitMs > 100 ? waitMs : undefined); failures = 0; }
         catch (error) {
+          // The job is durable at the Coordinator: a restart or a proxy error must not cost the caller the wait. Back off and read again until the deadline.
+          if (isTransientFailure(error) && !signal.aborted) { failures++; await delay(Math.min(5000, 250 * 2 ** Math.min(failures, 5)), undefined, { signal }); continue; }
           // An older Coordinator answers 404 to a read with a query string. If the same read without a wait works, remember and poll plainly; if it also 404s the job really is not there.
           if (waitMs > 100 && error instanceof ApiError && error.status === 404) { this.jobWaitSupported = false; continue; }
           throw error;

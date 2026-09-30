@@ -1,0 +1,2 @@
+# Files that Linux programs read must keep LF line endings on every checkout (a CRLF would end up inside a value or a shebang).
+deploy/** text eol=lf
