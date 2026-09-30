@@ -26,7 +26,7 @@ test('publishable packages are consumer-ready: metadata, exports, file lists, al
 });
 
 test('the packed tarballs install into a fresh project, contain only built output, resolve with types, and enforce the contract at compile time', { timeout: 240000 }, async t => {
-  const work = await mkdtemp(join(tmpdir(), 'privanet-pack-')); t.after(() => rm(work, { recursive: true, force: true }));
+  const work = await mkdtemp(join(tmpdir(), 'privanet-pack-')); t.after(() => rm(work, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }));
   const packs = join(work, 'packs'); await mkdir(packs); const tarballs: string[] = [];
   for (const name of publishable) {
     const out = await exec(npm, ['pack', '--json', '--pack-destination', packs, '--workspace', `@privanet/${name}`], { cwd: root, shell: process.platform === 'win32', maxBuffer: 10 * 1024 * 1024 });
