@@ -7,6 +7,9 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 
 ## [Unreleased]
 
+### Added
+- **Lease requests that wait for work.** `POST /v1/node/jobs/lease` takes an optional `waitMs` (0 to 8000): the Coordinator holds the request until a job is leasable for that node or the time is up. A job is picked up the moment it is submitted or requeued instead of at the node's next poll, and an idle node makes one request per wait instead of one per poll interval. Additive within protocol 1: old nodes send `{}` and work unchanged; a new node falls back to plain polling against an older Coordinator. Bounded (strict field, 8 s ceiling, at most 512 held-open requests by default, credential re-checked on every wake, no lease to a closed connection). New node setting `PRIVANODE_LEASE_WAIT_MS` (default 5000, capped by the heartbeat interval; 0 disables). See `docs/protocol.md`.
+
 ### Fixed
 - **A busy PrivaNode is no longer capped at one job per poll interval.** The node's run loop slept the full `PRIVANODE_POLL_MS` after every tick, even right after finishing a job, so with the default 1000 ms a node could complete at most about one job per second however fast the work was. It now polls again immediately after a completed or handler-failed job and sleeps only when a poll finds nothing or fails, so an idle node is as quiet as before. Found by measurement (PrivaSearch crawl through the real path, 300 pages, single node): at the default poll interval throughput rose from 59 to 1,018 pages per minute (about 17 times) and Coordinator CPU fell from 21 s to 3.3 s; at a 50 ms interval it rose from 894 to 3,498 pages per minute (about 3.9 times). A regression test proves a 3000 ms interval no longer delays 20 queued jobs, and fails without the fix. No protocol or configuration change; a job released for preemption or shutdown still waits.
 

@@ -13,6 +13,8 @@ import type { TransferMeter } from './transfer-meter.js';
 export interface NodeOptions extends TransportOptions {
   stateDir: string; capabilities: JobType[]; enrollmentToken?: string;
   heartbeatMs?: number; pollMs?: number;
+  /** How long an idle lease request may wait at the Coordinator for work; 0 disables (plain polling). Library default 0 (plain polling, so a bare `tick()` never blocks); the daemon's configuration defaults it to 5000. Never more than the heartbeat interval so availability stays fresh. */
+  leaseWaitMs?: number;
   /** Owner-policy resource engine. Without one the node reports no resources and gets only the Coordinator's small legacy budget. */
   engine?: ResourceEngine; handlers?: Handlers;
   /** Enforce the owner's bandwidth limit and monthly allowance for handlers, and account control-plane bytes. */
@@ -25,6 +27,10 @@ export class PrivaNode {
   private readonly transport: Transport;
   private readonly heartbeatMs: number;
   private readonly pollMs: number;
+  private readonly leaseWaitMs: number;
+  /** Cleared when the Coordinator rejects the `waitMs` field (an older Coordinator): the node then polls plainly. */
+  private leaseWaitSupported = true;
+  private readonly wakeIdle = new AbortController();
   private readonly log: NonNullable<NodeOptions['log']>;
   private identity: Identity | undefined;
   private session: Session | undefined;
@@ -39,6 +45,8 @@ export class PrivaNode {
   constructor(private readonly options: NodeOptions) {
     this.transport = new Transport(options); this.capabilities = CapabilitiesSchema.parse(options.capabilities);
     this.heartbeatMs = options.heartbeatMs ?? 5000; this.pollMs = options.pollMs ?? 1000;
+    this.leaseWaitMs = Math.min(options.leaseWaitMs ?? 0, this.heartbeatMs);
+    if (!Number.isSafeInteger(this.leaseWaitMs) || this.leaseWaitMs < 0 || this.leaseWaitMs > 8000) throw new Error('Invalid lease wait');
     for (const value of [this.heartbeatMs, this.pollMs]) if (!Number.isSafeInteger(value) || value < 1 || value > 60000) throw new Error('Invalid daemon interval');
     this.log = options.log ?? (() => {}); this.enrollmentToken = options.enrollmentToken;
   }
@@ -80,7 +88,7 @@ export class PrivaNode {
     this.lastHeartbeat = Date.now();
   }
   /** Stop asking for work; the next heartbeat tells the Coordinator this node is draining. */
-  drain(): void { this.draining = true; this.lastHeartbeat = 0; }
+  drain(): void { this.draining = true; this.lastHeartbeat = 0; this.wakeIdle.abort(); }
   /** Abort whatever is running and hand it back; used when a graceful drain runs out of time. */
   abortNow(): void { this.hardStop.abort(); }
   get isDraining() { return this.draining; }
@@ -95,7 +103,7 @@ export class PrivaNode {
       if (!session) throw new Error('Missing session');
       // Owner priority: no new work while draining or while the owner's policy/pressure pauses contribution.
       if (this.draining || this.options.engine?.report.contribution === 'PAUSED') return;
-      const { lease } = await this.transport.request('POST', '/v1/node/jobs/lease', LeaseResponseSchema, {}, session.token);
+      const lease = await this.requestLease(session.token);
       if (!lease) return;
       if (lease.expiresAt <= Date.now()) { this.log({ event: 'job.lease_expired' }); return; }
       this.currentJobs = 1;
@@ -147,6 +155,20 @@ export class PrivaNode {
     } finally {
       this.currentJobs = 0; this.busy = false;
       // The renewal timer also heartbeats while a job runs; otherwise availability is refreshed on the next tick.
+    }
+  }
+  /** One lease request. Waits at the Coordinator for work when it supports that, so a job is picked up the moment it exists instead of at the next poll. */
+  private async requestLease(token: string) {
+    const wait = this.leaseWaitSupported ? this.leaseWaitMs : 0;
+    try {
+      return (await this.transport.request('POST', '/v1/node/jobs/lease', LeaseResponseSchema, wait > 0 ? { waitMs: wait } : {}, token, wait > 0 ? this.wakeIdle.signal : undefined)).lease;
+    } catch (error) {
+      if (this.draining && !(error instanceof ApiError)) return null; // the drain woke an idle wait: no work was taken
+      if (wait > 0 && error instanceof ApiError && error.status === 400) { // an older Coordinator rejects `waitMs`: remember, and poll plainly from now on
+        this.leaseWaitSupported = false; this.log({ event: 'node.lease_wait_unsupported' });
+        return (await this.transport.request('POST', '/v1/node/jobs/lease', LeaseResponseSchema, {}, token)).lease;
+      }
+      throw error;
     }
   }
   async run(signal: AbortSignal): Promise<void> {
