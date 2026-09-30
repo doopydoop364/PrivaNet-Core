@@ -1,0 +1,39 @@
+[Unit]
+Description=PrivaNet Coordinator (control plane)
+Documentation=https://github.com/doopydoop364/PrivaNet-Core/blob/main/docs/FIRST_DEPLOYMENT.md
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=privanet
+Group=privanet
+# Secrets and settings live in this file (mode 0600, owned by root), never in the unit.
+EnvironmentFile=/etc/privanet/coordinator.env
+# The release directory's launcher runs `node`; it must be Node.js 24.4 or newer.
+Environment=PATH=/opt/node/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/privanet/bin/privanet-coordinator
+# SIGTERM closes idle connections and the database cleanly.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+Restart=on-failure
+RestartSec=5
+# Exit status 78 is a configuration problem (see the log); restarting cannot fix it.
+RestartPreventExitStatus=78
+# Persistent state: /var/lib/privanet, owned by the service user, created by systemd.
+StateDirectory=privanet
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

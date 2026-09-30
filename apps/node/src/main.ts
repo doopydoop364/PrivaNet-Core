@@ -8,10 +8,20 @@ import { TransferMeter } from './transfer-meter.js';
 import { CheckpointStore } from './checkpoint.js';
 import { defaultHandlers } from './handlers.js';
 import { createFetchHandler } from './fetch/handler.js';
+import { BindingChangedError } from './identity.js';
+import { ZodError } from 'zod';
+/** Exit status for a configuration problem (BSD `EX_CONFIG`): a service manager should not restart-loop on it (`RestartPreventExitStatus=78`). */
+export const EXIT_CONFIG = 78;
 /** Creating this file in the node's state directory asks the running node to drain (any platform; the way to do it on Windows). */
 export const DRAIN_FILE = 'DRAIN';
 async function main() {
-  const { policy, drainTimeoutMs, ...config } = loadConfig(); delete process.env.PRIVANODE_ENROLLMENT_TOKEN;
+  let loaded: ReturnType<typeof loadConfig>;
+  try { loaded = loadConfig(); } catch (error) {
+    // Names of the offending settings only, never their values (one of them is the enrollment token).
+    const settings = error instanceof ZodError ? [...new Set(error.issues.map(issue => String(issue.path[0] ?? '')))] : undefined;
+    console.error(JSON.stringify({ event: 'node.config_invalid', ...(settings ? { settings } : {}) })); process.exitCode = EXIT_CONFIG; return;
+  }
+  const { policy, drainTimeoutMs, ...config } = loaded; delete process.env.PRIVANODE_ENROLLMENT_TOKEN;
   const log = (entry: { event: string; code?: string }) => console.log(JSON.stringify(entry));
   const transfer = new TransferMeter({ stateDir: config.stateDir, ratePerSec: policy.maxBandwidthBytesPerSec, monthlyBytes: policy.monthlyTransferBytes });
   const checkpoints = new CheckpointStore(join(config.stateDir, 'checkpoints'));
@@ -35,4 +45,7 @@ async function main() {
   watcher.unref();
   await node.run(abort.signal); clearTimeout(forced); clearInterval(watcher);
 }
-main().catch(() => { console.error(JSON.stringify({ event: 'node.startup_failed' })); process.exitCode = 1; });
+main().catch((error: unknown) => {
+  if (error instanceof BindingChangedError) { console.error(JSON.stringify({ event: 'node.coordinator_binding_changed' })); process.exitCode = EXIT_CONFIG; return; }
+  console.error(JSON.stringify({ event: 'node.startup_failed' })); process.exitCode = 1;
+});

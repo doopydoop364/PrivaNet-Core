@@ -3,7 +3,8 @@ import { AckSchema, JOB_TYPES, RenewResponseSchema, CapabilitiesSchema, Challeng
 import type { JobType, Session } from '@privanet/protocol';
 import { ApiError, Transport } from '@privanet/shared';
 import type { TransportOptions } from '@privanet/shared';
-import { bindCoordinator, loadIdentity, signProof } from './identity.js';
+import { BindingChangedError, bindCoordinator, loadIdentity, signProof } from './identity.js';
+import { connectionFailure } from './failure.js';
 import type { Identity } from './identity.js';
 import { defaultHandlers, executeLease } from './handlers.js';
 import type { Handlers } from './handlers.js';
@@ -22,7 +23,7 @@ export interface NodeOptions extends TransportOptions {
   /** Enforce the owner's bandwidth limit and monthly allowance for handlers, and account control-plane bytes. */
   transfer?: TransferMeter;
   /** Node-local resume state for checkpointable job types. */
-  checkpoints?: CheckpointStore; drainTimeoutMs?: number; preemptCheckMs?: number; log?: (entry: { event: string; code?: string }) => void;
+  checkpoints?: CheckpointStore; drainTimeoutMs?: number; preemptCheckMs?: number; log?: (entry: { event: string; code?: string; reason?: string }) => void;
 }
 export class PrivaNode {
   readonly capabilities: JobType[];
@@ -216,8 +217,8 @@ export class PrivaNode {
     while (!signal.aborted) {
       try { await this.tick(); failures = 0; }
       catch (error) {
-        if (error instanceof ApiError && [400, 403, 426].includes(error.status)) throw error;
-        failures++; this.log({ event: 'node.connection_failed', code: error instanceof ApiError ? error.code : 'TRANSPORT_ERROR' });
+        if (error instanceof BindingChangedError || (error instanceof ApiError && [400, 403, 426].includes(error.status))) throw error;
+        failures++; this.log({ event: 'node.connection_failed', ...connectionFailure(error) });
       }
       // After a finished job there is probably more queued: poll again immediately instead of idling for a full interval.
       // Sleeping only when a poll finds nothing (or fails) keeps an idle node quiet without capping a busy node at one job per interval.
@@ -237,8 +238,8 @@ export class PrivaNode {
         let finished = false;
         try { finished = await this.cycle(); failures = 0; }
         catch (error) {
-          if (error instanceof ApiError && [400, 403, 426].includes(error.status)) throw error;
-          failures++; this.log({ event: 'node.connection_failed', code: error instanceof ApiError ? error.code : 'TRANSPORT_ERROR' });
+          if (error instanceof BindingChangedError || (error instanceof ApiError && [400, 403, 426].includes(error.status))) throw error;
+          failures++; this.log({ event: 'node.connection_failed', ...connectionFailure(error) });
         }
         if (finished && !failures) { await new Promise<void>(resolve => setImmediate(resolve)); continue; }
         const backoff = failures ? Math.min(30000, this.pollMs * 2 ** Math.min(failures, 8)) : this.pollMs;

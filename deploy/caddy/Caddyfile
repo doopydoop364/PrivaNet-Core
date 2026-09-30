@@ -1,0 +1,28 @@
+# TLS for the Coordinator on the LAN (docs/FIRST_DEPLOYMENT.md). Replace 10.0.0.68 with the server's LAN address, or with a host name
+# that every node resolves to it. Caddy's own local CA issues the certificate, including an IP address entry, and renews it automatically.
+{
+	admin off
+	local_certs
+	skip_install_trust
+	auto_https disable_redirects
+}
+
+10.0.0.68 {
+	tls internal
+
+	# The administrator API is never reachable through the proxy. Run the admin tool on the server against the Coordinator's loopback listener.
+	handle /v1/admin/* {
+		respond 403
+	}
+
+	handle {
+		request_body {
+			max_size 32KB
+		}
+		reverse_proxy 127.0.0.1:4010 {
+			transport http {
+				response_header_timeout 15s
+			}
+		}
+	}
+}

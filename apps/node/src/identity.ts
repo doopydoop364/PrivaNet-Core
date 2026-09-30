@@ -24,11 +24,13 @@ export async function loadIdentity(stateDir: string): Promise<Identity> {
       createPublicKey(key).export({ type: 'spki', format: 'der' }).toString('base64') !== identity.publicKey) throw new Error('Invalid identity key pair');
   return identity;
 }
+/** The node was first connected to a different Coordinator URL or ID. Never retried: it is a configuration decision, not an outage (docs/FIRST_DEPLOYMENT.md, "Changing the Coordinator URL"). */
+export class BindingChangedError extends Error { constructor() { super('Coordinator binding changed; operator recovery required'); } }
 export async function bindCoordinator(stateDir: string, url: string, coordinatorId: string): Promise<void> {
   const path = join(await privateDirectory(stateDir), 'node-state.json');
   try {
     const value = BindingSchema.parse(JSON.parse(await readPrivateFile(path)));
-    if (value.url !== url || value.coordinatorId !== coordinatorId) throw new Error('Coordinator binding changed; operator recovery required');
+    if (value.url !== url || value.coordinatorId !== coordinatorId) throw new BindingChangedError();
   } catch (error) {
     if (!isMissing(error)) throw error;
     await createPrivateFile(path, JSON.stringify(BindingSchema.parse({ url, coordinatorId })) + '\n');

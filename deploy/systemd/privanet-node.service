@@ -1,0 +1,43 @@
+[Unit]
+Description=PrivaNode (spare-capacity worker)
+Documentation=https://github.com/doopydoop364/PrivaNet-Core/blob/main/docs/FIRST_DEPLOYMENT.md
+# On the same machine as the Coordinator it is ordered after it, but it does NOT require it: the node retries with backoff, and stopping
+# or crashing the node never touches the Coordinator (there is no dependency in the other direction).
+After=network-online.target privanet-coordinator.service
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=privanet-node
+Group=privanet-node
+EnvironmentFile=/etc/privanet/node.env
+Environment=PATH=/opt/node/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/privanet/bin/privanet-node
+# SIGTERM is a graceful drain: the node stops taking work, finishes or hands back what it runs, says goodbye, and exits (PRIVANODE_DRAIN_TIMEOUT_MS, default 30 s).
+KillSignal=SIGTERM
+TimeoutStopSec=60
+Restart=on-failure
+RestartSec=10
+RestartPreventExitStatus=78
+StateDirectory=privanet-node
+StateDirectoryMode=0700
+# Defence in depth on a shared machine: the operating system schedules this service behind everything else, on top of the node's own resource policy.
+Nice=15
+CPUWeight=20
+IOWeight=20
+MemoryHigh=768M
+MemoryMax=1G
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

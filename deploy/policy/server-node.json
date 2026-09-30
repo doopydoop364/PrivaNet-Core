@@ -1,0 +1,17 @@
+{
+  "maxMemoryBytes": 536870912,
+  "reserveMemoryBytes": 3221225472,
+  "safetyMarginBytes": 536870912,
+  "maxCpuPercent": 15,
+  "reserveCpuPercent": 40,
+  "onBattery": "disable",
+  "defaultLevel": "ADAPTIVE",
+  "minimalFraction": 0.1,
+  "maxDiskBytes": 1073741824,
+  "reserveDiskBytes": 21474836480,
+  "maxDiskIo": "low",
+  "maxBandwidthBytesPerSec": 1048576,
+  "monthlyTransferBytes": 21474836480,
+  "preemptAfterMs": 5000,
+  "fetch": { "minHostDelayMs": 1000, "maxRequestsPerMinute": 60 }
+}
