@@ -1,12 +1,12 @@
 import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ZodError } from 'zod';
-import { AuthStartSchema, IdSchema, LeaseRequestSchema, MAX_BODY_BYTES, NodeIdSchema, PROTOCOL_VERSION } from '@privanet/protocol';
+import { AuthStartSchema, IdSchema, LeaseRequestSchema, MAX_BODY_BYTES, MAX_JOB_WAIT_MS, NodeIdSchema, PROTOCOL_VERSION } from '@privanet/protocol';
 import { ApiError, equalSecret } from '@privanet/shared';
 import type { Coordinator } from './service.js';
 
 export interface LogEvent { event: string; code?: string }
-export interface ServerOptions { adminSecret: string; log?: (entry: LogEvent) => void; authRequestsPerMinute?: number; maxLeaseWaiters?: number }
+export interface ServerOptions { adminSecret: string; log?: (entry: LogEvent) => void; authRequestsPerMinute?: number; maxLeaseWaiters?: number; maxJobWaiters?: number }
 function body(req: IncomingMessage): Promise<unknown> {
   if (req.headers['content-type'] !== 'application/json') throw new ApiError(415, 'CONTENT_TYPE', 'expected application/json');
   return new Promise((resolve, reject) => {
@@ -40,6 +40,8 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
   const buckets = new Map<string, { count: number; starts: number }>();
   // Requests currently held open waiting for work. Bounded so idle nodes cannot exhaust sockets or memory; over the bound a request is answered at once like a plain poll.
   const maxWaiters = options.maxLeaseWaiters ?? 512; let waiters = 0;
+  // Same idea for applications waiting on a job's result (`GET /v1/jobs/{id}?waitMs=`).
+  const maxJobWaiters = options.maxJobWaiters ?? 4096; let jobWaiters = 0;
   function rate(req: IncomingMessage) {
     const key = req.socket.remoteAddress ?? 'unknown'; const now = Date.now();
     let bucket = buckets.get(key);
@@ -63,7 +65,13 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
       let preRated = false;
       try {
         if (req.headers['x-privanet-protocol'] !== String(PROTOCOL_VERSION)) throw new ApiError(426, 'PROTOCOL_MISMATCH', 'unsupported protocol version');
-        const path = req.url ?? '';
+        const rawUrl = req.url ?? ''; const queryAt = rawUrl.indexOf('?');
+        const path = queryAt < 0 ? rawUrl : rawUrl.slice(0, queryAt); const query = queryAt < 0 ? '' : rawUrl.slice(queryAt + 1);
+        // The only query string the API accepts is `waitMs=<integer>` on a job read; anything else is an unknown route.
+        const waitMatch = /^waitMs=(\d{1,5})$/.exec(query);
+        if (query !== '' && !(waitMatch && req.method === 'GET' && /^\/v1\/jobs\/[^/]+$/.test(path))) throw new ApiError(404, 'NOT_FOUND', 'route not found');
+        const jobWaitMs = waitMatch?.[1] === undefined ? 0 : Number(waitMatch[1]);
+        if (jobWaitMs > MAX_JOB_WAIT_MS) throw new ApiError(400, 'INVALID_REQUEST', 'waitMs too large');
         if (!/^\/v1\/[a-zA-Z0-9/_-]+$/.test(path)) throw new ApiError(404, 'NOT_FOUND', 'route not found');
         if (req.method === 'GET' && path === '/v1/health') { send(res, 200, core.health()); return; }
         const publicPaths = ['/v1/enrollment/challenge', '/v1/enrollment/proof', '/v1/auth/challenge', '/v1/auth/proof'];
@@ -145,7 +153,23 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
             const job = core.submit(currentApp, input); log({ event: 'job.submitted' }); send(res, 201, job); return;
           }
           const get = /^\/v1\/jobs\/([^/]+)$/.exec(path);
-          if (req.method === 'GET' && get) { send(res, 200, core.getJob(app, IdSchema.parse(get[1]))); return; }
+          if (req.method === 'GET' && get) {
+            const id = IdSchema.parse(get[1]); let job = core.getJob(app, id); // ownership is checked before anything waits
+            const done = () => job.status === 'COMPLETED' || job.status === 'FAILED';
+            if (jobWaitMs > 0 && !done() && jobWaiters < maxJobWaiters) {
+              jobWaiters++;
+              try {
+                const deadline = Date.now() + jobWaitMs; let gone = false; res.once('close', () => { gone = true; });
+                while (!done() && !gone && Date.now() < deadline) {
+                  await new Promise<void>(resolve => { const timer = setTimeout(finish, Math.max(1, deadline - Date.now())); const off = core.onJobFinished(id, finish); res.once('close', finish);
+                    function finish() { clearTimeout(timer); off(); res.off('close', finish); resolve(); } });
+                  if (gone || res.destroyed) break;
+                  job = core.getJob(core.authenticateApplication(token), id); // the credential is re-checked on every wake
+                }
+              } finally { jobWaiters--; }
+            }
+            if (!res.destroyed) send(res, 200, job); return;
+          }
         }
         throw new ApiError(404, 'NOT_FOUND', 'route not found');
       } catch (error) {

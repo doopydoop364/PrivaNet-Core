@@ -191,11 +191,18 @@ export class Coordinator {
     const exhausted = job.attempts >= this.policy.maxAttempts;
     this.store.saveJob({ ...job, status: exhausted ? 'FAILED' : 'QUEUED', completedAt: exhausted ? this.now() : null,
       assignedNodeId: null, leaseId: null, leaseExpiresAt: null, error: { code } });
-    if (!exhausted) this.notifyWork();
+    if (!exhausted) this.notifyWork(); else this.notifyJobFinished(job.id);
   }
   private readonly workListeners = new Set<() => void>();
   /** Calls `listener` (asynchronously, never inside a transaction) whenever a job becomes leasable: submitted, released or requeued. Returns the unsubscribe function. */
   onWork(listener: () => void): () => void { this.workListeners.add(listener); return () => { this.workListeners.delete(listener); }; }
+  private readonly jobListeners = new Map<string, Set<() => void>>();
+  /** Calls `listener` (asynchronously) when the job reaches a final state. Returns the unsubscribe function. */
+  onJobFinished(id: string, listener: () => void): () => void {
+    let set = this.jobListeners.get(id); if (!set) { set = new Set(); this.jobListeners.set(id, set); }
+    set.add(listener); return () => { const current = this.jobListeners.get(id); current?.delete(listener); if (current?.size === 0) this.jobListeners.delete(id); };
+  }
+  private notifyJobFinished(id: string): void { for (const listener of [...(this.jobListeners.get(id) ?? [])]) queueMicrotask(listener); }
   private notifyWork(): void { for (const listener of [...this.workListeners]) queueMicrotask(listener); }
   private lastRetentionAt = 0;
   maintain(): void {
@@ -278,7 +285,7 @@ export class Coordinator {
     this.store.saveJob({ ...job, status: exhausted ? 'FAILED' : 'QUEUED', completedAt: exhausted ? this.now() : null,
       attempts: Math.max(0, job.attempts - 1), releases, assignedNodeId: null, leaseId: null, leaseExpiresAt: null,
       error: exhausted ? { code: 'RELEASE_LIMIT' } : null });
-    if (!exhausted) this.notifyWork();
+    if (!exhausted) this.notifyWork(); else this.notifyJobFinished(job.id);
   }
   /** Planned departure: return the node's leases without penalty and record that it left on purpose. */
   goodbye(nodeId: string, input: unknown): void {
@@ -296,7 +303,7 @@ export class Coordinator {
       if (!job || job.assignedNodeId !== nodeId || job.leaseId !== leaseId) reject(409, 'LEASE_CONFLICT');
       if (job.status === status && JSON.stringify(job.result) === JSON.stringify(outcome.result) && JSON.stringify(job.error) === JSON.stringify(outcome.error)) return;
       if (job.status !== 'LEASED' || job.leaseExpiresAt === null || job.leaseExpiresAt <= this.now()) reject(409, 'LEASE_CONFLICT');
-      this.store.saveJob({ ...job, ...outcome, status, completedAt: this.now() });
+      this.store.saveJob({ ...job, ...outcome, status, completedAt: this.now() }); this.notifyJobFinished(id);
     });
   }
 }

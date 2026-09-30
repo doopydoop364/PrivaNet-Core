@@ -118,6 +118,10 @@ Compatibility posture for that future: a job's `result` is `unknown` on the wire
 
 Compatibility: an old node sends `{}` and works unchanged. A new node against an older Coordinator gets 400 for `waitMs`, logs `node.lease_wait_unsupported`, and polls plainly from then on. The node's library default is no waiting; the daemon defaults `PRIVANODE_LEASE_WAIT_MS` to 5000, capped by the heartbeat interval so availability stays fresh, and a drain wakes an idle wait at once.
 
+## Job reads that wait for the result (unreleased, protocol version stays 1)
+
+`GET /v1/jobs/{id}?waitMs=N` (integer 0 to 8000) holds the read until the job is `COMPLETED` or `FAILED` or the time is up, then answers with the job as it is (still `QUEUED` or `LEASED` if the time ran out). It replaces client polling: one request per wait instead of one per poll interval, and the result arrives the moment the node completes it. `waitMs` is the only query string the API accepts and only on a job read; any other query is 404, and a value above 8000 is 400. Safety mirrors lease waits: ownership is checked before anything is held open, the application credential is re-checked whenever the read wakes (a revoked application gets 401, not the result), a read whose connection closed is dropped, and held-open reads are bounded (default 4096, `maxJobWaiters`), over which a read is answered at once. The SDK's `waitForResult` uses it automatically (never longer than 5 s per read and never past its own timeout) and falls back to plain polling against an older Coordinator that answers 404 to the query; `getJob(id, signal, waitMs)` exposes it directly.
+
 ## Additions in 0.3.0-alpha.1 (protocol version stays 1)
 
 - `POST /v1/admin/applications` accepts an optional `fetchIdentity` (`product`, `infoUrl`).
