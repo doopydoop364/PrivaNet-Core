@@ -7,6 +7,13 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 
 ## [Unreleased]
 
+### Added
+- **`scripts/registry-smoke.mjs`** (`npm run smoke:registry`): a live-registry check. In a clean project it confirms `@privanet/protocol`, `shared` and `sdk` exist at the expected version with the dist-tag pointing at it, installs `@privanet/sdk@<tag>`, verifies one matching protocol/shared/sdk set, and imports them. The Release workflow runs it after each publish (`registry-smoke` job, same `NPM_PUBLISH` gate). It is not part of `npm test`, so ordinary test runs never need the network.
+- The publish-job test also pins dependency order, `--tag next` for pre-releases and the smoke job.
+
+### Changed
+- **npm is now the primary install path.** `@privanet/protocol`, `shared` and `sdk` are published at `0.3.0-alpha.5` (trusted publishing configured). `docs/PACKAGES.md` and the README say so: `npm install @privanet/sdk@next`, pin exact versions while pre-1.0, no permanent `file:` links or release-asset URLs, the GitHub tarballs are a fallback and verifiable artifact, and the Coordinator and PrivaNode remain platform release archives. No package contents changed, so no new package version.
+
 ## [0.3.0-alpha.5] - 2026-09-30
 
 Deployment-readiness release: a server Coordinator with a separate desktop worker on a LAN, proven with real separate network stacks. Protocol version 1, no wire change: `0.3.0-alpha.4` and `0.3.0-alpha.2` nodes, clients and Coordinators interoperate (checked with real binaries).

@@ -40,6 +40,8 @@ test('the npm publish job uses trusted publishing (OIDC) with an optional token 
   assert.match(publish, /id-token: write/); assert.match(publish, /--provenance/); assert.match(publish, /vars\.NPM_PUBLISH == 'true'/); assert.match(publish, /needs: release/);
   assert.match(publish, /npm@\^11\.5\.1/, 'trusted publishing needs npm 11.5.1 or newer'); assert.match(publish, /already on npm: skipping/, 'a re-run must be idempotent');
   assert.doesNotMatch(publish, /registry-url/, 'no placeholder token file that could shadow OIDC');
+  assert.match(publish, /for pkg in protocol shared sdk;/, 'dependency order: protocol, then shared, then sdk'); assert.match(publish, /tag=latest; case "\$RELEASE_TAG" in \*-\*\) tag=next;;/, 'pre-releases publish under next, stable releases under latest');
+  assert.doesNotMatch(publish, /\sNPM_TOKEN:/, 'the token is only ever an optional secret read, never a required one'); assert.match(publish, /registry-smoke:[\s\S]*needs: publish[\s\S]*scripts\/registry-smoke\.mjs/, 'a consumer smoke test runs after the publish');
   assert.match(workflow, /gh release create/); assert.ok(workflow.indexOf('gh release create') < workflow.indexOf('\n  publish:'), 'the GitHub release (with the tarballs) is created before, and independent of, the npm publish');
 });
 

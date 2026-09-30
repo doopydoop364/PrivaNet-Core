@@ -24,7 +24,8 @@
     "start:node": "node apps/node/dist/main.js",
     "demo": "node scripts/demo.mjs",
     "admin": "node scripts/admin.mjs",
-    "backup": "node scripts/backup.mjs"
+    "backup": "node scripts/backup.mjs",
+    "smoke:registry": "node scripts/registry-smoke.mjs"
   },
   "dependencies": {
     "zod": "^4.6.5"
