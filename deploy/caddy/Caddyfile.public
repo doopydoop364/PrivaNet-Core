@@ -1,0 +1,25 @@
+# A Coordinator reachable from the Internet under a normal host name, with a normal, publicly trusted certificate (docs/PUBLIC_NODE.md).
+# Replace node.example.com with the name you published in DNS (an A/AAAA record pointing at this server) and set the contact email.
+#
+#   node.example.com --:443 TLS--> Caddy --> 127.0.0.1:4010 (the Coordinator; it never listens on a public address)
+#
+# Caddy obtains and renews the certificate itself (Let's Encrypt or ZeroSSL) and redirects http to https. Nodes need no CA file for this name.
+# The private-CA setup in Caddyfile (LAN, `tls internal`) is unchanged and still supported.
+{
+	admin off
+	# The address the certificate authority may use to warn you about problems (recommended).
+	# email you@example.com
+	servers {
+		timeouts {
+			read_header 10s
+			read_body 20s
+			write 30s
+			idle 60s
+		}
+	}
+}
+
+node.example.com {
+	# Path of the shipped routes file; adjust if you installed the release elsewhere.
+	import /opt/privanet/deploy/caddy/public-routes.caddy
+}

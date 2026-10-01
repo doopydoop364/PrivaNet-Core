@@ -1,0 +1,29 @@
+# The routes of a PUBLIC Coordinator entrypoint (docs/PUBLIC_NODE.md). Imported inside a site block by Caddyfile.public.
+#
+# An ALLOWLIST: only the exact routes a joining or running node needs are forwarded to the Coordinator; everything else, including the whole
+# administrator API (/v1/admin/*) and the application API (/v1/jobs, /v1/capabilities), is answered by the proxy itself and never reaches the
+# Coordinator. Applications (PrivaSearch and others) run next to the Coordinator and use its loopback address, not this public name.
+# Matching is case-insensitive and exact, so /V1/Admin/..., /v1/node/../admin/... and encoded variants are not on the list either.
+#
+# PRIVANET_UPSTREAM is where the Coordinator listens (default 127.0.0.1:4010, loopback only).
+header {
+	Strict-Transport-Security "max-age=31536000"
+	X-Content-Type-Options nosniff
+	Cache-Control no-store
+	-Server
+}
+@node path /v1/health /v1/enrollment/challenge /v1/enrollment/proof /v1/auth/challenge /v1/auth/proof /v1/invites/challenge /v1/join/request /v1/join/status /v1/join/challenge /v1/node/*
+handle @node {
+	request_body {
+		max_size 32KB
+	}
+	reverse_proxy {$PRIVANET_UPSTREAM:127.0.0.1:4010} {
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 15s
+		}
+	}
+}
+handle {
+	respond "not found" 404
+}
