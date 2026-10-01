@@ -33,7 +33,7 @@ async function listen(server: Server, port = 0): Promise<string> {
 async function close(server: Server) {
   await new Promise<void>((resolve, reject) => { server.close(error => error ? reject(error) : resolve()); server.closeAllConnections(); });
 }
-async function fixture(t: TestContext, authRequestsPerMinute = 120, policy: Partial<Policy> = {}, serverOptions: { maxLeaseWaiters?: number; maxJobWaiters?: number } = {}) {
+async function fixture(t: TestContext, authRequestsPerMinute = 120, policy: Partial<Policy> = {}, serverOptions: { maxLeaseWaiters?: number; maxJobWaiters?: number; trustLoopbackProxy?: boolean } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'privanet-http-')); const db = join(dir, 'coordinator.sqlite');
   const logs: unknown[] = []; const admin = secret(); let store = new SqliteStore(db); let core = new Coordinator(store, policy);
   let server = createCoordinatorServer(core, { adminSecret: admin, log: e => logs.push(e), authRequestsPerMinute, ...serverOptions });
@@ -126,6 +126,20 @@ test('unauthorized enrollment challenges are rate limited', async t => {
   await assert.rejects(f.transport.request('POST', '/v1/enrollment/challenge', ChallengeSchema, request), errorCode('INVALID_ENROLLMENT'));
   await assert.rejects(f.transport.request('POST', '/v1/enrollment/challenge', ChallengeSchema, request), errorCode('INVALID_ENROLLMENT'));
   await assert.rejects(f.transport.request('POST', '/v1/enrollment/challenge', ChallengeSchema, request), errorCode('RATE_LIMIT'));
+});
+test('behind a proxy on the same machine each client has its own authentication allowance, but only when the operator opted in', async t => {
+  const probe = async (f: Awaited<ReturnType<typeof fixture>>, forwarded?: string) => (await fetch(f.url + '/v1/auth/challenge', { method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-PrivaNet-Protocol': '1', ...(forwarded ? { 'X-Forwarded-For': forwarded } : {}) }, body: JSON.stringify({ nodeId: 'node_' + 'a'.repeat(64), protocolVersion: 1 }) })).status;
+  // Default: forwarded headers are never believed, so every client of the proxy shares one allowance (documented behaviour, unchanged).
+  const off = await fixture(t, 2);
+  assert.deepEqual([await probe(off, '203.0.113.5'), await probe(off, '203.0.113.6'), await probe(off, '203.0.113.7')], [401, 401, 429]);
+  // Opted in: the address the proxy appended names the client; earlier entries (client-supplied) and non-addresses do not.
+  const on = await fixture(t, 2, {}, { trustLoopbackProxy: true });
+  assert.deepEqual([await probe(on, '203.0.113.5'), await probe(on, '203.0.113.5'), await probe(on, '203.0.113.5')], [401, 401, 429], 'one client is still limited');
+  assert.equal(await probe(on, '203.0.113.6'), 401, 'another client behind the same proxy is not locked out');
+  assert.equal(await probe(on, '1.1.1.1, 203.0.113.5'), 429, 'a spoofed leading entry does not buy a fresh allowance');
+  assert.equal(await probe(on, '9.9.9.9, 203.0.113.5'), 429);
+  assert.deepEqual([await probe(on, 'not-an-address'), await probe(on), await probe(on)], [401, 401, 429], 'junk or no header falls back to the connecting address');
 });
 test('SDK polling supports timeout, cancellation and terminal job errors', async t => {
   const f = await fixture(t); const app = await f.app(); const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token });

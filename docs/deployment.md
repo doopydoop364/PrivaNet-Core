@@ -10,7 +10,7 @@ Status: operator guidance for the Coordinator (current through v0.3.0-alpha.6). 
 | Client verification | Nodes and SDKs require HTTPS (plain HTTP only for literal loopback with an explicit flag), refuse redirects, and a node pins the exact Coordinator URL and ID on first contact. |
 | Limits | Bodies ≤ 32 KiB, responses ≤ 512 KiB, request timeout 10 s, header timeout 5 s, keep-alive 5 s. |
 | Rate limiting | Only authentication attempts, per connecting address (default 120 per minute, `PRIVANET_AUTH_REQUESTS_PER_MINUTE`). |
-| Forwarded headers | Ignored on purpose (`X-Forwarded-For` is never trusted). |
+| Forwarded headers | Ignored by default (`X-Forwarded-For` is not trusted). Opt-in: `PRIVANET_TRUST_LOOPBACK_PROXY=true` (see below). |
 | Queue and retention | `PRIVANET_MAX_PENDING_PER_APP` (default 10000) rejects further submissions with 429 `QUEUE_LIMIT`; `PRIVANET_RETENTION_MS` (default 30 days, 0 = keep forever) deletes finished jobs and their results. After retention a duplicate submission with an old idempotency key creates a new job, so keep retention longer than your clients' retry window. |
 
 ## First deployment shape and the control plane
@@ -27,7 +27,7 @@ Give the server's node conservative limits so the Coordinator's availability win
 
 ## Reverse-proxy review findings
 
-1. **All clients share the proxy's address.** Because forwarded headers are ignored, the per-address authentication limit sees every client as the proxy. One abusive client can exhaust the shared budget and lock everyone out of authentication. Do the real per-client limiting at the proxy, and raise `PRIVANET_AUTH_REQUESTS_PER_MINUTE` to a value the proxy's own limit keeps safe. Do not expose the Coordinator listener to anything except the proxy.
+1. **All clients share the proxy's address.** By default forwarded headers are ignored, so the per-address authentication limit sees every client as the proxy. One abusive client can exhaust the shared budget and lock everyone out of authentication. If the proxy runs on the same machine as the Coordinator (the first-deployment shape: Caddy to `127.0.0.1:4010`), set `PRIVANET_TRUST_LOOPBACK_PROXY=true`: a request whose connecting address is loopback is then limited by the **last** `X-Forwarded-For` entry, which is the client address the proxy appended (Caddy's `reverse_proxy` sets it from the connection); earlier entries are client-supplied and ignored, an entry that is not an IP address is ignored, and a connection that is not from loopback is never believed. Leave it off if your proxy does not append the client address, or the proxy is not on this machine. In every case also do real per-client limiting at the proxy, and raise `PRIVANET_AUTH_REQUESTS_PER_MINUTE` to a value the proxy's own limit keeps safe. Do not expose the Coordinator listener to anything except the proxy.
 2. **The plain listener must be unreachable.** Bind to `127.0.0.1` behind a proxy on the same host, or to a private interface with a firewall rule that admits only the proxy. `PRIVANET_TLS_TERMINATED=true` is required only when binding off-loopback.
 3. **Admin routes should not be public.** `/v1/admin/*` is protected by the admin secret, but there is no reason to expose it to the internet; restrict it at the proxy to an operator network or a VPN, or reach it over `127.0.0.1`.
 4. **Keep the proxy's limits at or below the Coordinator's**: body 32 KiB, request timeout about 10 s. Do not buffer unbounded bodies, do not follow or issue redirects for `/v1`, and pass the `Host` header unchanged.

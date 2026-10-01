@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { isIP } from 'node:net';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ZodError } from 'zod';
 import { AuthStartSchema, IdSchema, LeaseRequestSchema, MAX_BODY_BYTES, MAX_JOB_WAIT_MS, NodeIdSchema, PROTOCOL_VERSION } from '@privanet/protocol';
@@ -6,7 +7,15 @@ import { ApiError, equalSecret } from '@privanet/shared';
 import type { Coordinator } from './service.js';
 
 export interface LogEvent { event: string; code?: string }
-export interface ServerOptions { adminSecret: string; log?: (entry: LogEvent) => void; authRequestsPerMinute?: number; maxLeaseWaiters?: number; maxJobWaiters?: number }
+export interface ServerOptions { adminSecret: string; log?: (entry: LogEvent) => void; authRequestsPerMinute?: number; maxLeaseWaiters?: number; maxJobWaiters?: number;
+  /**
+   * Off by default (forwarded headers are never believed). When the Coordinator sits behind a reverse proxy on the same machine every request arrives from
+   * the loopback address, so the per-address limit sees one client and one abusive caller can lock everyone out of authentication. With this on, a request whose
+   * peer is a loopback address (the operator's own proxy) is limited by the LAST X-Forwarded-For entry, the address that proxy appended; earlier entries are
+   * client-supplied and ignored, an entry that is not an IP address is ignored, and a peer that is not loopback is never believed about its headers.
+   */
+  trustLoopbackProxy?: boolean }
+const LOOPBACK_PEER = /^(127\.\d+\.\d+\.\d+|::1|::ffff:127\.\d+\.\d+\.\d+)$/i;
 function body(req: IncomingMessage): Promise<unknown> {
   if (req.headers['content-type'] !== 'application/json') throw new ApiError(415, 'CONTENT_TYPE', 'expected application/json');
   return new Promise((resolve, reject) => {
@@ -42,8 +51,14 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
   const maxWaiters = options.maxLeaseWaiters ?? 512; let waiters = 0;
   // Same idea for applications waiting on a job's result (`GET /v1/jobs/{id}?waitMs=`).
   const maxJobWaiters = options.maxJobWaiters ?? 4096; let jobWaiters = 0;
+  function clientKey(req: IncomingMessage): string {
+    const peer = req.socket.remoteAddress ?? 'unknown';
+    if (!options.trustLoopbackProxy || !LOOPBACK_PEER.test(peer)) return peer;
+    const forwarded = req.headers['x-forwarded-for']; const last = typeof forwarded === 'string' ? forwarded.split(',').pop()?.trim() : undefined;
+    return last && isIP(last) !== 0 ? last : peer;
+  }
   function rate(req: IncomingMessage) {
-    const key = req.socket.remoteAddress ?? 'unknown'; const now = Date.now();
+    const key = clientKey(req); const now = Date.now();
     let bucket = buckets.get(key);
     if (!bucket || now - bucket.starts >= 60000) {
       if (buckets.size >= 1000) buckets.delete(buckets.keys().next().value ?? '');
