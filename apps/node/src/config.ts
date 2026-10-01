@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { readFileSync } from 'node:fs';
 import { CapabilitiesSchema } from '@privanet/protocol';
+import { Transport } from '@privanet/shared';
 import { ResourcePolicySchema } from './resource-policy.js';
 import type { ResourcePolicy } from './resource-policy.js';
 const interval = (fallback: number) => z.coerce.number().int().min(1).max(60000).default(fallback);
@@ -17,6 +18,11 @@ const schema = z.object({
   // Concurrent jobs this node runs (1 to 64). Each running job is still counted against the owner's memory, CPU, disk and network limits.
   PRIVANODE_JOB_SLOTS: z.coerce.number().int().min(1).max(64).default(1),
   PRIVANODE_LEASE_WAIT_MS: z.coerce.number().int().min(0).max(8000).default(5000),
+}).superRefine((c, ctx) => {
+  // An address the transport would refuse (plain http off loopback, a path, credentials, no scheme) is a configuration error reported by NAME (exit status 78, no
+  // restart loop), not an unexplained `node.startup_failed` that a service manager restarts. The address is never echoed: it may carry credentials.
+  try { new Transport({ url: c.PRIVANODE_COORDINATOR_URL, allowInsecureLoopback: c.PRIVANODE_ALLOW_INSECURE_LOOPBACK === 'true' }); }
+  catch { ctx.addIssue({ code: 'custom', path: ['PRIVANODE_COORDINATOR_URL'], message: 'not an acceptable Coordinator address (https://host, or literal loopback http with PRIVANODE_ALLOW_INSECURE_LOOPBACK=true)' }); }
 });
 /** Reads the owner's resource policy (strict JSON); missing file path means conservative defaults. */
 export function loadResourcePolicy(path: string | undefined): ResourcePolicy {
