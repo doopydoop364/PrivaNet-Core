@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { ZodError } from 'zod';
 import assert from 'node:assert/strict';
 import { CapabilitiesSchema, EchoSchema, EnrollmentStartSchema, HeartbeatSchema, JOB_TYPES, JOB_TYPE_IDS, JobTypeSchema, LeaseSchema, SubmitSchema } from '@privanet/protocol';
 import type { JobType } from '@privanet/protocol';
@@ -42,8 +43,15 @@ test('configuration keeps roles separate, operator defaults disabled and remote 
   assert.equal(coordinatorConfig({ PRIVANET_ADMIN_SECRET: admin, PORT: '22' }).port, 4010);
   assert.throws(() => coordinatorConfig({ PRIVANET_ADMIN_SECRET: admin, PRIVANET_HOST: '0.0.0.0' }));
   assert.equal(coordinatorConfig({ PRIVANET_ADMIN_SECRET: admin, PRIVANET_HOST: '0.0.0.0', PRIVANET_TLS_TERMINATED: 'true' }).host, '0.0.0.0');
-  assert.deepEqual(nodeConfig({}).capabilities, []);
-  assert.throws(() => nodeConfig({ PRIVANODE_CAPABILITIES: 'compute.anything' }));
+  assert.deepEqual(nodeConfig({ PRIVANODE_ALLOW_INSECURE_LOOPBACK: 'true' }).capabilities, []); // the default address is loopback http, which needs the explicit flag
+  assert.throws(() => nodeConfig({ PRIVANODE_ALLOW_INSECURE_LOOPBACK: 'true', PRIVANODE_CAPABILITIES: 'compute.anything' }));
+  // An unusable Coordinator address is a configuration error naming the setting (exit status 78, no restart loop) and the address is never echoed.
+  for (const url of ['http://coordinator.lan:4010', 'coordinator.example', 'https://user:hunter2@coordinator.example', 'https://coordinator.example/path', 'http://127.0.0.1:4010']) {
+    try { nodeConfig({ PRIVANODE_COORDINATOR_URL: url }); assert.fail(`expected ${url} to be refused`); }
+    catch (error) { assert.ok(error instanceof ZodError, url); assert.deepEqual([...new Set(error.issues.map(issue => issue.path[0]))], ['PRIVANODE_COORDINATOR_URL']); assert.equal(JSON.stringify(error.issues).includes('hunter2'), false); }
+  }
+  assert.equal(nodeConfig({ PRIVANODE_COORDINATOR_URL: 'https://coordinator.example' }).url, 'https://coordinator.example');
+  assert.equal(nodeConfig({ PRIVANODE_COORDINATOR_URL: 'http://127.0.0.1:4010', PRIVANODE_ALLOW_INSECURE_LOOPBACK: 'true' }).allowInsecureLoopback, true);
 });
 
 test('job type registry is the single source for wire types, capabilities and node handlers', () => {

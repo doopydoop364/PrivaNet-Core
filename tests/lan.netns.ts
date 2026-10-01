@@ -66,7 +66,9 @@ test('the LAN is not trusted: TLS is verified, the admin API and the Coordinator
   // A node refuses plain HTTP to a LAN address even when the loopback exception is switched on.
   const plain = await startNode(lan, 'plain', { enroll: false, env: { PRIVANODE_COORDINATOR_URL: 'http://10.77.0.1', PRIVANODE_ALLOW_INSECURE_LOOPBACK: 'true' } });
   await new Promise<void>(resolve => plain.child.once('close', () => resolve()));
-  assert.equal(plain.count('node.startup_failed'), 1); assert.notEqual(plain.child.exitCode, 0);
+  // Refused while the configuration is read: it names the setting and exits 78, which the shipped unit does not restart (no silent restart loop), and never echoes the address.
+  assert.equal(plain.count('node.config_invalid'), 1); assert.equal(plain.count('node.startup_failed'), 0); assert.equal(plain.child.exitCode, 78);
+  assert.match(plain.logs.join(''), /PRIVANODE_COORDINATOR_URL/); assert.equal(plain.logs.join('').includes('10.77.0.1'), false);
 });
 
 test('a node that does not trust the CA never enrols, says why, and leaves the enrollment token unused', { skip }, async t => {

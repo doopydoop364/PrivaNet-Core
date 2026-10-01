@@ -233,7 +233,7 @@ test('proxy settings never apply: HTTP_PROXY, HTTPS_PROXY and NODE_USE_ENV_PROXY
 test('the owner-local exception cannot come from a job, the Coordinator or the environment: it exists only in the node\'s local policy file', async t => {
   const { writeFile, mkdtemp, rm } = await import('node:fs/promises'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
   const dir = await mkdtemp(join(tmpdir(), 'fetch-policy-')); t.after(() => rm(dir, { recursive: true, force: true }));
-  const env = { PRIVANODE_FETCH_UNSAFE_LOCAL: '127.0.0.0/8', PRIVANODE_FETCH_ALLOWED_CIDRS: '127.0.0.0/8', PRIVANODE_UNSAFE_LOCAL: 'true', FETCH_ALLOW_PRIVATE: '1' };
+  const env = { PRIVANODE_ALLOW_INSECURE_LOOPBACK: 'true', PRIVANODE_FETCH_UNSAFE_LOCAL: '127.0.0.0/8', PRIVANODE_FETCH_ALLOWED_CIDRS: '127.0.0.0/8', PRIVANODE_UNSAFE_LOCAL: 'true', FETCH_ALLOW_PRIVATE: '1' };
   assert.equal(loadConfig({ ...env, PRIVANODE_STATE_DIR: dir }).policy.fetch.unsafeLocal, undefined);
   const file = join(dir, 'policy.json'); await writeFile(file, JSON.stringify({ fetch: { unsafeLocal: { allowedCidrs: ['127.0.0.0/8'], allowedPorts: [8080], hostMap: {} } } }));
   assert.deepEqual(loadResourcePolicy(file).fetch.unsafeLocal?.allowedPorts, [8080]); assert.equal(loadResourcePolicy(undefined).fetch.unsafeLocal, undefined); // absent unless the owner wrote it
