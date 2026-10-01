@@ -17,7 +17,17 @@ const repo = fileURLToPath(new URL('../../', import.meta.url));
 export { eventually, sleep };
 
 /** Why these tests cannot run here, or undefined when they can (root, network namespaces, iptables, Caddy). */
+/**
+ * Why the separate-host tests cannot run here, or undefined when they can. They are skipped when the machine lacks the tools or privileges, and node:test reports a
+ * skip as a pass. The `lan` CI job sets PRIVANET_REQUIRE_LAN=1, which turns that skip into a failure, so a broken setup step can never leave the job green with none
+ * of the deployment-validation coverage.
+ */
 export function netnsUnavailable(): string | undefined {
+  const reason = netnsReason();
+  if (reason && process.env.PRIVANET_REQUIRE_LAN === '1') throw new Error(`the LAN tests are required (PRIVANET_REQUIRE_LAN=1) but cannot run: ${reason}`);
+  return reason;
+}
+function netnsReason(): string | undefined {
   if (process.platform !== 'linux') return 'needs Linux network namespaces';
   if (process.getuid?.() !== 0) return 'needs root (ip netns, iptables)';
   for (const tool of ['ip', 'iptables', 'caddy']) { try { execFileSync('which', [tool], { stdio: 'ignore' }); } catch { return `needs ${tool} on PATH`; } }

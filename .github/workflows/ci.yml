@@ -42,4 +42,6 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y caddy iproute2 iptables
       - run: sudo systemctl disable --now caddy || true
       - run: npm ci
-      - run: sudo env "PATH=$PATH" npm run test:lan
+      # PRIVANET_REQUIRE_LAN: a skipped test counts as a pass, so without it a missing tool or privilege would leave this job green with no deployment-validation coverage.
+      # Passed through `sudo env` because sudo drops the caller's environment.
+      - run: sudo env "PATH=$PATH" PRIVANET_REQUIRE_LAN=1 npm run test:lan
