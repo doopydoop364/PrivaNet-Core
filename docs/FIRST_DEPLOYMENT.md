@@ -136,6 +136,28 @@ sudo privanet-admin nodes
 
 Statuses: `ONLINE`, `STALE` (heartbeat late), `OFFLINE`, `DRAINING`, `OFFLINE_EXPECTED` (said goodbye), and revoked nodes are refused. Service logs are structured event names and codes only (no job data, no addresses, no secrets): `journalctl -u privanet-coordinator`, `journalctl -u privanet-node`.
 
+### 7b. Run your first task
+
+Use a throwaway application credential for this, separate from PrivaSearch's, so the test shows up under its own name. On the server:
+
+```sh
+sudo PRIVANET_JOB_TYPES=web.fetch.v1 \
+     PRIVANET_FETCH_PRODUCT=PrivaNetDemo PRIVANET_FETCH_INFO_URL=https://your-site.example/bot \
+     privanet-admin application first-task          # prints {"applicationId":...,"token":...} once
+```
+
+Then, from any machine that has the release archive (the desktop, or the server itself), submit one real fetch of a public page. The token is read from the keyboard, not typed on a command line:
+
+```sh
+cd /opt/privanet
+read -rs PRIVANET_APP_TOKEN && export PRIVANET_APP_TOKEN        # paste the token, press Enter
+PRIVANET_COORDINATOR_URL=https://10.0.0.68 NODE_EXTRA_CA_CERTS=/etc/privanet/privanet-root.crt \
+PRIVANET_DEMO_FETCH_URL=https://example.com/ /opt/node/bin/node tools/demo.mjs
+# {"jobId":"...","outcome":"FETCHED","httpStatus":200,"finalUrl":"https://example.com/","contentType":"text/html","bodyBytes":...,"robots":"ALLOWED","durationMs":...}
+```
+
+`outcome` is the answer: `FETCHED` is a working path from application to Coordinator to node and back. Anything else is informative: `BLOCKED_TARGET` (the node refused the address), `ROBOTS_DISALLOWED`, `FETCH_FAILED` with an `error.code` (`DNS`, `TLS`, ...) for a problem on the worker's side. If it fails before a job exists, the message carries a fixed code: `JOB_TYPE_FORBIDDEN` (this credential cannot submit that type), `FETCH_IDENTITY_REQUIRED` (the credential was created without `PRIVANET_FETCH_PRODUCT` and `PRIVANET_FETCH_INFO_URL`), or no code at all when the Coordinator cannot be reached or the certificate is not trusted (check `NODE_EXTRA_CA_CERTS`). Which node did the work? Run `sudo journalctl -u privanet-node` on the desktop and look for `job.completed`. Without `PRIVANET_DEMO_FETCH_URL` the same tool submits `system.echo.v1`, which only works if both the credential and a node allow that type (this guide enrolls nodes for `web.fetch.v1` only).
+
 ### 8. Back up, restart, upgrade
 
 ```sh

@@ -7,6 +7,12 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 
 ## [Unreleased]
 
+### Added
+- **`demo.mjs` can submit a real fetch.** Setting `PRIVANET_DEMO_FETCH_URL` submits `web.fetch.v1` instead of `system.echo.v1` and prints a short summary (outcome, HTTP status, final URL, content type, size, robots verdict; never page text). A failure before a job exists now names a fixed error code such as `JOB_TYPE_FORBIDDEN` or `FETCH_IDENTITY_REQUIRED`.
+
+### Fixed
+- **The first-deployment guide had no first task that could work.** Its manual check pointed at the echo demo, but the guide creates credentials and enrolls nodes for `web.fetch.v1` only, so the echo demo would have been refused or never scheduled. A new step, "Run your first task", uses a throwaway credential and the fetch mode above.
+
 ### Documentation
 - **Roadmap: a planned Phase 3.5, Remote Node Onboarding / Contributor Experience** (`ROADMAP.md`, `docs/roadmap.md` as v0.3.5). Trusted, invite-only remote contributors: a public hostname with a publicly trusted certificate, one-command Linux and Windows installers, short-lived invite codes, an optional owner-approval flow, reinstall and revocation, and remote-node diagnostics, with the guardrails it needs (Internet exposure review, installer trust chain). Enrollment stays owner-controlled; anonymous or public enrollment, Sybil resistance, reputation, credits and hostile-node verification stay in Phase 10. Existing phase numbers and order are unchanged, and the Phase 10 text now says invite-only onboarding does not wait for it. The first-deployment, deployment and validation documents point to it as a planned simplification. Nothing is implemented.
 

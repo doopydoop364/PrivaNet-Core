@@ -124,7 +124,7 @@ Follow FIRST_DEPLOYMENT.md, then confirm each line. Anything that differs is a f
 5. Desktop: `ss -ltn` shows no PrivaNet listener; enrol the node; `sudo privanet-admin nodes` on the server lists it `ONLINE` with the desktop's `daemonVersion`.
 6. `sudo systemctl stop privanet-coordinator`; on the desktop the log shows `node.connection_failed` with a `reason` or `INVALID_RESPONSE` and the process stays up; start it again; `node.authenticated` appears within about a minute with no action from you.
 7. `sudo systemctl stop privanet-node` on the desktop: log shows a clean drain and `node.departed`; `privanet-admin nodes` shows `OFFLINE_EXPECTED`. Start it again: `ONLINE`, same node ID.
-8. Submit one small job with `demo.mjs` or a short PrivaSearch crawl from the desktop (`NODE_EXTRA_CA_CERTS` set) and confirm it completes; pull the desktop's network for a minute mid-crawl and confirm pages keep completing on the server node.
+8. Submit one small job (the first-task step in FIRST_DEPLOYMENT.md, `PRIVANET_DEMO_FETCH_URL=https://example.com/ node tools/demo.mjs`) or a short PrivaSearch crawl from the desktop (`NODE_EXTRA_CA_CERTS` set) and confirm it completes; pull the desktop's network for a minute mid-crawl and confirm pages keep completing on the server node.
 9. Reboot the server: the Coordinator, Caddy and (if enabled) the server node come back by themselves and the desktop reconnects.
 
 ## What this deployment proves, and what it does not
