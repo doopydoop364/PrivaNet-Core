@@ -42,7 +42,10 @@ async function fixture(t: TestContext, authRequestsPerMinute = 120, policy: Part
   return { dir, db, url, transport, admin, logs, get core() { return core; },
     app: (types: string[] = ['system.echo.v1']) => transport.request('POST', '/v1/admin/applications', AppCredentialSchema, { name: 'integration', allowedJobTypes: types }, admin),
     grant: (capabilities: string[] = ['system.echo.v1']) => transport.request('POST', '/v1/admin/enrollment-tokens', EnrollmentTokenSchema, { expiresInMs: 60000, capabilities }, admin),
-    async restart() { const port = Number(new URL(url).port); await close(server); store.close(); store = new SqliteStore(db); core = new Coordinator(store, policy); server = createCoordinatorServer(core, { adminSecret: admin, log: e => logs.push(e) }); await listen(server, port); },
+    /** Takes the Coordinator down (the listener closes and the store is released) and brings it back on the same address and database: `restart()` at once, or `down()` then `up()` with the outage in between. */
+    async down() { await close(server); store.close(); },
+    async up() { const port = Number(new URL(url).port); store = new SqliteStore(db); core = new Coordinator(store, policy); server = createCoordinatorServer(core, { adminSecret: admin, log: e => logs.push(e) }); await listen(server, port); },
+    async restart() { await this.down(); await this.up(); },
   };
 }
 function errorCode(code: string) { return (e: unknown) => e instanceof ApiError && e.code === code; }
@@ -286,6 +289,36 @@ test('sustained pressure preempts a preemptible job: it is released, not failed,
   assert.equal(f.logs.some(e => (e as { event: string }).event === 'job.released'), true);
   const second = await enrolled(f, {}, 'second'); await second.tick();
   assert.deepEqual(await sdk.waitForResult(job.id), { message: 'squeezed' });
+});
+
+test('a finished result is delivered after a Coordinator outage instead of being thrown away and the job redone', async t => {
+  const f = await fixture(t, 120, { leaseMs: 6000 }); const app = await f.app();
+  const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token });
+  let started!: () => void; const begun = new Promise<void>(resolve => { started = resolve; });
+  let finish!: () => void; const gate = new Promise<void>(resolve => { finish = resolve; });
+  let runs = 0; const slow: Handlers = { ...defaultHandlers, 'system.echo.v1': async (input) => { runs++; started(); await gate; return input as never; } };
+  const node = await enrolled(f, { handlers: slow, pollMs: 50 }); const job = await sdk.submit('system.echo.v1', { message: 'finished during the outage' }, 'outage-result');
+  const ticking = node.tick(); await begun;
+  await f.down(); finish(); await delay(700); // the handler is done while the Coordinator is away; the first delivery attempts are refused
+  await f.up(); await ticking;
+  const after = await new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token }).getJob(job.id);
+  assert.deepEqual([after.status, after.attempts, runs], ['COMPLETED', 1, 1], 'the result was delivered once the Coordinator was back: no second attempt, no second run');
+  assert.deepEqual(after.result, { message: 'finished during the outage' });
+});
+
+test('a result that can no longer be delivered (the lease ran out during the outage) is dropped without a loop, and the job is run again', async t => {
+  const f = await fixture(t, 120, { leaseMs: 400 }); const app = await f.app();
+  const sdk = new PrivaNetClient({ url: f.url, allowInsecureLoopback: true, token: app.token });
+  let started!: () => void; const begun = new Promise<void>(resolve => { started = resolve; });
+  let finish!: () => void; const gate = new Promise<void>(resolve => { finish = resolve; });
+  const slow: Handlers = { ...defaultHandlers, 'system.echo.v1': async (input) => { started(); await gate; return input as never; } };
+  const node = await enrolled(f, { handlers: slow, pollMs: 50 }); const job = await sdk.submit('system.echo.v1', { message: 'too late' }, 'outage-late');
+  const ticking = node.tick().catch(() => undefined); await begun;
+  await f.down(); finish(); await delay(1200); await f.up(); // longer than the lease
+  await Promise.race([ticking, delay(5000)]);
+  const second = await enrolled(f, {}, 'second'); await second.tick();
+  assert.deepEqual(await sdk.waitForResult(job.id), { message: 'too late' });
+  assert.equal((await sdk.getJob(job.id)).attempts, 2, 'the lease had expired: the job was legitimately run again');
 });
 
 test('forced shutdown hands the running job back with reason SHUTDOWN instead of failing it', async t => {
