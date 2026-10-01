@@ -64,6 +64,12 @@ test('online backup restores into a working Coordinator with the same identity, 
   assert.match(out.stdout, /backup\.created/);
   if (process.platform !== 'win32') assert.equal((await stat(backup)).mode & 0o077, 0);
   await assert.rejects(exec(process.execPath, ['scripts/backup.mjs', backup], { cwd: root, env })); // never overwrites
+  if (process.platform !== 'win32') { // the file is never readable by others, even for an instant: the later chmod is disabled here and the umask is the usual 022
+    const preload = join(dir, 'no-chmod.cjs'); await writeFile(preload, "process.umask(0o022); const fs = require('node:fs'); fs.chmodSync = () => {};");
+    const guarded = join(dir, 'guarded.sqlite');
+    await exec(process.execPath, ['--require', preload, 'scripts/backup.mjs', guarded], { cwd: root, env });
+    assert.equal((await stat(guarded)).mode & 0o077, 0, 'created owner-only, not fixed up afterwards');
+  }
   await assert.rejects(exec(process.execPath, ['scripts/backup.mjs'], { cwd: root, env })); // needs a destination
   const coordinatorId = live.coordinatorId; live.close();
   const restored = new SqliteStore(backup); opened.push(restored);
