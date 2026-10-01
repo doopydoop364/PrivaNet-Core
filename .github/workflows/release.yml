@@ -1,7 +1,7 @@
 name: Release
 on:
-  push:
-    tags: ['v*']
+  release:
+    types: [published]
   # Creates the tag and release from the chosen ref when a tag cannot be pushed directly.
   workflow_dispatch:
     inputs:
@@ -10,7 +10,7 @@ on:
         required: true
         type: string
 env:
-  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
 permissions:
   contents: read
 jobs:
@@ -85,8 +85,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A published-release event means the release already exists. Attach the freshly built assets to it.
+          if [ "$GITHUB_EVENT_NAME" = release ]; then gh release upload "$RELEASE_TAG" assets/* --clobber; exit 0; fi
           prerelease=""; case "$RELEASE_TAG" in *-*) prerelease="--prerelease";; esac
-          # A pushed tag must already exist; a dispatch creates it at the exact commit that was built.
+          # A manual dispatch creates the tag and release at the exact commit that was built.
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then target="--target $GITHUB_SHA"; else target="--verify-tag"; fi
           # A re-run of the same tag (for example to complete the npm publish after setting NPM_PUBLISH) must not fail here.
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then echo "Release $RELEASE_TAG already exists: leaving it and its assets untouched"; exit 0; fi
