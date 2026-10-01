@@ -150,8 +150,8 @@ export const HealthSchema = z.strictObject({
   protocolVersion: ProtocolSchema, serviceVersion: VersionSchema, coordinatorId: IdSchema, status: z.literal('ok'),
 });
 export const ErrorSchema = z.strictObject({ error: z.strictObject({ code: z.string().max(64), message: z.string().max(256) }) });
-/** A human-readable name for a node: letters, digits, space, dot, underscore and hyphen, 1 to 64 characters, starting and ending with a non-space. Chosen by the administrator, never by the node. */
-export const DisplayNameSchema = z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9 ._-]{0,62}[A-Za-z0-9._-])?$/);
+/** A human-readable name for a node: letters, digits, space, dot, underscore, hyphen and apostrophe, 1 to 64 characters, starting and ending with a non-space. Chosen by the administrator, never by the node. */
+export const DisplayNameSchema = z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9 ._'-]{0,62}[A-Za-z0-9._'-])?$/);
 /** Public identifier of an enrollment token (derived from its hash, so it identifies the token without revealing or enabling it). */
 export const EnrollmentTokenIdSchema = z.string().regex(/^enr_[a-f0-9]{16}$/);
 export const EnrollmentTokenRequestSchema = z.strictObject({
@@ -173,6 +173,64 @@ export const EnrollmentTokenInfoSchema = z.strictObject({
   nodeId: NodeIdSchema.nullable(),
 });
 export const EnrollmentTokensSchema = z.strictObject({ tokens: z.array(EnrollmentTokenInfoSchema).max(5000) });
+// ---- Short human-friendly codes (invite codes and approval-request codes) ----
+/** Crockford-style base 32: digits and letters without I, L, O and U, so a code read aloud or typed by hand cannot be mistaken. */
+export const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+export const CODE_LENGTH = 8;
+/**
+ * What a person typed, reduced to the canonical 8 characters, or null. Case does not matter, spaces and hyphens are ignored, and the characters Crockford treats as
+ * look-alikes are folded (O to 0, I and L to 1), so `n7k4-pq2m` and `N7K4 PQ2M` are the same code. Anything else (U, other symbols, a wrong length) is not a code.
+ */
+export function normalizeCode(input: string): string | null {
+  const folded = input.toUpperCase().replace(/[\s-]/g, '').replaceAll('O', '0').replaceAll('I', '1').replaceAll('L', '1');
+  return folded.length === CODE_LENGTH && [...folded].every(char => CODE_ALPHABET.includes(char)) ? folded : null;
+}
+/** `N7K4PQ2M` as `N7K4-PQ2M`. */
+export const formatCode = (code: string): string => `${code.slice(0, 4)}-${code.slice(4)}`;
+/** A code as typed or pasted: loose on purpose (the server canonicalises it), but bounded and free of anything but code characters. */
+export const TypedCodeSchema = z.string().min(8).max(24).regex(/^[A-Za-z0-9 -]+$/);
+/** How long an invite may live: it is a short introduction, not a standing credential. */
+export const INVITE_MAX_MS = 3600000;
+export const InviteRequestSchema = z.strictObject({ expiresInMs: z.number().int().min(1000).max(INVITE_MAX_MS), capabilities: CapabilitiesSchema, label: DisplayNameSchema.optional() });
+export const InviteIdSchema = z.string().regex(/^inv_[a-f0-9]{16}$/);
+/** Answer to creating an invite: `code` is shown only here. */
+export const InviteCreatedSchema = z.strictObject({ code: z.string().regex(/^[0-9A-Z]{4}-[0-9A-Z]{4}$/), id: InviteIdSchema, createdAt: TimeSchema, expiresAt: TimeSchema, capabilities: CapabilitiesSchema, label: DisplayNameSchema.optional() });
+export const InviteStatusSchema = z.enum(['ACTIVE', 'USED', 'EXPIRED', 'REVOKED', 'LOCKED']);
+/** What an administrator sees about an invite afterwards: never the code, nor anything derived from it. LOCKED means too many wrong guesses were made at it. */
+export const InviteInfoSchema = z.strictObject({
+  id: InviteIdSchema, status: InviteStatusSchema, createdAt: TimeSchema, expiresAt: TimeSchema, usedAt: TimeSchema.nullable(), revokedAt: TimeSchema.nullable(),
+  capabilities: CapabilitiesSchema, label: DisplayNameSchema.nullable(), nodeId: NodeIdSchema.nullable(), failedAttempts: z.number().int().min(0).max(1000),
+});
+export const InvitesSchema = z.strictObject({ invites: z.array(InviteInfoSchema).max(5000) });
+/** Presents an invite code together with the node's own public key. The answer is the ordinary enrollment challenge; the ordinary proof then completes it. */
+export const InviteChallengeRequestSchema = z.strictObject({
+  code: TypedCodeSchema, publicKey: z.string().min(40).max(256), protocolVersion: ProtocolSchema, daemonVersion: VersionSchema, capabilities: CapabilitiesSchema.optional(),
+});
+// ---- Approval (device-code) enrollment: the joining machine asks, the owner approves ----
+export const JoinRequestIdSchema = IdSchema;
+export const JOIN_REQUEST_MAX_MS = 1800000;
+/** A machine asking to join. Bound to its public key; carries no secret and grants nothing until an administrator approves it. */
+export const JoinRequestSchema = z.strictObject({
+  publicKey: z.string().min(40).max(256), protocolVersion: ProtocolSchema, daemonVersion: VersionSchema,
+  /** What the machine would like to offer: a hint for the administrator, never a grant. */
+  capabilities: CapabilitiesSchema.optional(), deviceName: DisplayNameSchema.optional(),
+});
+export const JoinCreatedSchema = z.strictObject({
+  requestId: JoinRequestIdSchema, code: z.string().regex(/^[0-9A-Z]{4}-[0-9A-Z]{4}$/), expiresAt: TimeSchema, pollAfterMs: z.number().int().min(500).max(60000),
+});
+export const JoinStatusRequestSchema = z.strictObject({ requestId: JoinRequestIdSchema, protocolVersion: ProtocolSchema });
+export const JoinStatusSchema = z.enum(['PENDING', 'APPROVED', 'DENIED', 'EXPIRED', 'COMPLETED']);
+export const JoinStatusResponseSchema = z.strictObject({ status: JoinStatusSchema, expiresAt: TimeSchema.nullable(), pollAfterMs: z.number().int().min(500).max(60000) });
+export const JoinChallengeRequestSchema = z.strictObject({ requestId: JoinRequestIdSchema, protocolVersion: ProtocolSchema });
+export const JoinRequestInfoSchema = z.strictObject({
+  code: z.string().regex(/^[0-9A-Z]{4}-[0-9A-Z]{4}$/), status: JoinStatusSchema, createdAt: TimeSchema, expiresAt: TimeSchema,
+  /** The node ID the key will have: the same text the joining machine prints, so the owner can compare the two out of band. */
+  nodeId: NodeIdSchema, requestedCapabilities: CapabilitiesSchema, deviceName: DisplayNameSchema.nullable(), daemonVersion: VersionSchema,
+  /** Where the request came from (as the Coordinator saw it); evidence for the owner, not an identity. */
+  source: z.string().max(64), approvedCapabilities: CapabilitiesSchema.nullable(), label: DisplayNameSchema.nullable(), nodeEnrolled: NodeIdSchema.nullable(),
+});
+export const JoinRequestsSchema = z.strictObject({ requests: z.array(JoinRequestInfoSchema).max(5000) });
+export const JoinApprovalSchema = z.strictObject({ capabilities: CapabilitiesSchema, label: DisplayNameSchema.optional() });
 export const EnrollmentStartSchema = z.strictObject({
   token: SecretSchema, publicKey: z.string().min(40).max(256), protocolVersion: ProtocolSchema,
   daemonVersion: VersionSchema,
@@ -281,6 +339,9 @@ export const CapabilitiesResponseSchema = z.strictObject({ capabilities: z.array
 export type NodeView = z.infer<typeof NodeViewSchema>;
 export type EnrollmentTokenInfo = z.infer<typeof EnrollmentTokenInfoSchema>;
 export type EnrollmentTokenStatus = z.infer<typeof EnrollmentTokenStatusSchema>;
+export type InviteInfo = z.infer<typeof InviteInfoSchema>;
+export type InviteStatus = z.infer<typeof InviteStatusSchema>;
+export type JoinRequestInfo = z.infer<typeof JoinRequestInfoSchema>;
 export type Heartbeat = z.infer<typeof HeartbeatSchema>;
 export type EnrollmentStart = z.infer<typeof EnrollmentStartSchema>;
 export type Challenge = z.infer<typeof ChallengeSchema>;

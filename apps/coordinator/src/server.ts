@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { isIP } from 'node:net';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ZodError } from 'zod';
-import { AuthStartSchema, EnrollmentTokenIdSchema, IdSchema, LeaseRequestSchema, MAX_BODY_BYTES, MAX_JOB_WAIT_MS, NodeIdSchema, PROTOCOL_VERSION } from '@privanet/protocol';
+import { AuthStartSchema, EnrollmentTokenIdSchema, IdSchema, InviteIdSchema, TypedCodeSchema, LeaseRequestSchema, MAX_BODY_BYTES, MAX_JOB_WAIT_MS, NodeIdSchema, PROTOCOL_VERSION } from '@privanet/protocol';
 import { ApiError, equalSecret } from '@privanet/shared';
 import type { Coordinator } from './service.js';
 
@@ -10,6 +10,8 @@ export interface LogEvent { event: string; code?: string }
 export interface ServerOptions { adminSecret: string; log?: (entry: LogEvent) => void; authRequestsPerMinute?: number; maxLeaseWaiters?: number; maxJobWaiters?: number;
   /** Refused enrollment requests (a token that is unknown, used, expired or revoked, or a bad proof) one address may make per minute before it is answered 429 for the rest of the minute. Default 10: an honest node makes one. */
   enrollmentFailuresPerMinute?: number;
+  /** The same for invite codes, which are far shorter than tokens and so get a stricter limit. Default 5. */
+  inviteFailuresPerMinute?: number;
   /**
    * Off by default (forwarded headers are never believed). When the Coordinator sits behind a reverse proxy on the same machine every request arrives from
    * the loopback address, so the per-address limit sees one client and one abusive caller can lock everyone out of authentication. With this on, a request whose
@@ -69,15 +71,15 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
     bucket.count++;
     if (bucket.count > limit) throw new ApiError(429, 'RATE_LIMIT', 'authentication rate limit');
   }
-  // A second, much tighter limit for enrollment alone: the general limit above bounds all authentication traffic, this one bounds guessing at the one-time token.
-  const failureLimit = options.enrollmentFailuresPerMinute ?? 10;
-  if (!Number.isSafeInteger(failureLimit) || failureLimit < 1) throw new Error('Invalid enrollment failure limit');
-  const failures = new Map<string, { count: number; starts: number }>();
-  function failureBucket(req: IncomingMessage) {
-    const key = clientKey(req); const now = Date.now(); let bucket = failures.get(key);
+  // Tighter limits for the enrollment routes alone: the general limit above bounds all authentication traffic, these bound guessing. Invite codes are short, so theirs is stricter still.
+  const failureLimits = { enroll: options.enrollmentFailuresPerMinute ?? 10, invite: options.inviteFailuresPerMinute ?? 5 } as const;
+  for (const value of Object.values(failureLimits)) if (!Number.isSafeInteger(value) || value < 1) throw new Error('Invalid enrollment failure limit');
+  const failures = { enroll: new Map<string, { count: number; starts: number }>(), invite: new Map<string, { count: number; starts: number }>() };
+  function failureBucket(kind: 'enroll' | 'invite', req: IncomingMessage) {
+    const key = clientKey(req); const now = Date.now(); const map = failures[kind]; let bucket = map.get(key);
     if (!bucket || now - bucket.starts >= 60000) {
-      if (failures.size >= 1000) failures.delete(failures.keys().next().value ?? '');
-      bucket = { count: 0, starts: now }; failures.set(key, bucket);
+      if (map.size >= 1000) map.delete(map.keys().next().value ?? '');
+      bucket = { count: 0, starts: now }; map.set(key, bucket);
     }
     return bucket;
   }
@@ -91,7 +93,7 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
   }
   const server = createServer((req, res) => {
     void (async () => {
-      let preRated = false; let enrolling = false;
+      let preRated = false; let limited: 'enroll' | 'invite' | undefined;
       try {
         if (req.headers['x-privanet-protocol'] !== String(PROTOCOL_VERSION)) throw new ApiError(426, 'PROTOCOL_MISMATCH', 'unsupported protocol version');
         const rawUrl = req.url ?? ''; const queryAt = rawUrl.indexOf('?');
@@ -103,16 +105,22 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
         if (jobWaitMs > MAX_JOB_WAIT_MS) throw new ApiError(400, 'INVALID_REQUEST', 'waitMs too large');
         if (!/^\/v1\/[a-zA-Z0-9/_-]+$/.test(path)) throw new ApiError(404, 'NOT_FOUND', 'route not found');
         if (req.method === 'GET' && path === '/v1/health') { send(res, 200, core.health()); return; }
-        const publicPaths = ['/v1/enrollment/challenge', '/v1/enrollment/proof', '/v1/auth/challenge', '/v1/auth/proof'];
+        const publicPaths = ['/v1/enrollment/challenge', '/v1/enrollment/proof', '/v1/auth/challenge', '/v1/auth/proof', '/v1/invites/challenge', '/v1/join/request', '/v1/join/status', '/v1/join/challenge'];
         if (req.method === 'POST' && publicPaths.includes(path)) {
-          rate(req); preRated = true; enrolling = path.startsWith('/v1/enrollment/');
-          // The same answer whatever the token was: nothing says how close a guess came, and a guesser stops being served after a few misses.
-          if (enrolling && failureBucket(req).count >= failureLimit) throw new ApiError(429, 'RATE_LIMIT', 'too many refused enrollment attempts');
+          rate(req); preRated = true;
+          limited = path === '/v1/invites/challenge' ? 'invite' : path.startsWith('/v1/enrollment/') || path === '/v1/join/challenge' ? 'enroll' : undefined;
+          // The same answer whatever the token or code was: nothing says how close a guess came, and a guesser stops being served after a few misses.
+          if (limited && failureBucket(limited, req).count >= failureLimits[limited]) throw new ApiError(429, 'RATE_LIMIT', 'too many refused enrollment attempts');
           const input = await body(req);
           const result = path === '/v1/enrollment/challenge' ? core.beginEnrollment(input)
             : path === '/v1/enrollment/proof' ? core.prove(input, 'enroll')
-              : path === '/v1/auth/challenge' ? core.beginAuth(AuthStartSchema.parse(input).nodeId) : core.prove(input, 'auth');
+              : path === '/v1/invites/challenge' ? core.beginInvite(input)
+                : path === '/v1/join/request' ? core.createJoinRequest(input, clientKey(req))
+                  : path === '/v1/join/status' ? core.joinStatusOf(input)
+                    : path === '/v1/join/challenge' ? core.beginJoin(input)
+                      : path === '/v1/auth/challenge' ? core.beginAuth(AuthStartSchema.parse(input).nodeId) : core.prove(input, 'auth');
           if (path === '/v1/enrollment/proof') log({ event: 'node.enrolled' });
+          if (path === '/v1/join/request') log({ event: 'join.requested' });
           send(res, 200, result); return;
         }
         const token = bearer(req);
@@ -126,6 +134,22 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
             const id = EnrollmentTokenIdSchema.parse(revokeToken[1]);
             if (JSON.stringify(await body(req)) !== '{}') throw new ApiError(400, 'INVALID_REQUEST', 'expected empty object');
             core.revokeEnrollment(id); log({ event: 'enrollment.revoked' }); send(res, 200, { ok: true }); return;
+          }
+          if (req.method === 'POST' && path === '/v1/admin/invites') { send(res, 201, core.createInvite(await body(req))); log({ event: 'invite.created' }); return; }
+          if (req.method === 'GET' && path === '/v1/admin/invites') { send(res, 200, { invites: core.listInvites() }); return; }
+          const revokeInvite = /^\/v1\/admin\/invites\/([^/]+)\/revoke$/.exec(path);
+          if (req.method === 'POST' && revokeInvite) {
+            const id = InviteIdSchema.parse(revokeInvite[1]);
+            if (JSON.stringify(await body(req)) !== '{}') throw new ApiError(400, 'INVALID_REQUEST', 'expected empty object');
+            core.revokeInvite(id); log({ event: 'invite.revoked' }); send(res, 200, { ok: true }); return;
+          }
+          if (req.method === 'GET' && path === '/v1/admin/requests') { send(res, 200, { requests: core.listRequests() }); return; }
+          const decide = /^\/v1\/admin\/requests\/([^/]+)\/(approve|deny)$/.exec(path);
+          if (req.method === 'POST' && decide) {
+            const code = TypedCodeSchema.parse(decide[1]); const input = await body(req);
+            if (decide[2] === 'approve') { core.approveRequest(code, input); log({ event: 'join.approved' }); }
+            else { if (JSON.stringify(input) !== '{}') throw new ApiError(400, 'INVALID_REQUEST', 'expected empty object'); core.denyRequest(code); log({ event: 'join.denied' }); }
+            send(res, 200, { ok: true }); return;
           }
           const rename = /^\/v1\/admin\/nodes\/([^/]+)\/rename$/.exec(path);
           if (req.method === 'POST' && rename) {
@@ -226,7 +250,7 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
         if (failure.status === 401 && !preRated) {
           try { rate(req); } catch (rateError) { if (rateError instanceof ApiError) failure = rateError; }
         }
-        if (enrolling && failure.status === 401) failureBucket(req).count++;
+        if (limited && failure.status === 401) failureBucket(limited, req).count++;
         log({ event: 'request.rejected', code: failure.code });
         if (!res.headersSent && !res.destroyed) send(res, failure.status, { error: { code: failure.code, message: failure.message } });
       }

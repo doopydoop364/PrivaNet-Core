@@ -1,19 +1,26 @@
 import { ApiError, Transport } from '@privanet/shared';
 import {
-  AckSchema, AppCredentialSchema, CapabilitiesSchema, DisplayNameSchema, EnrollmentTokenIdSchema, EnrollmentTokenSchema, EnrollmentTokensSchema, IdSchema, NodeIdSchema, NodesSchema,
+  AckSchema, AppCredentialSchema, CapabilitiesSchema, DisplayNameSchema, EnrollmentTokenIdSchema, EnrollmentTokenSchema, EnrollmentTokensSchema, IdSchema, InviteCreatedSchema, InviteIdSchema,
+  InvitesSchema, JoinRequestsSchema, NodeIdSchema, NodesSchema, TypedCodeSchema, formatCode, normalizeCode,
 } from '@privanet/protocol';
 
 const USAGE = `Usage:
   privanet-admin enrollment create [--expires 10m] [--capabilities web.fetch.v1[,..]] [--label NAME] [--json]
   privanet-admin enrollment list [--all] [--json]          active tokens (--all adds used, expired and revoked ones)
   privanet-admin enrollment revoke TOKEN_ID                withdraw a token that has not been used
+  privanet-admin invite create [--expires 10m] [--capabilities web.fetch.v1[,..]] [--label NAME] [--json]      a short code for a contributor (at most 1 hour)
+  privanet-admin invite list [--all] [--json]              active invites (--all adds used, expired, revoked and locked ones)
+  privanet-admin invite revoke INVITE_ID
+  privanet-admin requests list [--all] [--json]            machines asking to join (privanet-node join), waiting for you
+  privanet-admin approve CODE --capabilities web.fetch.v1[,..] [--label NAME]       let that machine join, with at most these capabilities
+  privanet-admin deny CODE                                 refuse a request (or withdraw an approval it has not used yet)
   privanet-admin nodes list [--json]
   privanet-admin nodes show NODE [--json]                  NODE is a node ID, a unique prefix of one (8+ characters) or an exact name
   privanet-admin nodes revoke NODE
   privanet-admin nodes rename NODE NAME... | nodes rename NODE --clear
   privanet-admin application [NAME] | revoke-application ID | rotate-application ID
 Older forms still work and print JSON: enrollment | nodes | revoke-node ID | application NAME
-Durations: 30s, 10m, 2h, 1d (1 second to 24 hours).`;
+Durations: 30s, 10m, 2h, 1d (1 second to 24 hours; an invite at most 1 hour).`;
 
 class UsageError extends Error {}
 const VALUE_FLAGS = new Set(['--expires', '--capabilities', '--label']);
@@ -48,6 +55,13 @@ function table(rows) {
   return rows.map(row => row.map((cell, column) => String(cell).padEnd(widths[column])).join('  ').trimEnd()).join('\n');
 }
 const printJson = (value) => console.log(JSON.stringify(value));
+/** A request code as a person types it ("j4m7 k2q9", "J4M7-K2Q9"): checked, then sent in its canonical form so nothing odd travels in a URL. */
+function requestCode(parts) {
+  const typed = TypedCodeSchema.safeParse(parts.filter(part => part !== undefined).join(' '));
+  const normalized = typed.success ? normalizeCode(typed.data) : null;
+  if (normalized === null) throw new UsageError('that is not a request code (8 letters and digits, for example J4M7-K2Q9)');
+  return formatCode(normalized);
+}
 
 async function main() {
   const transport = new Transport({ url: process.env.PRIVANET_COORDINATOR_URL ?? 'http://127.0.0.1:4010', allowInsecureLoopback: process.env.PRIVANODE_ALLOW_INSECURE_LOOPBACK === 'true' });
@@ -96,6 +110,48 @@ async function main() {
     const id = EnrollmentTokenIdSchema.parse(rest[0]);
     await request('POST', `/v1/admin/enrollment-tokens/${id}/revoke`, AckSchema, {});
     if (flags.json) printJson({ ok: true }); else console.log(`Enrollment token ${id} revoked.`);
+  } else if (operation === 'invite' && subcommand === 'create') {
+    const expiresInMs = flags.expires ? parseDuration(flags.expires) : 600000;
+    if (expiresInMs > 3600000) throw new UsageError('an invite is a short introduction: at most 1 hour (use an enrollment token for longer)');
+    const capabilities = flags.capabilities ? CapabilitiesSchema.parse(flags.capabilities.split(',')) : envTypes;
+    const label = flags.label === undefined ? undefined : DisplayNameSchema.parse(flags.label);
+    const created = await request('POST', '/v1/admin/invites', InviteCreatedSchema, { expiresInMs, capabilities, ...(label ? { label } : {}) });
+    if (flags.json) { printJson(created); return; }
+    // Explicit administrator issuance output, not a service log: the code is shown here once and is not stored in recoverable form.
+    console.log(['Invite created.', `Code:          ${created.code}`, `Invite ID:     ${created.id}`, `Expires:       ${iso(created.expiresAt)} (${inFuture(created.expiresAt)})`,
+      `Capabilities:  ${created.capabilities.join(', ') || '(none)'}`, ...(created.label ? [`Name:          ${created.label}`] : []), '',
+      'The code works once, from a machine that reaches this Coordinator over verified TLS, and is not shown again. Give it to the contributor over a private channel:',
+      `  privanet-node enroll --coordinator ${process.env.PRIVANET_PUBLIC_URL ?? 'https://<coordinator-address>'} --invite-stdin      (then type or paste the code)`, ''].join('\n'));
+  } else if (operation === 'invite' && subcommand === 'list') {
+    const { invites } = await request('GET', '/v1/admin/invites', InvitesSchema);
+    const shown = flags.all ? invites : invites.filter(entry => entry.status === 'ACTIVE');
+    if (flags.json) { printJson({ invites: shown }); return; }
+    if (shown.length === 0) console.log(flags.all ? 'No invites on record.' : 'No active invites.');
+    else console.log(table([['ID', 'STATUS', 'CREATED', 'EXPIRES', 'CAPABILITIES', 'NAME', 'WRONG GUESSES', 'USED BY'],
+      ...shown.map(entry => [entry.id, entry.status, iso(entry.createdAt), iso(entry.expiresAt), entry.capabilities.join(',') || '-', entry.label ?? '-', entry.failedAttempts, entry.nodeId ? `${entry.nodeId.slice(0, 13)}…` : '-'])]));
+    if (!flags.all && invites.length > shown.length) console.log(`(${invites.length - shown.length} used, expired, revoked or locked invites not shown; --all lists them)`);
+  } else if (operation === 'invite' && subcommand === 'revoke') {
+    const id = InviteIdSchema.parse(rest[0]);
+    await request('POST', `/v1/admin/invites/${id}/revoke`, AckSchema, {});
+    if (flags.json) printJson({ ok: true }); else console.log(`Invite ${id} revoked.`);
+  } else if (operation === 'requests' && (subcommand === 'list' || subcommand === undefined)) {
+    const { requests } = await request('GET', '/v1/admin/requests', JoinRequestsSchema);
+    const shown = flags.all ? requests : requests.filter(entry => entry.status === 'PENDING' || entry.status === 'APPROVED');
+    if (flags.json) { printJson({ requests: shown }); return; }
+    if (shown.length === 0) console.log(flags.all ? 'No requests on record.' : 'No requests waiting.');
+    else console.log(table([['CODE', 'STATUS', 'NODE', 'NAME HINT', 'ASKED FOR', 'FROM', 'EXPIRES'],
+      ...shown.map(entry => [entry.code, entry.status, `${entry.nodeId.slice(0, 13)}…`, entry.deviceName ?? '-', entry.requestedCapabilities.join(',') || '-', entry.source, iso(entry.expiresAt)])]));
+    if (shown.some(entry => entry.status === 'PENDING')) console.log('Approve one with: privanet-admin approve CODE --capabilities web.fetch.v1   (compare the NODE with what the machine printed)');
+  } else if (operation === 'approve') {
+    const code = requestCode([subcommand, ...rest]);
+    if (!flags.capabilities) throw new UsageError('say what this machine may do: --capabilities web.fetch.v1 (you choose; what it asked for is shown by `requests list`)');
+    const label = flags.label === undefined ? undefined : DisplayNameSchema.parse(flags.label);
+    await request('POST', `/v1/admin/requests/${code}/approve`, AckSchema, { capabilities: CapabilitiesSchema.parse(flags.capabilities.split(',')), ...(label ? { label } : {}) });
+    if (flags.json) printJson({ ok: true }); else console.log(`Approved ${code}. The machine finishes enrolling by itself within a few seconds.`);
+  } else if (operation === 'deny') {
+    const code = requestCode([subcommand, ...rest]);
+    await request('POST', `/v1/admin/requests/${code}/deny`, AckSchema, {});
+    if (flags.json) printJson({ ok: true }); else console.log(`Declined ${code}.`);
   } else if (operation === 'nodes' && subcommand === undefined) {
     printJson({ nodes: await nodes() }); // legacy form
   } else if (operation === 'nodes' && subcommand === 'list') {

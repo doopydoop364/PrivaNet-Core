@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { privateDirectory } from '@privanet/shared';
+import { hash, privateDirectory } from '@privanet/shared';
 import { loadConfig } from './config.js';
 import { Coordinator } from './service.js';
 import { SqliteStore } from './store.js';
@@ -18,9 +18,10 @@ async function main() {
   }
   const directory = await privateDirectory(config.dataDir);
   const store = new SqliteStore(join(directory, 'coordinator.sqlite'));
-  const core = new Coordinator(store, config.policy);
+  // Invite codes are short, so the hashes that protect them are keyed with something that is not in the database: derived from the administrator secret.
+  const core = new Coordinator(store, config.policy, Date.now, undefined, { inviteKey: Buffer.from(hash(`privanet.invite-key.v1:${config.adminSecret}`), 'hex') });
   const log = (entry: { event: string; code?: string }) => console.log(JSON.stringify(entry));
-  const server = createCoordinatorServer(core, { adminSecret: config.adminSecret, log, authRequestsPerMinute: config.authRequestsPerMinute, enrollmentFailuresPerMinute: config.enrollmentFailuresPerMinute, trustLoopbackProxy: config.trustLoopbackProxy });
+  const server = createCoordinatorServer(core, { adminSecret: config.adminSecret, log, authRequestsPerMinute: config.authRequestsPerMinute, enrollmentFailuresPerMinute: config.enrollmentFailuresPerMinute, inviteFailuresPerMinute: config.inviteFailuresPerMinute, trustLoopbackProxy: config.trustLoopbackProxy });
   try {
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(config.port, config.host, resolve); });
   } catch (error) { store.close(); throw error; }

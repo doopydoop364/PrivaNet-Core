@@ -1,4 +1,4 @@
-import { lstatSync, readFileSync } from 'node:fs';
+import { lstatSync, readFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { CapabilitiesSchema, NodeIdSchema, TimeSchema } from '@privanet/protocol';
@@ -34,3 +34,16 @@ export function readEnrollmentRecordSync(stateDir: string): EnrollmentRecord | u
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 8192 || (process.platform !== 'win32' && ((stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.()))) throw new Error('Unsafe private state file');
   return EnrollmentRecordSchema.parse(JSON.parse(readFileSync(path, 'utf8')));
 }
+
+/** A request to join that is waiting for the owner. Kept so that running `join` again (or restarting the machine) resumes the same request instead of making a second one. It names the request, which is not a secret on its own: completing it still needs this node's private key. */
+export const JOIN_FILE = 'join-request.json';
+export const JoinRecordSchema = z.strictObject({ version: z.literal(1), requestId: z.uuid(), code: z.string().max(16), coordinatorUrl: z.string().max(2048), coordinatorId: z.uuid(), expiresAt: TimeSchema });
+export type JoinRecord = z.infer<typeof JoinRecordSchema>;
+export async function readJoinRecord(stateDir: string): Promise<JoinRecord | undefined> {
+  const path = join(await privateDirectory(stateDir), JOIN_FILE);
+  try { return JoinRecordSchema.parse(JSON.parse(await readPrivateFile(path))); } catch (error) { if (isMissing(error)) return undefined; throw error; }
+}
+export async function writeJoinRecord(stateDir: string, record: JoinRecord): Promise<void> {
+  await createPrivateFile(join(await privateDirectory(stateDir), JOIN_FILE), JSON.stringify(JoinRecordSchema.parse(record)) + '\n');
+}
+export function removeJoinRecord(stateDir: string): void { try { unlinkSync(join(stateDir, JOIN_FILE)); } catch { /* none */ } }

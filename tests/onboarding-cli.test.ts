@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Server } from 'node:http';
 import { EnrollmentTokenSchema, NodesSchema } from '@privanet/protocol';
-import { secret } from '@privanet/shared';
+import { hash, secret } from '@privanet/shared';
 import { Coordinator } from '@privanet/coordinator/service';
 import { SqliteStore } from '@privanet/coordinator/store';
 import { createCoordinatorServer } from '@privanet/coordinator/server';
@@ -25,7 +25,7 @@ async function listen(server: Server): Promise<string> {
 /** A Coordinator in this process, and the shipped admin and node entry points run against it as separate processes. */
 async function setup(t: TestContext) {
   const dir = await mkdtemp(join(tmpdir(), 'privanet-cli-')); const adminSecret = secret(); const coordinatorLogs: unknown[] = [];
-  const store = new SqliteStore(join(dir, 'coordinator.sqlite')); const core = new Coordinator(store, { offlineMs: 60000, staleMs: 30000 });
+  const store = new SqliteStore(join(dir, 'coordinator.sqlite')); const core = new Coordinator(store, { offlineMs: 60000, staleMs: 30000 }, Date.now, undefined, { inviteKey: Buffer.from(hash(`k:${adminSecret}`), 'hex') });
   const server = createCoordinatorServer(core, { adminSecret, log: entry => coordinatorLogs.push(entry), authRequestsPerMinute: 10000 });
   const url = await listen(server); const children: ChildProcess[] = [];
   t.after(async () => {
@@ -40,7 +40,14 @@ async function setup(t: TestContext) {
     return { code, out, err };
   };
   const adminEnv = { PRIVANET_ADMIN_SECRET: adminSecret, PRIVANET_COORDINATOR_URL: url, PRIVANODE_ALLOW_INSECURE_LOOPBACK: 'true' };
-  return { dir, url, adminSecret, coordinatorLogs, core, children,
+  /** A long-running node command whose output can be read as it appears (for `join`, which prints its request code and then waits). */
+  const spawnNode = (args: string[], env: NodeJS.ProcessEnv = {}) => {
+    const child = spawn(process.execPath, [NODE, ...args], { cwd: root, env: { PATH: process.env.PATH ?? '', PRIVANODE_ALLOW_INSECURE_LOOPBACK: 'true', ...env }, stdio: ['pipe', 'pipe', 'pipe'] }); children.push(child);
+    const seen = { out: '', err: '' }; child.stdout.on('data', (chunk: Buffer) => { seen.out += chunk.toString(); }); child.stderr.on('data', (chunk: Buffer) => { seen.err += chunk.toString(); });
+    const done = new Promise<number>(resolve => child.once('close', value => resolve(value ?? -1)));
+    return { child, seen, done };
+  };
+  return { dir, url, adminSecret, coordinatorLogs, core, children, spawnNode,
     admin: (args: string[], extra: NodeJS.ProcessEnv = {}) => run(ADMIN, args, { ...adminEnv, ...extra }),
     node: (args: string[], extra: NodeJS.ProcessEnv = {}, input?: string) => run(NODE, ['enroll', ...args], { PRIVANODE_ALLOW_INSECURE_LOOPBACK: 'true', ...extra }, input) };
 }
@@ -133,7 +140,7 @@ test('node CLI: other ways to give the token, safe refusals, exit codes and a to
   assert.equal(refused.code, 1); assert.match(refused.err, /Enrollment failed: The enrollment token was refused/); assert.equal(refused.err.includes(wrong), false); assert.equal(refused.out, '');
   // Usage and configuration problems exit 78 (a service manager does not restart-loop on it) and quote nothing.
   const cases: Array<[string[], NodeJS.ProcessEnv, RegExp]> = [
-    [['--coordinator', f.url], {}, /token is required/],
+    [['--coordinator', f.url], {}, /is required/],
     [['--coordinator', f.url, '--token', 'abc'], {}, /expected form/],
     [['--token', secret()], {}, /--coordinator is required/],
     [['--coordinator', 'http://example.com', '--token', secret()], {}, /https/],
@@ -155,4 +162,71 @@ test('node CLI: other ways to give the token, safe refusals, exit codes and a to
   for (const token of [viaStdin, viaEnv, viaFlag]) for (const text of outputs) assert.equal(text.includes(token), false, 'no output ever contains an enrollment token');
   assert.equal(JSON.stringify(f.coordinatorLogs).includes(viaFlag), false);
   assert.equal((await f.admin(['nodes', 'list'])).out.split('\n').filter(line => line.includes('node_')).length, 3);
+});
+
+test('invite flow from the shipped tools: create, hand over, enroll from stdin, reconnect, reuse refused, revoke', async t => {
+  const f = await setup(t); const outputs: string[] = []; const stateDir = join(f.dir, 'state');
+  const created = await f.admin(['invite', 'create', '--expires', '10m', '--capabilities', 'system.echo.v1', '--label', "Judah's PC"]); outputs.push(created.err); // (the creation output shows the code, once, by design; nothing else may)
+  assert.equal(created.code, 0, created.err); assert.match(created.out, /^Invite created\.\n/); assert.match(created.out, /Expires:\s+\d{4}-.*\(in 10m\)/); assert.match(created.out, /Name:\s+Judah's PC/);
+  const code = /Code:\s+([0-9A-Z]{4}-[0-9A-Z]{4})/.exec(created.out)?.[1] ?? ''; assert.ok(code); const id = /Invite ID:\s+(inv_[a-f0-9]{16})/.exec(created.out)?.[1] ?? '';
+  const listed = await f.admin(['invite', 'list']); outputs.push(listed.out); assert.ok(listed.out.includes(id) && listed.out.includes('ACTIVE')); assert.equal(listed.out.includes(code), false); assert.equal(listed.out.includes(code.replace('-', '')), false);
+  const json = await f.admin(['invite', 'list', '--json']); assert.equal(json.out.includes(code), false);
+  // The contributor types it however it comes (lower case, a space), through stdin so it is not in the process list.
+  const enrolled = await f.node(['--coordinator', f.url, '--invite-stdin', '--state-dir', stateDir], {}, `${code.toLowerCase().replace('-', ' ')}\n`); outputs.push(enrolled.out, enrolled.err);
+  assert.equal(enrolled.code, 0, enrolled.err); assert.match(enrolled.out, /^Enrolled\./); assert.match(enrolled.out, /Name:\s+Judah's PC/); assert.equal(enrolled.err, '');
+  assert.match((await f.admin(['invite', 'list', '--all'])).out, new RegExp(`${id}\\s+USED`));
+  // The daemon needs nothing but its state directory, now and after a restart.
+  const policy = join(f.dir, 'policy.json'); await writeFile(policy, JSON.stringify({ reserveMemoryBytes: 0, safetyMarginBytes: 0, reserveCpuPercent: 0, maxCpuPercent: 100, maxMemoryBytes: 1024 ** 3 }));
+  for (let start = 0; start < 2; start++) {
+    const daemon = f.spawnNode([], { PRIVANODE_STATE_DIR: stateDir, PRIVANODE_POLICY_FILE: policy, PRIVANODE_HEARTBEAT_MS: '50', PRIVANODE_POLL_MS: '20' }); const spawned = daemon.child;
+    // (the daemon is started with no subcommand: spawnNode passes no `enroll`)
+    const deadline = Date.now() + 15000; while (!daemon.seen.out.includes('node.authenticated') && Date.now() < deadline && spawned.exitCode === null) await new Promise(resolve => setTimeout(resolve, 25));
+    assert.ok(daemon.seen.out.includes('node.authenticated'), daemon.seen.out + daemon.seen.err); assert.equal(daemon.seen.out.includes('node.enrolled'), false);
+    spawned.kill('SIGTERM'); await daemon.done; outputs.push(daemon.seen.out, daemon.seen.err);
+  }
+  // Reuse from another machine, and a wrong code, are refused with the same plain sentence; neither prints the code.
+  const reused = await f.node(['--coordinator', f.url, '--invite-stdin', '--state-dir', join(f.dir, 'other')], {}, `${code}\n`); outputs.push(reused.out, reused.err);
+  assert.equal(reused.code, 1); assert.match(reused.err, /The invite code was refused/); assert.equal(reused.err.includes(code), false);
+  const wrong = await f.node(['--coordinator', f.url, '--invite', 'AAAA-AAAA', '--state-dir', join(f.dir, 'other2')]); assert.equal(wrong.code, 1); assert.match(wrong.err, /The invite code was refused/);
+  // Revocation reaches the enrolled node.
+  const nodeId = /Node ID:\s+(node_[a-f0-9]{64})/.exec(enrolled.out)?.[1] ?? ''; assert.equal((await f.admin(['nodes', 'revoke', nodeId.slice(0, 16)])).code, 0);
+  assert.match((await f.admin(['nodes', 'show', nodeId])).out, /REVOKED/);
+  for (const text of outputs) { assert.equal(text.includes(code), false); assert.equal(text.includes(code.replace('-', '')), false); assert.equal(text.includes(f.adminSecret), false); }
+  assert.equal(JSON.stringify(f.coordinatorLogs).includes(code.replace('-', '')), false);
+  // Usage errors: not a code, both a token and an invite, a plain-http address.
+  for (const [args, message] of [[['--coordinator', f.url, '--invite', 'N7K4-PQ2U'], /not in the expected form/], [['--coordinator', f.url, '--invite', 'N7K4-PQ2M', '--token', secret()], /not both/], [['--coordinator', 'http://example.com', '--invite', 'N7K4-PQ2M'], /https/]] as const) {
+    const result = await f.node([...args], {}); assert.equal(result.code, 78, args.join(' ')); assert.match(result.err, message);
+  }
+  assert.equal((await f.admin(['invite', 'create', '--expires', '2h'])).code, 1, 'an invite is at most an hour');
+  const revokedInvite = await f.admin(['invite', 'revoke', id]); assert.equal(revokedInvite.code, 1, 'a used invite cannot be revoked');
+});
+
+test('approval flow from the shipped tools: join shows a code, the owner lists and approves it, the machine finishes and runs', async t => {
+  const f = await setup(t); const stateDir = join(f.dir, 'state'); const outputs: string[] = [];
+  const join1 = f.spawnNode(['join', '--coordinator', f.url, '--state-dir', stateDir, '--name', 'garage pc']);
+  const deadline = Date.now() + 15000; while (!/Request code:\s+[0-9A-Z]{4}-[0-9A-Z]{4}/.test(join1.seen.out) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+  const code = /Request code:\s+([0-9A-Z]{4}-[0-9A-Z]{4})/.exec(join1.seen.out)?.[1] ?? ''; assert.ok(code, join1.seen.out + join1.seen.err);
+  const nodeId = /Node ID:\s+(node_[a-f0-9]{64})/.exec(join1.seen.out)?.[1] ?? ''; assert.match(join1.seen.out, /Waiting|Waiting for the owner|waits for them/);
+  // The owner sees it, with the node ID to compare, and approves it with a ceiling and a name (typed loosely).
+  const waiting = await f.admin(['requests', 'list']); outputs.push(waiting.out); assert.ok(waiting.out.includes(code) && waiting.out.includes('PENDING') && waiting.out.includes(nodeId.slice(0, 13)) && waiting.out.includes('garage pc'));
+  assert.equal(join1.child.exitCode, null, 'the machine is still waiting, nothing is enrolled'); assert.match((await f.admin(['nodes', 'list'])).out, /No nodes enrolled/);
+  const approved = await f.admin(['approve', code.toLowerCase().replace('-', ' '), '--capabilities', 'system.echo.v1', '--label', "Judah's PC"]); outputs.push(approved.out, approved.err);
+  assert.equal(approved.code, 0, approved.err); assert.match(approved.out, new RegExp(`Approved ${code}`));
+  assert.equal(await join1.done, 0, join1.seen.err); assert.match(join1.seen.out, /Enrolled\./); assert.match(join1.seen.out, /Name:\s+Judah's PC/);
+  assert.match((await f.admin(['nodes', 'show', "Judah's PC"])).out, new RegExp(nodeId)); assert.match((await f.admin(['requests', 'list', '--all'])).out, /COMPLETED/);
+  // It starts from its state directory alone.
+  const daemon = f.spawnNode([], { PRIVANODE_STATE_DIR: stateDir, PRIVANODE_HEARTBEAT_MS: '50', PRIVANODE_POLL_MS: '20' });
+  const until = Date.now() + 15000; while (!daemon.seen.out.includes('node.authenticated') && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 25));
+  assert.ok(daemon.seen.out.includes('node.authenticated')); daemon.child.kill('SIGTERM'); await daemon.done;
+  // A second machine is denied; its join command says so and exits non-zero.
+  const second = f.spawnNode(['join', '--coordinator', f.url, '--state-dir', join(f.dir, 'state2')]);
+  const again = Date.now() + 15000; while (!/Request code:/.test(second.seen.out) && Date.now() < again) await new Promise(resolve => setTimeout(resolve, 25));
+  const secondCode = /Request code:\s+([0-9A-Z]{4}-[0-9A-Z]{4})/.exec(second.seen.out)?.[1] ?? ''; assert.ok(secondCode);
+  const denied = await f.admin(['deny', ...secondCode.split('-')]); assert.equal(denied.code, 0, denied.err); assert.equal(await second.done, 1); assert.match(second.seen.err, /owner declined/);
+  assert.match((await f.admin(['requests', 'list', '--all'])).out, /DENIED/);
+  // Bad input to the admin side.
+  for (const bad of [['approve', 'nope', '--capabilities', 'system.echo.v1'], ['approve', code], ['approve', 'AAAA-AAAA', '--capabilities', 'system.echo.v1'], ['deny']]) assert.equal((await f.admin(bad)).code, 1, bad.join(' '));
+  for (const text of [join1.seen.out, join1.seen.err, second.seen.out, second.seen.err, daemon.seen.out, ...outputs]) assert.equal(text.includes(f.adminSecret), false);
+  // `join --help` and bad flags.
+  assert.equal((await f.node(['--help'])).code, 0); const badFlag = await f.spawnNode(['join', '--token', 'x']).done; assert.equal(badFlag, 78);
 });

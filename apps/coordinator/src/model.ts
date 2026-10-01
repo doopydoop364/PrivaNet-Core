@@ -9,9 +9,18 @@ export interface Grant {
   tokenHash: string; expiresAt: number; capabilities: JobType[]; used: boolean;
   /** Added by Remote Node Onboarding; absent on a grant written before it (such a grant still redeems exactly as before and is listed with unknown creation time). */
   createdAt?: number; label?: string; usedAt?: number; usedBy?: string; revokedAt?: number;
+  /** Absent for a plain enrollment token. `invite`: a short code, stored only as keyed hashes. `request`: a machine's approval request (it is redeemable once approved). Both live in the grants table as JSON records, so they need no migration. */
+  kind?: 'invite' | 'request';
+  /** invite: the keyed hash of the whole code, wrong guesses at this invite so far, and when it was locked for too many of them. (`tokenHash` is the keyed hash of the code's first half, which finds the invite.) */
+  secretHash?: string; failedAttempts?: number; lockedAt?: number;
+  /** request: the key the request is bound to, the node ID it implies, its confirmation code (an identifier, not a secret), the decision, and what the machine asked for. */
+  publicKey?: string; nodeId?: string; code?: string; status?: 'PENDING' | 'APPROVED' | 'DENIED'; requestedCapabilities?: JobType[]; deviceName?: string; source?: string;
+  daemonVersion?: string; approvedAt?: number; deniedAt?: number;
 }
 export interface ChallengeRecord extends Challenge {
   purpose: 'enroll' | 'auth'; nodeId: string; publicKey: string;
+  /** What `grantHash` names: an enrollment token (absent), an invite or an approved request. */
+  grantKind?: 'invite' | 'request';
   enrollment: (Omit<EnrollmentStart, 'token' | 'capabilities'> & { capabilities: JobType[] }) | null; grantHash: string | null;
 }
 export interface NodeSession { tokenHash: string; nodeId: string; expiresAt: number }
