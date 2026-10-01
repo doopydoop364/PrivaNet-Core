@@ -7,6 +7,9 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 
 ## [Unreleased]
 
+### Fixed
+- **A large backlog from one application could starve every other application.** The scheduler took the oldest eligible job, so a job submitted behind another application's backlog (say, a user-facing application behind a bulk crawler on its own credential) waited for the whole backlog even when nodes were free for it. The next job now goes to the application with the fewest jobs running at that moment, oldest first within an application. It is work-conserving (a node never idles while an eligible job exists) and identical to before when only one application has work. No protocol change.
+
 ### Added
 - **`demo.mjs` can submit a real fetch.** Setting `PRIVANET_DEMO_FETCH_URL` submits `web.fetch.v1` instead of `system.echo.v1` and prints a short summary (outcome, HTTP status, final URL, content type, size, robots verdict; never page text). A failure before a job exists now names a fixed error code such as `JOB_TYPE_FORBIDDEN` or `FETCH_IDENTITY_REQUIRED`.
 

@@ -44,7 +44,7 @@ export function outlastsAvailability(estimate: ResourceEstimate, availableForMs:
   return availableForMs !== undefined && estimate.expectedDurationMs !== null && estimate.expectedDurationMs > availableForMs;
 }
 /**
- * Oldest-first among jobs the node may take now: capability, a free slot, an ACTIVE (not draining)
+ * Fair across applications, oldest-first within one, among jobs the node may take now: capability, a free slot, an ACTIVE (not draining)
  * lifecycle, contribution not PAUSED by the owner's policy, and enough currently permitted budget.
  * Policy lives behind the Scheduler interface so reliability, geography or credits can join later.
  */
@@ -55,13 +55,24 @@ export class ResourceAwareScheduler implements Scheduler {
     if (running.length >= node.jobSlots || node.currentJobs >= node.jobSlots) return undefined;
     const runningEstimates = running.map(job => JOB_TYPES[job.type].resources);
     const general = node.resources ?? LEGACY_BUDGET;
-    return pending.find(job => {
+    // Fair between applications: of the jobs this node may take, the next goes to the application with the fewest jobs running right now, and within an
+    // application the oldest first. A plain oldest-first rule would make a job submitted behind another application's backlog wait for the whole backlog.
+    // Work-conserving (a node is never left idle while an eligible job exists), and unchanged when only one application has work.
+    const runningByApp = new Map<string, number>();
+    for (const job of pending) if (job.status === 'LEASED') runningByApp.set(job.applicationId, (runningByApp.get(job.applicationId) ?? 0) + 1);
+    let best: JobRecord | undefined; let bestLoad = Infinity;
+    for (const job of pending) {
+      if (job.status !== 'QUEUED') continue;
+      const load = runningByApp.get(job.applicationId) ?? 0;
+      if (load >= bestLoad) continue; // cannot beat what is already chosen (pending is oldest first, so ties keep the older job)
       const definition = JOB_TYPES[job.type];
-      if (job.status !== 'QUEUED' || !node.capabilities.includes(definition.capability)) return false;
-      if (outlastsAvailability(definition.resources, node.resources?.availableForMs)) return false;
+      if (!node.capabilities.includes(definition.capability)) continue;
+      if (outlastsAvailability(definition.resources, node.resources?.availableForMs)) continue;
       // Per-capability limits replace only memory/CPU; disk and network limits are node-wide.
       const specific = node.resources?.perCapability?.[job.type];
-      return fitsBudget(definition.resources, reserve(specific ? { ...general, ...specific } : general, runningEstimates));
-    });
+      if (!fitsBudget(definition.resources, reserve(specific ? { ...general, ...specific } : general, runningEstimates))) continue;
+      best = job; bestLoad = load; if (load === 0) break;
+    }
+    return best;
   }
 }
