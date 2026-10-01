@@ -49,7 +49,7 @@ Every GitHub release also carries the packed tarballs (`privanet-sdk-<version>.t
 2. Merge through a green PR, then tag or dispatch the Release workflow (`workflow_dispatch` with the tag name).
 3. The workflow verifies, on Linux, macOS and Windows, lint, typecheck and the whole suite; stages the platform archives; `npm pack`s the three packages onto the release assets; and runs `npm publish --dry-run` for each.
 4. The `publish` job then publishes `protocol`, `shared` and `sdk` in dependency order with `--provenance`, using `--tag next` for pre-releases. It skips a version that is already on npm, so a re-run is safe. The GitHub release and its tarballs are created **before and independently of** this job, so an npm problem never blocks or removes a release.
-5. After a publish, the `registry-smoke` job installs the new version from the registry into a clean project and imports it. The `publish` job runs only when the repository **variable** `NPM_PUBLISH` is `true`, so releases stay green until the one-time setup below is done.
+5. After a publish, the `registry-smoke` job installs the new version from the registry into a clean project and imports it. The `publish` job runs only when the repository **variable** `NPM_PUBLISH` is `true`, so releases stay green until the one-time setup below is done. If a release ran while the variable was unset, set it and re-run the Release workflow for the same tag: it leaves the existing GitHub release alone and runs the publish.
 
 ### One-time npm setup (by the repository owner; the workflow cannot do this)
 

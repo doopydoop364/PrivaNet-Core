@@ -7,6 +7,9 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 
 ## [Unreleased]
 
+### Fixed
+- **Re-running the Release workflow for an existing tag no longer fails at the GitHub release step.** It now leaves the existing release and its assets untouched and carries on, so the `publish` and `registry-smoke` jobs can be completed afterwards (for example after setting `NPM_PUBLISH`, which a first run would have skipped). The npm side was already safe to re-run.
+
 ## [0.3.0-alpha.6] - 2026-10-01
 
 First release published to npm through trusted publishing (GitHub OIDC with provenance, no long-lived token). Protocol version 1, no wire change and no change to what the three packages contain: `0.3.0-alpha.5` (the manual bootstrap publish) and `0.3.0-alpha.6` interoperate, and the Coordinator and PrivaNode behave identically. The release exists to prove the publish path end to end and to carry the npm-first documentation and the registry smoke test.
