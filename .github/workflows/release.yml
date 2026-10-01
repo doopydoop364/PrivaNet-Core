@@ -88,6 +88,8 @@ jobs:
           prerelease=""; case "$RELEASE_TAG" in *-*) prerelease="--prerelease";; esac
           # A pushed tag must already exist; a dispatch creates it at the exact commit that was built.
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then target="--target $GITHUB_SHA"; else target="--verify-tag"; fi
+          # A re-run of the same tag (for example to complete the npm publish after setting NPM_PUBLISH) must not fail here.
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then echo "Release $RELEASE_TAG already exists: leaving it and its assets untouched"; exit 0; fi
           gh release create "$RELEASE_TAG" assets/* --title "PrivaNet ${RELEASE_TAG#v}" --notes-file notes.md $target $prerelease
   publish:
     # Publishes @privanet/protocol, shared and sdk to the public npm registry.
