@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { CPU_CLASS_MIN_PERCENT, HeartbeatSchema, JOB_TYPES, ResourceEstimateSchema } from '@privanet/protocol';
 import type { ResourceReport } from '@privanet/protocol';
 import { Coordinator } from '@privanet/coordinator/service';
-import { fitsBudget, LEGACY_BUDGET } from '@privanet/coordinator/scheduler';
+import { fitsBudget, LEGACY_BUDGET, ResourceAwareScheduler } from '@privanet/coordinator/scheduler';
 import { ApiError } from '@privanet/shared';
 import { fixture, heartbeat } from './helpers.js';
 
@@ -97,4 +97,18 @@ test('goodbye returns leases without penalty and is OFFLINE_EXPECTED, not an une
   assert.throws(() => f.core.goodbye(a.session.nodeId, { reason: 'crash' }));
   f.core.heartbeat(a.session.nodeId, heartbeat()); assert.equal(f.core.listNodes()[0]?.status, 'ONLINE');
   f.core.revokeNode(a.session.nodeId); assert.equal(f.core.listNodes()[0]?.status, 'REVOKED');
+});
+
+test('an application with a large backlog cannot starve another: the next job goes to the application with the fewest jobs running, oldest first within it', () => {
+  const scheduler = new ResourceAwareScheduler();
+  const node = { nodeId: 'node_x', capabilities: ['system.echo.v1'], allowedCapabilities: ['system.echo.v1'], jobSlots: 4, currentJobs: 0, lifecycle: 'ACTIVE', revoked: false } as never;
+  const job = (id: string, applicationId: string, createdAt: number, over: Record<string, unknown> = {}) => ({ id, applicationId, type: 'system.echo.v1', status: 'QUEUED', createdAt, assignedNodeId: null, ...over }) as never;
+  const backlog = Array.from({ length: 200 }, (_, i) => job(`a${i}`, 'app-a', i));
+  const small = job('b0', 'app-b', 1000); // submitted long after the whole backlog
+  assert.equal(scheduler.choose(node, [...backlog, small])?.id, 'a0', 'nothing is running: oldest first, as before');
+  const running = [job('r1', 'app-a', 0, { status: 'LEASED', assignedNodeId: 'other' }), job('r2', 'app-a', 0, { status: 'LEASED', assignedNodeId: 'other' })];
+  assert.equal(scheduler.choose(node, [...running, ...backlog, small])?.id, 'b0', 'app-a already has two jobs running and app-b none: app-b goes next, not after 200 older jobs');
+  assert.equal(scheduler.choose(node, [...running, ...backlog])?.id, 'a0', 'a single application is served oldest first');
+  const both = [job('r3', 'app-b', 0, { status: 'LEASED', assignedNodeId: 'other' }), job('r4', 'app-b', 0, { status: 'LEASED', assignedNodeId: 'other' }), job('r5', 'app-b', 0, { status: 'LEASED', assignedNodeId: 'other' })];
+  assert.equal(scheduler.choose(node, [...running, ...both, ...backlog, small])?.id, 'a0', 'when the other application is ahead, this one is served');
 });

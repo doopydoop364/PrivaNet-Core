@@ -7,6 +7,9 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 
 ## [Unreleased]
 
+### Fixed
+- **A large backlog from one application could starve every other application.** The scheduler took the oldest eligible job, so a job submitted behind another application's backlog (say, a user-facing application behind a bulk crawler on its own credential) waited for the whole backlog even when nodes were free for it. The next job now goes to the application with the fewest jobs running at that moment, oldest first within an application. It is work-conserving (a node never idles while an eligible job exists) and identical to before when only one application has work. No protocol change.
+
 ### Added
 - **`PRIVANET_TRUST_LOOPBACK_PROXY` (off by default): per-client authentication limiting behind a proxy on the same machine.** The authentication rate limit is keyed on the connecting address, so behind Caddy on `127.0.0.1` (the documented first deployment) all clients share one 120-per-minute allowance and a single abusive caller can lock every node out of enrolling and authenticating. With the setting on, a loopback peer is limited by the last `X-Forwarded-For` entry (the address the proxy appended); leading entries, non-IP values and non-loopback peers are never trusted. Default behaviour is unchanged.
 
