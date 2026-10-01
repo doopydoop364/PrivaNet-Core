@@ -21,11 +21,11 @@ const dir = await mkdtemp(join(tmpdir(), 'privanet-registry-smoke-'));
 try {
   // 1. The registry carries every package at the expected version, and the dist-tag points at it.
   for (const name of packages) {
-    const { stdout } = await run(['view', `@privanet/${name}`, '--json', 'dist-tags', 'version'], dir);
+    const { stdout } = await run(['view', `@privanet/${name}`, '--json', '--prefer-online', 'dist-tags', 'version'], dir);
     const info = JSON.parse(stdout);
     const tags = info['dist-tags'] ?? info;
     if (tags[tag] !== version) throw new Error(`@privanet/${name}: dist-tag ${tag} is ${tags[tag]}, expected ${version}`);
-    await run(['view', `@privanet/${name}@${version}`, 'version'], dir);
+    await run(['view', `@privanet/${name}@${version}`, '--prefer-online', 'version'], dir);
   }
 
   // 2. A clean project installs only the SDK, through the dist-tag, and gets a matching set.

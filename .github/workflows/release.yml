@@ -141,6 +141,7 @@ jobs:
         shell: bash
         run: |
           version="${RELEASE_TAG#v}"; tag=latest; case "$RELEASE_TAG" in *-*) tag=next;; esac
-          # The registry can take a short while to serve a version that was just published.
-          for attempt in 1 2 3 4 5 6; do node scripts/registry-smoke.mjs "$version" "$tag" && exit 0; echo "attempt $attempt failed; retrying"; sleep 20; done
+          # The registry serves package metadata (and dist-tags) from caches that can lag a fresh publish by several minutes: the first
+          # run of this job saw the previous `next` tag for about two minutes. Retry for about ten minutes before calling it a failure.
+          for attempt in $(seq 1 20); do node scripts/registry-smoke.mjs "$version" "$tag" && exit 0; echo "attempt $attempt failed; retrying"; sleep 30; done
           exit 1
