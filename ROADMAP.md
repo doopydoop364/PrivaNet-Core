@@ -125,6 +125,33 @@ Initial PrivaSearch scaling targets are measured milestones rather than attempts
 
 **Deployment readiness (v0.3.0-alpha.5):** a server Coordinator behind TLS with a separate desktop worker was validated with real separate network stacks and firewalls (no inbound port on the worker, admin API unreachable from the LAN, outage recovery, mixed versions, a two-node workload), with the procedure in [docs/FIRST_DEPLOYMENT.md](docs/FIRST_DEPLOYMENT.md) and the verdict, unverified items and manual check in [docs/DEPLOYMENT_VALIDATION.md](docs/DEPLOYMENT_VALIDATION.md). It proves trusted, owner-run nodes only.
 
+## Phase 3.5 — Remote Node Onboarding / Contributor Experience — Planned
+
+Goal: make it simple for a **trusted, invited** contributor outside the local network to join as a PrivaNode, without changing who decides who joins. This sits after the basic deployment and multi-node readiness work in Phase 3 (which proved the trusted, owner-run setup) and before community-scale participation. It is numbered 3.5 so the existing phase numbers and order stay as they are; it needs nothing from Phases 4 to 9 and can be scheduled alongside any of them.
+
+**Why:** today's manual setup works but is too cumbersome for someone who is not the operator ([docs/FIRST_DEPLOYMENT.md](docs/FIRST_DEPLOYMENT.md), Part 2). A contributor must download the release, install files, copy a private CA root certificate when the Coordinator uses local TLS, edit `node.env`, receive a long enrollment token, install and start the service, and then remember to remove the token. The aim is close to "run the installer, enter a short code, done."
+
+**Not in this phase:** anonymous or public open enrollment, Sybil resistance, node reputation, credits, economics, and verification of hostile or malicious nodes. Enrollment stays **explicitly controlled by the network owner** (invite or approval), exactly as today. Those protections remain in [Phase 10](#phase-10--community-network-hardening--planned), and invite-only onboarding does not make an invited node trusted beyond what the owner already decides to trust.
+
+Goals:
+
+1. **A public hostname and a normal, publicly trusted TLS certificate** for the Coordinator entrypoint, so a node outside the LAN does not install a private root CA. The reverse-proxy model stays (the Coordinator itself stays on loopback behind it), and a stable name removes today's "nodes pin an address" caveat. The LAN setup with a private CA remains valid.
+2. **A one-command Linux installer**, conceptually `curl -fsSL https://<official-host>/install-node.sh | sh`, and an **equivalent Windows installer or PowerShell bootstrap**.
+3. **Installer responsibilities:** detect the supported OS and architecture; download the matching PrivaNet release; verify hashes and signatures as the project supports them; install files in the right places; create the dedicated node service account where appropriate; install the default desktop or resource policy; configure the Coordinator URL; enroll the node; **remove the one-time enrollment credential after successful enrollment**; install, enable and start the service; report clear success or failure.
+4. **Friendly short-lived invite codes** instead of handing end users the raw long enrollment token, for example `privanet-admin invite` printing a short code such as `N7K4-PQ2M` with its expiry and capabilities. A short code carries far less entropy than today's token, so it can only be an introduction, not a bearer credential: it must be single-use, expire quickly, be bound to the capabilities the owner chose, and be redeemable only over verified TLS with rate-limited, attempt-bounded redemption.
+5. **An optional approval (device-code) flow:** the joining machine requests enrollment and shows a request code, and the owner approves it separately (for example `privanet-admin approve <code>`), so no enrollment secret is ever sent to the contributor.
+6. **A clear reinstall, recovery and revocation flow** for contributors and owners (replace a machine, lose a machine, withdraw a node) building on today's `revoke-node` and re-enrollment.
+7. **Good diagnostics for common remote-node failures:** DNS, TLS, port and firewall reachability, expired or already-used invite, rejected or revoked node, and an incompatible protocol or version, each with a plain-language message and a next step. The node already logs a fixed vocabulary of connection failure reasons; this makes them actionable for a non-operator.
+8. **Keep enrollment owner-controlled.** Every path above ends with the owner's explicit decision.
+
+Dependencies and guardrails (a milestone is not done without them):
+
+- **Internet exposure is a new threat surface.** Before the first outside contributor, review what a public hostname exposes: the admin API must stay unreachable from the Internet (today it is loopback and proxy-restricted; see the exposure review in [docs/DEPLOYMENT_VALIDATION.md](docs/DEPLOYMENT_VALIDATION.md)), authentication and enrollment rate limits must hold against an Internet-scale guesser, and the reverse-proxy configuration must be the documented, tested one.
+- **The installer is part of the trust chain.** Serve it over HTTPS from the official release, pin it to a release version and checksum, and never place a credential on a command line or in a log.
+- **No new trust in the node.** Scheduling, resource limits and the SSRF guard behave exactly as for any node; a joined contributor's node is still a trusted-by-the-owner machine, not a verified one.
+
+**Status:** planned. Nothing here exists yet: there is no installer, no invite or approval command, and no diagnostics beyond the connection-failure reasons the node already logs. Use the manual procedure in [docs/FIRST_DEPLOYMENT.md](docs/FIRST_DEPLOYMENT.md).
+
 ## Phase 4 — Generic Storage + Data Plane Foundation — Planned
 
 Goal: provide application-independent object/chunk storage through PrivaNet **and the first generic direct-transfer data plane**, so large payloads never transit the Coordinator ([docs/DATA_PLANE.md](docs/DATA_PLANE.md), ADR 006).
@@ -310,6 +337,8 @@ Areas to address:
 - upgrade compatibility
 
 Community deployment should happen only after the local/small-network architecture is stable.
+
+Invite-only onboarding of **trusted** remote contributors is a separate, earlier milestone ([Phase 3.5](#phase-35--remote-node-onboarding--contributor-experience--planned)) and does not wait for this phase. What waits for this phase is anything that admits nodes the owner does not individually know and trust: anonymous or open enrollment, Sybil resistance, reputation and hostile-node verification.
 
 ## Phase 11 — Stable PrivaNet Protocol — Planned
 
