@@ -158,6 +158,8 @@ A Coordinator restart needs nothing from nodes or applications: nodes retry with
 
 ## Part 2. The desktop
 
+> **Planned simplification (not available yet).** The steps below are the manual procedure, and they are more work than a trusted contributor outside your network should have to do (download the release, copy a CA root, edit `node.env`, handle a long enrollment token, install the service, remove the token). A future milestone, [Remote Node Onboarding / Contributor Experience](../ROADMAP.md#phase-35--remote-node-onboarding--contributor-experience--planned), aims at "run an installer, enter a short code, done" for **trusted, invited** contributors: a public hostname with a publicly trusted certificate, one-command Linux and Windows installers, short-lived invite codes and an optional owner-approval flow. It does not exist yet: there is no installer and no invite or approval command, so use the procedure below. Enrollment will stay controlled by you, the network owner.
+
 ### Linux
 
 Same as the server, minus the Coordinator, Caddy and admin steps:
@@ -241,4 +243,4 @@ If the application is offline, nodes simply find no work. If the Coordinator res
 
 ## Not for this setup yet
 
-Arbitrary public nodes, public enrollment, hostile workers, credits, rewards and reputation are out of scope for this deployment and are not implemented.
+Arbitrary public nodes, public enrollment, hostile workers, credits, rewards and reputation are out of scope for this deployment and are not implemented. Easier onboarding for trusted contributors outside the LAN (installer, invite codes, a publicly trusted certificate) is planned separately and is also not implemented: see [the roadmap](../ROADMAP.md#phase-35--remote-node-onboarding--contributor-experience--planned).

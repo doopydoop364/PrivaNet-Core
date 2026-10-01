@@ -7,6 +7,9 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 
 ## [Unreleased]
 
+### Documentation
+- **Roadmap: a planned Phase 3.5, Remote Node Onboarding / Contributor Experience** (`ROADMAP.md`, `docs/roadmap.md` as v0.3.5). Trusted, invite-only remote contributors: a public hostname with a publicly trusted certificate, one-command Linux and Windows installers, short-lived invite codes, an optional owner-approval flow, reinstall and revocation, and remote-node diagnostics, with the guardrails it needs (Internet exposure review, installer trust chain). Enrollment stays owner-controlled; anonymous or public enrollment, Sybil resistance, reputation, credits and hostile-node verification stay in Phase 10. Existing phase numbers and order are unchanged, and the Phase 10 text now says invite-only onboarding does not wait for it. The first-deployment, deployment and validation documents point to it as a planned simplification. Nothing is implemented.
+
 ### Fixed
 - **A timing guard that was calibrated for fast machines.** The "busy node polls again at once" test allowed 6 s for 20 jobs; the regression it guards against (one poll-interval sleep per job) takes about 57 s, and a loaded Windows runner needed 8 s. The bound is now 20 s, still well below the regression.
 - **A multinode test race.** The spread test counted `job.completed` log lines the moment the client had every result, but a node logs that line after it reports the result, so the last line could still be in flight (39 of 40 on a loaded runner). It now waits for the lines to arrive, then still requires exactly one completion per job.
