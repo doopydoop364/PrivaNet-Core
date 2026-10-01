@@ -8,6 +8,7 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 ## [Unreleased]
 
 ### Fixed
+- **A multinode test race.** The spread test counted `job.completed` log lines the moment the client had every result, but a node logs that line after it reports the result, so the last line could still be in flight (39 of 40 on a loaded runner). It now waits for the lines to arrive, then still requires exactly one completion per job.
 - **Re-running the Release workflow for an existing tag no longer fails at the GitHub release step.** It now leaves the existing release and its assets untouched and carries on, so the `publish` and `registry-smoke` jobs can be completed afterwards (for example after setting `NPM_PUBLISH`, which a first run would have skipped). The npm side was already safe to re-run.
 
 ## [0.3.0-alpha.6] - 2026-10-01

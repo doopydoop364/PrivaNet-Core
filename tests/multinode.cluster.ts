@@ -22,6 +22,10 @@ test('work spreads over every enrolled node and every result is exactly the dete
   const client = cluster.client(); const jobs = [];
   for (let i = 0; i < 40; i++) jobs.push(await client.submit('system.hashchain.v1', { seed: `spread-${i}`, iterations: 150000 }, `spread-${i}`));
   for (const [i, job] of jobs.entries()) assert.deepEqual(await client.waitForResult(job.id, { timeoutMs: 60000 }), { digest: chain(`spread-${i}`, 150000), iterations: 150000 });
+  // A node logs job.completed after it reports the result, so the last lines can still be in flight when the client has every answer.
+  const total = () => cluster.nodes.reduce((sum, node) => sum + node.count('job.completed'), 0);
+  await eventually('every node to log its completions', () => total() >= 40, 15000);
+  await sleep(500); // and a duplicate completion, if there were one, would show up by now
   const done = cluster.nodes.map(node => node.count('job.completed'));
   assert.equal(done.reduce((a, b) => a + b, 0), 40, 'each job completed once');
   assert.ok(done.every(n => n > 0), `every node should get work, got ${done.join(',')}`);
