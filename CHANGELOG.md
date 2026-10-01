@@ -11,6 +11,7 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 - **`demo.mjs` can submit a real fetch.** Setting `PRIVANET_DEMO_FETCH_URL` submits `web.fetch.v1` instead of `system.echo.v1` and prints a short summary (outcome, HTTP status, final URL, content type, size, robots verdict; never page text). A failure before a job exists now names a fixed error code such as `JOB_TYPE_FORBIDDEN` or `FETCH_IDENTITY_REQUIRED`.
 
 ### Fixed
+- **A wrong assertion in the LAN workload test.** It required the nodes' logs to show exactly one `job.completed` per job, but a node logs that only after the Coordinator's acknowledgement arrives. When the test pulls the desktop's cable just as a result is being reported, the Coordinator and the application have the result and the node's log is short by that job (3999 of 4000). The test now requires no duplicate completion and a shortfall of at most the desktop's in-flight jobs.
 - **The first-deployment guide had no first task that could work.** Its manual check pointed at the echo demo, but the guide creates credentials and enrolls nodes for `web.fetch.v1` only, so the echo demo would have been refused or never scheduled. A new step, "Run your first task", uses a throwaway credential and the fetch mode above.
 
 ### Documentation
