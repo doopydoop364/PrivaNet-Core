@@ -8,6 +8,9 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 ## [Unreleased]
 
 ### Fixed
+- **A finished job result was thrown away when the Coordinator was briefly unreachable.** A node that completed a job while the Coordinator was restarting (or a proxy returned 502/503/504) let the delivery failure escape, so the result was lost, the lease ran to expiry and the whole job was run again (for `web.fetch.v1`, a second fetch of the same page). The node now retries the delivery with backoff while the lease may still be valid, and keeps renewing the lease while it does; completion was already idempotent at the Coordinator, so a retry after a lost answer is safe. A definite refusal (the lease was taken away) and an expired lease are not retried, and a forced shutdown stops the retries. Measured on a real crawl, an in-flight fetch at the moment of a Coordinator crash previously stalled the crawl for the full lease (30 s in that rig, 10 s by default).
+
+### Fixed
 - **A large backlog from one application could starve every other application.** The scheduler took the oldest eligible job, so a job submitted behind another application's backlog (say, a user-facing application behind a bulk crawler on its own credential) waited for the whole backlog even when nodes were free for it. The next job now goes to the application with the fewest jobs running at that moment, oldest first within an application. It is work-conserving (a node never idles while an eligible job exists) and identical to before when only one application has work. No protocol change.
 
 ### Added

@@ -162,35 +162,54 @@ export class PrivaNode {
             if ((error instanceof ApiError && [401, 409].includes(error.status)) || Date.now() >= leaseUntil) { leaseLost = true; preempt.abort(); }
           }).finally(() => { renewing = false; });
       }, Math.max(20, Math.floor((lease.expiresAt - Date.now()) / 3))); const stop = AbortSignal.any([preempt.signal, this.hardStop.signal]);
-      // Only jobs declared preemptible are ever interrupted for resource pressure.
-      const watcher = JOB_TYPES[lease.type].resources.preemptible && this.options.engine
-        ? setInterval(() => { this.options.engine?.update(); if (this.options.engine?.shouldPreempt()) preempt.abort(); }, this.options.preemptCheckMs ?? 250) : undefined;
       try {
-        result = await executeLease(lease, this.capabilities, stop, this.options.handlers ?? defaultHandlers, {
-          ...(checkpoints ? { checkpoint: checkpoints.forJob(lease.jobId, lease.type) } : {}), ...(meter ? { transfer: (bytes: number) => meter.consume(bytes, stop) } : {}) });
-      }
-      catch {
-        if (leaseLost) { this.log({ event: 'job.lease_lost' }); return false; }
-        if (stop.aborted) {
-          await this.transport.request('POST', `/v1/node/jobs/${lease.jobId}/release`, AckSchema,
-            { leaseId: lease.leaseId, reason: this.hardStop.signal.aborted ? 'SHUTDOWN' : 'PREEMPTED' }, session.token);
-          this.log({ event: 'job.released' }); return false; // the checkpoint is kept so this node can resume the job if it is handed back
+        // Only jobs declared preemptible are ever interrupted for resource pressure.
+        const watcher = JOB_TYPES[lease.type].resources.preemptible && this.options.engine
+          ? setInterval(() => { this.options.engine?.update(); if (this.options.engine?.shouldPreempt()) preempt.abort(); }, this.options.preemptCheckMs ?? 250) : undefined;
+        try {
+          result = await executeLease(lease, this.capabilities, stop, this.options.handlers ?? defaultHandlers, {
+            ...(checkpoints ? { checkpoint: checkpoints.forJob(lease.jobId, lease.type) } : {}), ...(meter ? { transfer: (bytes: number) => meter.consume(bytes, stop) } : {}) });
         }
-        checkpoints?.clear(lease.jobId);
-        await this.transport.request('POST', `/v1/node/jobs/${lease.jobId}/fail`, AckSchema,
-          { leaseId: lease.leaseId, error: { code: this.capabilities.includes(lease.type) ? 'HANDLER_FAILED' : 'CAPABILITY_DISABLED' } }, session.token);
-        this.log({ event: 'job.handler_failed' }); return true;
-      } finally { clearInterval(renewer); if (watcher) clearInterval(watcher); }
-      meter?.record(JSON.stringify(result).length);
-      await this.transport.request('POST', `/v1/node/jobs/${lease.jobId}/complete`, AckSchema, { leaseId: lease.leaseId, result }, session.token);
-      checkpoints?.clear(lease.jobId); this.log({ event: 'job.completed' });
-      return true;
+        catch {
+          if (leaseLost) { this.log({ event: 'job.lease_lost' }); return false; }
+          if (stop.aborted) {
+            await this.transport.request('POST', `/v1/node/jobs/${lease.jobId}/release`, AckSchema,
+              { leaseId: lease.leaseId, reason: this.hardStop.signal.aborted ? 'SHUTDOWN' : 'PREEMPTED' }, session.token);
+            this.log({ event: 'job.released' }); return false; // the checkpoint is kept so this node can resume the job if it is handed back
+          }
+          checkpoints?.clear(lease.jobId);
+          await this.transport.request('POST', `/v1/node/jobs/${lease.jobId}/fail`, AckSchema,
+            { leaseId: lease.leaseId, error: { code: this.capabilities.includes(lease.type) ? 'HANDLER_FAILED' : 'CAPABILITY_DISABLED' } }, session.token);
+          this.log({ event: 'job.handler_failed' }); return true;
+        } finally { if (watcher) clearInterval(watcher); }
+        meter?.record(JSON.stringify(result).length);
+        // The renewer keeps running until the result is delivered: during a brief Coordinator outage it extends the lease again as soon as the Coordinator is back.
+        await this.deliver(lease.jobId, { leaseId: lease.leaseId, result }, session.token, () => leaseUntil);
+        checkpoints?.clear(lease.jobId); this.log({ event: 'job.completed' });
+        return true;
+      } finally { clearInterval(renewer); }
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) this.session = undefined;
       throw error;
     } finally {
       if (counted) this.currentJobs--;
       // The renewal timer also heartbeats while a job runs; otherwise availability is refreshed on the next cycle.
+    }
+  }
+  /**
+   * Reports a finished result. A result is expensive (the whole job ran), so a refused or dropped connection (the Coordinator restarting, a proxy error)
+   * is retried with backoff for as long as the lease may still be valid, instead of throwing the result away and letting the job be run again after the
+   * lease expires. Completion is idempotent at the Coordinator, so a retry after a lost answer is safe. A definite refusal (the lease was taken away) is
+   * not retried, and neither is anything once the lease has run out or the node is being stopped.
+   */
+  private async deliver(jobId: string, body: { leaseId: string; result: unknown }, token: string, leaseUntil: () => number): Promise<void> {
+    for (let attempt = 0; ; attempt++) {
+      try { await this.transport.request('POST', `/v1/node/jobs/${jobId}/complete`, AckSchema, body, token); return; }
+      catch (error) {
+        const transient = !(error instanceof ApiError) || [502, 503, 504].includes(error.status);
+        if (!transient || this.hardStop.signal.aborted || Date.now() >= leaseUntil()) throw error;
+        try { await delay(Math.min(2000, 200 * 2 ** Math.min(attempt, 4), Math.max(1, leaseUntil() - Date.now())), undefined, { signal: this.hardStop.signal }); } catch { throw error; }
+      }
     }
   }
   /** One lease request. Waits at the Coordinator for work when it supports that, so a job is picked up the moment it exists instead of at the next poll. */
