@@ -45,6 +45,7 @@ npm run typecheck
 
 For a running demo, see [local development and operations](docs/development.md).
 The SDK entry point is `@privanet/sdk`, with exported types and runtime validation.
+Install it from npm (`npm install @privanet/sdk@next` while PrivaNet-Core is a pre-release; pin the exact version in an application). The Coordinator and PrivaNode are not npm packages; they come from the release archives. See [package installation](docs/PACKAGES.md).
 It targets Node clients initially; browser packaging is future work.
 
 ```typescript

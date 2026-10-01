@@ -123,3 +123,22 @@ jobs:
             if npm view "@privanet/$pkg@$version" version >/dev/null 2>&1; then echo "@privanet/$pkg@$version is already on npm: skipping"; continue; fi
             npm publish --workspace "@privanet/$pkg" --access public --tag "$tag" --provenance
           done
+  registry-smoke:
+    # Proves what a consumer gets: a clean project installs the freshly published SDK from the registry, resolves one matching
+    # protocol/shared/sdk set, and imports it. Not part of `npm test`, so ordinary test runs never depend on the network.
+    if: ${{ vars.NPM_PUBLISH == 'true' }}
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: Install from the public registry and import
+        shell: bash
+        run: |
+          version="${RELEASE_TAG#v}"; tag=latest; case "$RELEASE_TAG" in *-*) tag=next;; esac
+          # The registry can take a short while to serve a version that was just published.
+          for attempt in 1 2 3 4 5 6; do node scripts/registry-smoke.mjs "$version" "$tag" && exit 0; echo "attempt $attempt failed; retrying"; sleep 20; done
+          exit 1
