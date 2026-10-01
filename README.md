@@ -68,6 +68,7 @@ credential and allowed job types; applications receive no admin/node privileges.
 - [Development, configuration and recovery](docs/development.md)
 - [First deployment: server Coordinator, desktop worker (step by step)](docs/FIRST_DEPLOYMENT.md)
 - [Deployment validation: separate-host evidence, security review, readiness verdict](docs/DEPLOYMENT_VALIDATION.md)
+- [Remote node onboarding: enrollment tokens, `privanet-node enroll`, the node registry](docs/ONBOARDING.md)
 - [Deployment: TLS, reverse proxy, backup and recovery](docs/deployment.md)
 - [Trusted multi-node validation: scenarios, findings, measurements](docs/MULTI_NODE_VALIDATION.md)
 - [Application boundary: what Core owns and what applications own (ADR 005, accepted)](docs/APPLICATION_BOUNDARY.md)

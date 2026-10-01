@@ -6,6 +6,9 @@ import { hash } from '@privanet/shared';
 import { migrations } from './migrations.js';
 import type { ApplicationRecord, ChallengeRecord, Grant, JobRecord, NodeRecord, NodeSession, Store } from './model.js';
 
+/** How long a used, revoked or expired enrollment grant stays on record after its expiry time. */
+export const GRANT_RETENTION_MS = 30 * 86400000;
+
 export class SqliteStore implements Store {
   readonly coordinatorId: string;
   private readonly db: DatabaseSync;
@@ -71,6 +74,7 @@ export class SqliteStore implements Store {
   saveApplication(app: ApplicationRecord): void { this.stmt('INSERT INTO applications VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET token_hash=excluded.token_hash, record=excluded.record').run(app.id, app.tokenHash, JSON.stringify(app)); }
   getGrant(tokenHash: string): Grant | undefined { return this.one('SELECT record FROM grants WHERE token_hash=?', tokenHash); }
   saveGrant(grant: Grant): void { this.stmt('INSERT INTO grants VALUES (?,?,?) ON CONFLICT(token_hash) DO UPDATE SET record=excluded.record').run(grant.tokenHash, grant.expiresAt, JSON.stringify(grant)); }
+  listGrants(): Grant[] { return this.stmt('SELECT record FROM grants ORDER BY expires_at DESC, token_hash').all().map(row => JSON.parse(String(row.record)) as Grant); }
   getChallenge(id: string): ChallengeRecord | undefined { return this.one('SELECT record FROM challenges WHERE id=?', id); }
   saveChallenge(challenge: ChallengeRecord): void { this.stmt('INSERT INTO challenges VALUES (?,?,?)').run(challenge.challengeId, challenge.expiresAt, JSON.stringify(challenge)); }
   deleteChallenge(id: string): void { this.stmt('DELETE FROM challenges WHERE id=?').run(id); }
@@ -91,7 +95,8 @@ export class SqliteStore implements Store {
   prune(now: number): void {
     this.stmt('DELETE FROM challenges WHERE expires_at<=?').run(now);
     this.stmt('DELETE FROM sessions WHERE expires_at<=?').run(now);
-    this.stmt('DELETE FROM grants WHERE expires_at<=?').run(now);
+    // A grant is kept after it expires, so that "was it used, by which node, and when" can still be answered; only an old record is dropped.
+    this.stmt('DELETE FROM grants WHERE expires_at<=?').run(now - GRANT_RETENTION_MS);
   }
   close(): void { this.db.close(); }
 }

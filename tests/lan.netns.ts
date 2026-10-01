@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import type { ChildProcess } from 'node:child_process';
+import { EnrollmentTokenSchema, NodesSchema } from '@privanet/protocol';
 import type { Lan } from './netns-rig.js';
 import { eventually, netnsUnavailable, sleep, startLan } from './netns-rig.js';
 
@@ -162,6 +163,36 @@ test('the shipped operator wrappers work against the shipped example configurati
   const out = await lan.server.run(join(lan.release, 'deploy', 'bin', 'privanet-backup'), [backup], wrapperEnv);
   assert.match(out, /backup\.created/); assert.ok(existsSync(backup));
   assert.equal(out.includes(lan.adminSecret), false, 'the wrappers never print the secret');
+});
+
+test('remote onboarding over TLS: a token from the admin tool, `privanet-node enroll` from another host, a restart with no token, then revocation', { skip, timeout: 180000 }, async t => {
+  const lan = await withLan(t); const nodeBin = join(lan.release, 'bin', 'privanet-node'); const app = await lan.application('onboard-app', 'system.echo.v1');
+  const created = EnrollmentTokenSchema.parse(await lan.admin(['enrollment', 'create', '--json', '--expires', '10m', '--capabilities', 'system.echo.v1', '--label', 'Remote desk']));
+  const tokenFile = join(lan.dir, 'remote.token'); await writeFile(tokenFile, created.token, { mode: 0o600 }); const stateDir = join(lan.dir, 'node-remote');
+  const attempt = async (env: NodeJS.ProcessEnv) => {
+    try { return { ok: true, out: await lan.desktop.run(nodeBin, ['enroll', '--coordinator', lan.url, '--token-file', tokenFile, '--state-dir', stateDir], env) }; }
+    catch (error) { const failure = error as { stdout?: string; stderr?: string }; return { ok: false, out: `${failure.stdout ?? ''}${failure.stderr ?? ''}` }; }
+  };
+  const status = async () => ((await lan.admin(['enrollment', 'list', '--all', '--json'])) as { tokens: Array<{ status: string }> }).tokens[0]?.status;
+  // A machine that does not trust the Coordinator's CA is told so, and the token is left unused.
+  const untrusted = await attempt({}); assert.equal(untrusted.ok, false); assert.match(untrusted.out, /TLS certificate is not trusted/); assert.equal(untrusted.out.includes(created.token), false); assert.equal(await status(), 'ACTIVE');
+  const enrolled = await attempt({ NODE_EXTRA_CA_CERTS: lan.caCert }); assert.equal(enrolled.ok, true, enrolled.out); assert.match(enrolled.out, /^Enrolled\./); assert.equal(enrolled.out.includes(created.token), false);
+  assert.equal(await status(), 'USED'); const nodeId = await nodeIdOf(stateDir);
+  // The shipped node starts from nothing but its state directory (and the CA, which a public certificate would not need), and again after a restart.
+  for (const start of [1, 2]) {
+    const logs: string[] = []; const child = lan.desktop.spawn(nodeBin, [], { NODE_EXTRA_CA_CERTS: lan.caCert, PRIVANODE_STATE_DIR: stateDir, PRIVANODE_HEARTBEAT_MS: '500', PRIVANODE_POLL_MS: '100' }, logs); lan.children.push(child);
+    await eventually(`the node to authenticate (start ${start})`, () => logs.join('').includes('"event":"node.authenticated"') || undefined); assert.equal(logs.join('').includes('node.enrolled'), false);
+    await eventually('the node to be ONLINE', () => online(lan, nodeId));
+    const view = (await lan.nodeViews()).find(node => node.nodeId === nodeId); assert.equal(view?.displayName, 'Remote desk'); assert.deepEqual(view?.capabilities, ['system.echo.v1']);
+    const summary = await lan.client(lan.desktop, app.token, { type: 'system.echo.v1', inputs: [{ message: `hello ${start}` }], inflight: 1, keyPrefix: `onboard-${start}` }); assert.deepEqual(summary.results[0], { message: `hello ${start}` });
+    if (start === 1) await stopChild(child); else {
+      // Revocation reaches a running node at once.
+      const revoked = await lan.admin(['nodes', 'revoke', 'Remote desk', '--json']); assert.deepEqual(revoked, { ok: true });
+      await eventually('the node to be REVOKED', async () => (await lan.nodeViews()).find(node => node.nodeId === nodeId)?.status === 'REVOKED' || undefined);
+      await eventually('the revoked node to be refused', () => /UNAUTHORIZED_NODE/.test(logs.join('')) || undefined);
+      const listing = NodesSchema.parse(await lan.admin(['nodes', 'list', '--json'])).nodes[0]; assert.equal(listing?.status, 'REVOKED'); assert.equal(typeof listing?.revokedAt, 'number');
+    }
+  }
 });
 
 // Mixed versions, with the real binaries of an older release (v0.3.0-alpha.2, before lease waits and job slots): the upgrade path in docs/FIRST_DEPLOYMENT.md.

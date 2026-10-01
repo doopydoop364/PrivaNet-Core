@@ -2,12 +2,14 @@ import { createServer } from 'node:http';
 import { isIP } from 'node:net';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ZodError } from 'zod';
-import { AuthStartSchema, IdSchema, LeaseRequestSchema, MAX_BODY_BYTES, MAX_JOB_WAIT_MS, NodeIdSchema, PROTOCOL_VERSION } from '@privanet/protocol';
+import { AuthStartSchema, EnrollmentTokenIdSchema, IdSchema, LeaseRequestSchema, MAX_BODY_BYTES, MAX_JOB_WAIT_MS, NodeIdSchema, PROTOCOL_VERSION } from '@privanet/protocol';
 import { ApiError, equalSecret } from '@privanet/shared';
 import type { Coordinator } from './service.js';
 
 export interface LogEvent { event: string; code?: string }
 export interface ServerOptions { adminSecret: string; log?: (entry: LogEvent) => void; authRequestsPerMinute?: number; maxLeaseWaiters?: number; maxJobWaiters?: number;
+  /** Refused enrollment requests (a token that is unknown, used, expired or revoked, or a bad proof) one address may make per minute before it is answered 429 for the rest of the minute. Default 10: an honest node makes one. */
+  enrollmentFailuresPerMinute?: number;
   /**
    * Off by default (forwarded headers are never believed). When the Coordinator sits behind a reverse proxy on the same machine every request arrives from
    * the loopback address, so the per-address limit sees one client and one abusive caller can lock everyone out of authentication. With this on, a request whose
@@ -67,6 +69,18 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
     bucket.count++;
     if (bucket.count > limit) throw new ApiError(429, 'RATE_LIMIT', 'authentication rate limit');
   }
+  // A second, much tighter limit for enrollment alone: the general limit above bounds all authentication traffic, this one bounds guessing at the one-time token.
+  const failureLimit = options.enrollmentFailuresPerMinute ?? 10;
+  if (!Number.isSafeInteger(failureLimit) || failureLimit < 1) throw new Error('Invalid enrollment failure limit');
+  const failures = new Map<string, { count: number; starts: number }>();
+  function failureBucket(req: IncomingMessage) {
+    const key = clientKey(req); const now = Date.now(); let bucket = failures.get(key);
+    if (!bucket || now - bucket.starts >= 60000) {
+      if (failures.size >= 1000) failures.delete(failures.keys().next().value ?? '');
+      bucket = { count: 0, starts: now }; failures.set(key, bucket);
+    }
+    return bucket;
+  }
   function send(res: ServerResponse, status: number, payload: unknown) {
     const serialized = JSON.stringify(payload);
     if (Buffer.byteLength(serialized) > 512 * 1024) throw new ApiError(500, 'RESPONSE_LIMIT', 'response limit exceeded');
@@ -77,7 +91,7 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
   }
   const server = createServer((req, res) => {
     void (async () => {
-      let preRated = false;
+      let preRated = false; let enrolling = false;
       try {
         if (req.headers['x-privanet-protocol'] !== String(PROTOCOL_VERSION)) throw new ApiError(426, 'PROTOCOL_MISMATCH', 'unsupported protocol version');
         const rawUrl = req.url ?? ''; const queryAt = rawUrl.indexOf('?');
@@ -91,17 +105,32 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
         if (req.method === 'GET' && path === '/v1/health') { send(res, 200, core.health()); return; }
         const publicPaths = ['/v1/enrollment/challenge', '/v1/enrollment/proof', '/v1/auth/challenge', '/v1/auth/proof'];
         if (req.method === 'POST' && publicPaths.includes(path)) {
-          rate(req); preRated = true; const input = await body(req);
+          rate(req); preRated = true; enrolling = path.startsWith('/v1/enrollment/');
+          // The same answer whatever the token was: nothing says how close a guess came, and a guesser stops being served after a few misses.
+          if (enrolling && failureBucket(req).count >= failureLimit) throw new ApiError(429, 'RATE_LIMIT', 'too many refused enrollment attempts');
+          const input = await body(req);
           const result = path === '/v1/enrollment/challenge' ? core.beginEnrollment(input)
             : path === '/v1/enrollment/proof' ? core.prove(input, 'enroll')
               : path === '/v1/auth/challenge' ? core.beginAuth(AuthStartSchema.parse(input).nodeId) : core.prove(input, 'auth');
+          if (path === '/v1/enrollment/proof') log({ event: 'node.enrolled' });
           send(res, 200, result); return;
         }
         const token = bearer(req);
         if (path.startsWith('/v1/admin/')) {
           if (!equalSecret(token, options.adminSecret)) throw new ApiError(401, 'UNAUTHORIZED_ADMIN', 'administrator authentication required');
           if (req.method === 'GET' && path === '/v1/admin/nodes') { send(res, 200, { nodes: core.listNodes() }); return; }
-          if (req.method === 'POST' && path === '/v1/admin/enrollment-tokens') { send(res, 201, core.createEnrollment(await body(req))); return; }
+          if (req.method === 'POST' && path === '/v1/admin/enrollment-tokens') { send(res, 201, core.createEnrollment(await body(req))); log({ event: 'enrollment.created' }); return; }
+          if (req.method === 'GET' && path === '/v1/admin/enrollment-tokens') { send(res, 200, { tokens: core.listEnrollments() }); return; }
+          const revokeToken = /^\/v1\/admin\/enrollment-tokens\/([^/]+)\/revoke$/.exec(path);
+          if (req.method === 'POST' && revokeToken) {
+            const id = EnrollmentTokenIdSchema.parse(revokeToken[1]);
+            if (JSON.stringify(await body(req)) !== '{}') throw new ApiError(400, 'INVALID_REQUEST', 'expected empty object');
+            core.revokeEnrollment(id); log({ event: 'enrollment.revoked' }); send(res, 200, { ok: true }); return;
+          }
+          const rename = /^\/v1\/admin\/nodes\/([^/]+)\/rename$/.exec(path);
+          if (req.method === 'POST' && rename) {
+            const id = NodeIdSchema.parse(rename[1]); core.renameNode(id, await body(req)); log({ event: 'node.renamed' }); send(res, 200, { ok: true }); return;
+          }
           if (req.method === 'POST' && path === '/v1/admin/applications') { send(res, 201, core.createApplication(await body(req))); return; }
           const rotate = /^\/v1\/admin\/applications\/([^/]+)\/rotate$/.exec(path);
           if (req.method === 'POST' && rotate) {
@@ -117,6 +146,7 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
           }
         } else if (path.startsWith('/v1/node/')) {
           const node = core.authenticateNode(token);
+          if (req.method === 'GET' && path === '/v1/node/self') { send(res, 200, core.nodeSelf(node)); return; }
           if (req.method === 'POST' && path === '/v1/node/heartbeat') { const input = await body(req); core.authenticateNode(token); core.heartbeat(node.nodeId, input); send(res, 200, { ok: true }); return; }
           if (req.method === 'POST' && path === '/v1/node/jobs/lease') {
             const { waitMs = 0 } = LeaseRequestSchema.parse(await body(req));
@@ -196,6 +226,7 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
         if (failure.status === 401 && !preRated) {
           try { rate(req); } catch (rateError) { if (rateError instanceof ApiError) failure = rateError; }
         }
+        if (enrolling && failure.status === 401) failureBucket(req).count++;
         log({ event: 'request.rejected', code: failure.code });
         if (!res.headersSent && !res.destroyed) send(res, failure.status, { error: { code: failure.code, message: failure.message } });
       }

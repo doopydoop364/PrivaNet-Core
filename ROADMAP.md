@@ -125,7 +125,7 @@ Initial PrivaSearch scaling targets are measured milestones rather than attempts
 
 **Deployment readiness (v0.3.0-alpha.5):** a server Coordinator behind TLS with a separate desktop worker was validated with real separate network stacks and firewalls (no inbound port on the worker, admin API unreachable from the LAN, outage recovery, mixed versions, a two-node workload), with the procedure in [docs/FIRST_DEPLOYMENT.md](docs/FIRST_DEPLOYMENT.md) and the verdict, unverified items and manual check in [docs/DEPLOYMENT_VALIDATION.md](docs/DEPLOYMENT_VALIDATION.md). It proves trusted, owner-run nodes only.
 
-## Phase 3.5 — Remote Node Onboarding / Contributor Experience — Planned
+## Phase 3.5 — Remote Node Onboarding / Contributor Experience — Partly implemented
 
 Goal: make it simple for a **trusted, invited** contributor outside the local network to join as a PrivaNode, without changing who decides who joins. This sits after the basic deployment and multi-node readiness work in Phase 3 (which proved the trusted, owner-run setup) and before community-scale participation. It is numbered 3.5 so the existing phase numbers and order stay as they are; it needs nothing from Phases 4 to 9 and can be scheduled alongside any of them.
 
@@ -150,7 +150,9 @@ Dependencies and guardrails (a milestone is not done without them):
 - **The installer is part of the trust chain.** Serve it over HTTPS from the official release, pin it to a release version and checksum, and never place a credential on a command line or in a log.
 - **No new trust in the node.** Scheduling, resource limits and the SSRF guard behave exactly as for any node; a joined contributor's node is still a trusted-by-the-owner machine, not a verified one.
 
-**Status:** planned. Nothing here exists yet: there is no installer, no invite or approval command, and no diagnostics beyond the connection-failure reasons the node already logs. Use the manual procedure in [docs/FIRST_DEPLOYMENT.md](docs/FIRST_DEPLOYMENT.md).
+**Status:** the enrollment and registry core is implemented (unreleased, after `0.3.0-alpha.6`; [docs/ONBOARDING.md](docs/ONBOARDING.md)): one-time, expiring, hashed, single-use enrollment tokens that an administrator can create, list and revoke (`privanet-admin enrollment create|list|revoke`); `privanet-node enroll --coordinator URL --token T`, after which the node remembers its Coordinator and restarts with no token or configuration; a node registry with names, last seen, capabilities, protocol, slots, enrolled and revoked times (`privanet-admin nodes list|show|rename|revoke`); a separate limiter on refused enrollment attempts; and actionable enrollment failure messages (untrusted certificate, DNS, refused connection, refused token, protocol mismatch). This covers goals 6 and part of 7 above for a trusted contributor who already has the release and a reachable, TLS-protected Coordinator.
+
+Still planned, and **not** implemented: a public hostname with a publicly trusted certificate (goal 1), the Linux and Windows installers (goals 2 and 3), short human-friendly invite codes (goal 4), the optional approval/device-code flow (goal 5), and deeper reachability diagnostics (goal 7). Until then, use the manual procedure in [docs/FIRST_DEPLOYMENT.md](docs/FIRST_DEPLOYMENT.md) with `privanet-node enroll` in place of editing `node.env`.
 
 ## Phase 4 — Generic Storage + Data Plane Foundation — Planned
 
@@ -338,7 +340,7 @@ Areas to address:
 
 Community deployment should happen only after the local/small-network architecture is stable.
 
-Invite-only onboarding of **trusted** remote contributors is a separate, earlier milestone ([Phase 3.5](#phase-35--remote-node-onboarding--contributor-experience--planned)) and does not wait for this phase. What waits for this phase is anything that admits nodes the owner does not individually know and trust: anonymous or open enrollment, Sybil resistance, reputation and hostile-node verification.
+Invite-only onboarding of **trusted** remote contributors is a separate, earlier milestone ([Phase 3.5](#phase-35--remote-node-onboarding--contributor-experience--partly-implemented)) and does not wait for this phase. What waits for this phase is anything that admits nodes the owner does not individually know and trust: anonymous or open enrollment, Sybil resistance, reputation and hostile-node verification.
 
 ## Phase 11 — Stable PrivaNet Protocol — Planned
 

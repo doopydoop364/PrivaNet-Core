@@ -19,9 +19,9 @@ cookies/CORS are not part of this machine-client API.
 | Role | Routes |
 | --- | --- |
 | Public | GET health; POST enrollment challenge/proof, node auth challenge/proof |
-| Admin bearer | POST admin/enrollment-tokens, admin/applications; GET admin/nodes; POST admin/nodes/:id/revoke, admin/applications/:id/revoke, admin/applications/:id/rotate |
+| Admin bearer | POST and GET admin/enrollment-tokens; POST admin/enrollment-tokens/:id/revoke; POST admin/applications; GET admin/nodes; POST admin/nodes/:id/revoke, admin/nodes/:id/rename, admin/applications/:id/revoke, admin/applications/:id/rotate |
 | Scoped application bearer | GET capabilities; POST jobs; GET jobs/:id (own jobs only) |
-| Node session bearer | POST node/heartbeat, node/goodbye, node/jobs/lease, node/jobs/:id/complete, node/jobs/:id/fail, node/jobs/:id/release, node/jobs/:id/renew |
+| Node session bearer | GET node/self; POST node/heartbeat, node/goodbye, node/jobs/lease, node/jobs/:id/complete, node/jobs/:id/fail, node/jobs/:id/release, node/jobs/:id/renew |
 
 Admin bootstrap is a high-entropy environment secret. Application secrets are
 random and returned once, hash-only in the DB; allowed job types and revocation
@@ -30,18 +30,20 @@ node identities. Nodes cannot use app/admin APIs and vice versa.
 
 ## Identity and enrollment
 
-1. Administrator creates a bounded-expiry, one-use token with capability ceiling.
+1. Administrator creates a bounded-expiry, one-use token with a capability ceiling and an optional label (the node's display name). Only its SHA-256 is stored; it can be listed by ID, and revoked while unused.
 2. Node generates an Ed25519 key with Node crypto; private key remains local in
    owner-only state. Stable ID is `node_` plus SHA-256 of canonical public SPKI DER.
 3. Enrollment challenge presents token, SPKI public key, protocol/service version
-   and operator-enabled capabilities. Coordinator validates the grant and creates
+   and the capabilities to enroll with (omitted: everything the token grants; named ones must all be granted). Coordinator validates the grant and creates
    a random expiring proof message bound to coordinator, purpose, node and nonce.
 4. Node signs exactly the returned proof message; Coordinator verifies Ed25519
    possession and transactionally consumes grant and challenge, registers node,
-   and issues a random short-lived bearer session (hashed in DB).
+   and issues a random short-lived bearer session (hashed in DB). The grant is re-checked and consumed in that one transaction, so concurrent redemptions of one token yield one node. Unknown, used, expired and revoked tokens all answer `401 INVALID_ENROLLMENT`; refused enrollment attempts are separately rate-limited per address.
 5. Later authentication uses a new one-use challenge bound to registered public
    key; the enrollment token is no longer needed. New sessions replace previous
    sessions. Proof replay, expiry and revoked nodes are rejected.
+
+The administrator and node workflows, the added routes and the upgrade notes are in [ONBOARDING.md](ONBOARDING.md).
 
 This is challenge-response login over authenticated TLS, not a custom HTTP
 message-signature implementation. Transport protects each subsequent bearer

@@ -139,7 +139,7 @@ Status: **planned; nothing implemented.** These apply to the future direct-trans
 ## Limits and threats left open
 
 A stolen grant can enroll the thief before the owner; restrict grant capability,
-shorten expiry and transmit via a safe channel. A stolen node private key permits
+shorten expiry and transmit via a safe channel. Grants are stored only as hashes, are single use (enforced in the transaction that registers the node), are revocable while unused and are listed by ID, never by value; guessing is bounded by a per-address limit on refused enrollment attempts ([ONBOARDING.md](ONBOARDING.md)). A stolen node private key permits
 authentication until revoked. A stolen session permits its node role until
 expiry/revocation. A stolen app/admin secret permits its scope until revoked or
 admin bootstrap rotated/restarted. This is not mTLS or per-message signatures.

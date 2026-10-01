@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { CapabilitiesSchema } from '@privanet/protocol';
 import { Transport } from '@privanet/shared';
 import { ResourcePolicySchema } from './resource-policy.js';
+import { readEnrollmentRecordSync } from './enrollment-record.js';
 import type { ResourcePolicy } from './resource-policy.js';
 const interval = (fallback: number) => z.coerce.number().int().min(1).max(60000).default(fallback);
 const schema = z.object({
@@ -28,7 +29,13 @@ const schema = z.object({
 export function loadResourcePolicy(path: string | undefined): ResourcePolicy {
   return ResourcePolicySchema.parse(path === undefined ? {} : JSON.parse(readFileSync(path, 'utf8')));
 }
-export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
+export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env) {
+  // A node enrolled with `privanet-node enroll` remembers its Coordinator and capabilities in its state directory; anything set explicitly in the environment wins,
+  // and a node that was never enrolled that way (no enrollment.json) is configured exactly as before.
+  const enrolled = rawEnv.PRIVANODE_COORDINATOR_URL === undefined || rawEnv.PRIVANODE_CAPABILITIES === undefined ? readEnrollmentRecordSync(rawEnv.PRIVANODE_STATE_DIR ?? './var/node') : undefined;
+  const env: NodeJS.ProcessEnv = { ...rawEnv,
+    ...(enrolled && rawEnv.PRIVANODE_COORDINATOR_URL === undefined ? { PRIVANODE_COORDINATOR_URL: enrolled.coordinatorUrl } : {}),
+    ...(enrolled && rawEnv.PRIVANODE_CAPABILITIES === undefined ? { PRIVANODE_CAPABILITIES: enrolled.capabilities.join(',') } : {}) };
   const c = schema.parse(env);
   const capabilities = CapabilitiesSchema.parse(c.PRIVANODE_CAPABILITIES === '' ? [] : c.PRIVANODE_CAPABILITIES.split(','));
   return { url: c.PRIVANODE_COORDINATOR_URL, allowInsecureLoopback: c.PRIVANODE_ALLOW_INSECURE_LOOPBACK === 'true',

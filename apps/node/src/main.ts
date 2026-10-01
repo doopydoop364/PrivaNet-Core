@@ -10,11 +10,18 @@ import { defaultHandlers } from './handlers.js';
 import { createFetchHandler } from './fetch/handler.js';
 import { BindingChangedError } from './identity.js';
 import { ZodError } from 'zod';
+import { readFileSync } from 'node:fs';
+import { runEnroll } from './enroll-cli.js';
 /** Exit status for a configuration problem (BSD `EX_CONFIG`): a service manager should not restart-loop on it (`RestartPreventExitStatus=78`). */
 export const EXIT_CONFIG = 78;
 /** Creating this file in the node's state directory asks the running node to drain (any platform; the way to do it on Windows). */
 export const DRAIN_FILE = 'DRAIN';
 async function main() {
+  // `privanet-node enroll ...` enrolls this machine and exits; anything else starts the node.
+  if (process.argv[2] === 'enroll') {
+    process.exitCode = await runEnroll(process.argv.slice(3), process.env, { out: text => process.stdout.write(text), err: text => process.stderr.write(text), readStdin: () => readFileSync(0, 'utf8') });
+    return;
+  }
   let loaded: ReturnType<typeof loadConfig>;
   try { loaded = loadConfig(); } catch (error) {
     // Names of the offending settings only, never their values (one of them is the enrollment token).

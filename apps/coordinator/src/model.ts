@@ -5,10 +5,14 @@ export interface NodeRecord extends Omit<NodeView, 'status'> {
   lifecycle?: 'ACTIVE' | 'DRAINING' | 'DEPARTED';
 }
 export interface ApplicationRecord { id: string; tokenHash: string; name: string; allowedJobTypes: JobType[]; revoked: boolean; fetchIdentity?: FetchIdentity }
-export interface Grant { tokenHash: string; expiresAt: number; capabilities: JobType[]; used: boolean }
+export interface Grant {
+  tokenHash: string; expiresAt: number; capabilities: JobType[]; used: boolean;
+  /** Added by Remote Node Onboarding; absent on a grant written before it (such a grant still redeems exactly as before and is listed with unknown creation time). */
+  createdAt?: number; label?: string; usedAt?: number; usedBy?: string; revokedAt?: number;
+}
 export interface ChallengeRecord extends Challenge {
   purpose: 'enroll' | 'auth'; nodeId: string; publicKey: string;
-  enrollment: Omit<EnrollmentStart, 'token'> | null; grantHash: string | null;
+  enrollment: (Omit<EnrollmentStart, 'token' | 'capabilities'> & { capabilities: JobType[] }) | null; grantHash: string | null;
 }
 export interface NodeSession { tokenHash: string; nodeId: string; expiresAt: number }
 export interface JobRecord extends Job {
@@ -30,6 +34,8 @@ export interface Store {
   saveApplication(app: ApplicationRecord): void;
   getGrant(hash: string): Grant | undefined;
   saveGrant(grant: Grant): void;
+  /** Every retained grant, newest expiry first (used and expired ones are kept for an audit window: see `prune`). */
+  listGrants(): Grant[];
   getChallenge(id: string): ChallengeRecord | undefined;
   saveChallenge(challenge: ChallengeRecord): void;
   deleteChallenge(id: string): void;

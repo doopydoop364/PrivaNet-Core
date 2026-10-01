@@ -1,8 +1,11 @@
 #!/bin/sh
 # Runs the PrivaNet admin tool on the Coordinator host: reads the Coordinator's environment file (so the admin secret never appears on a command line
 # or in shell history) and talks to the Coordinator's loopback listener, the only place the admin API is reachable.
-#   sudo privanet-admin nodes | enrollment | application NAME | revoke-node ID | revoke-application ID | rotate-application ID
-# Settings the admin tool reads from the environment: PRIVANET_JOB_TYPES, PRIVANET_ENROLLMENT_TTL_MS, PRIVANET_FETCH_PRODUCT, PRIVANET_FETCH_INFO_URL.
+#   sudo privanet-admin enrollment create [--expires 10m] [--capabilities web.fetch.v1] [--label NAME] | enrollment list [--all] | enrollment revoke TOKEN_ID
+#   sudo privanet-admin nodes list | nodes show NODE | nodes rename NODE NAME | nodes revoke NODE        (run it with no arguments for the full usage)
+#   sudo privanet-admin application NAME | revoke-application ID | rotate-application ID
+# Older forms still work and print JSON: enrollment | nodes | revoke-node ID. See docs/ONBOARDING.md.
+# Settings the admin tool reads from the environment: PRIVANET_JOB_TYPES, PRIVANET_ENROLLMENT_TTL_MS, PRIVANET_PUBLIC_URL, PRIVANET_FETCH_PRODUCT, PRIVANET_FETCH_INFO_URL.
 set -eu
 env_file=${PRIVANET_ENV_FILE:-/etc/privanet/coordinator.env}
 home=${PRIVANET_HOME:-/opt/privanet}

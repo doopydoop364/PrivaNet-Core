@@ -1,12 +1,12 @@
 import { createPublicKey, randomUUID, verify } from 'node:crypto';
 import {
   AppCreateSchema, CompleteSchema, EnrollmentStartSchema, EnrollmentTokenRequestSchema,
-  FailureSchema, GoodbyeSchema, HeartbeatSchema, JOB_TYPES, JobSchema, PROTOCOL_VERSION, ProofSchema,
+  FailureSchema, GoodbyeSchema, HeartbeatSchema, JOB_TYPES, JobSchema, NodeRenameSchema, PROTOCOL_VERSION, ProofSchema,
   ReleaseSchema, RenewSchema, SERVICE_VERSION, SubmitSchema, requiresClientIdentity,
 } from '@privanet/protocol';
-import type { Challenge, Job, JobError, JobType, Lease, NodeView, Session } from '@privanet/protocol';
+import type { Challenge, EnrollmentTokenInfo, EnrollmentTokenStatus, Job, JobError, JobType, Lease, NodeView, Session } from '@privanet/protocol';
 import { ApiError, canonicalPublicKey, hash, secret } from '@privanet/shared';
-import type { ApplicationRecord, ChallengeRecord, JobRecord, NodeRecord, Store } from './model.js';
+import type { ApplicationRecord, ChallengeRecord, Grant, JobRecord, NodeRecord, Store } from './model.js';
 import { ResourceAwareScheduler } from './scheduler.js';
 import type { Scheduler } from './scheduler.js';
 
@@ -19,6 +19,10 @@ export interface Policy { staleMs: number; offlineMs: number; leaseMs: number; m
   maxPendingPerApplication: number }
 export const defaultPolicy: Policy = { staleMs: 15000, offlineMs: 60000, leaseMs: 10000, maxAttempts: 3, maxReleases: 20, sessionMs: 300000, challengeMs: 60000, retentionMs: 30 * 86400000, maxLeaseMs: 3600000, maxPendingPerApplication: 10000 };
 function reject(status: number, code: string): never { throw new ApiError(status, code, code.replaceAll('_', ' ').toLowerCase()); }
+/** Most enrollment tokens that may be redeemable at the same time; an administrator who needs more has forgotten to revoke some. */
+export const MAX_ACTIVE_ENROLLMENTS = 100;
+/** The public identifier of a token, derived from its hash: it names the token in lists and revocations without being able to redeem it. */
+export const enrollmentId = (tokenHash: string): string => `enr_${tokenHash.slice(0, 16)}`;
 
 export class Coordinator {
   readonly policy: Policy;
@@ -28,27 +32,56 @@ export class Coordinator {
     if (this.policy.offlineMs <= this.policy.staleMs || this.policy.maxAttempts > 100 || this.policy.sessionMs > 86400000 || this.policy.challengeMs > 300000) throw new Error('Invalid policy boundaries');
   }
   health() { return { protocolVersion: PROTOCOL_VERSION, serviceVersion: SERVICE_VERSION, coordinatorId: this.store.coordinatorId, status: 'ok' as const }; }
+  private grantStatus(grant: Grant): EnrollmentTokenStatus {
+    if (grant.revokedAt !== undefined) return 'REVOKED';
+    if (grant.used) return 'USED';
+    return grant.expiresAt <= this.now() ? 'EXPIRED' : 'ACTIVE';
+  }
+  /**
+   * Issues a one-time enrollment token. Only its SHA-256 is stored, so the raw value exists in this response and nowhere else: not in the database, a log or a later listing.
+   * The token is 256 random bits, which is why a plain hash (not a slow one) is enough and why a guess is not worth rate-limiting by anything but cost.
+   */
   createEnrollment(input: unknown) {
     const request = EnrollmentTokenRequestSchema.parse(input);
-    const token = secret(); const expiresAt = this.now() + request.expiresInMs;
-    this.store.saveGrant({ tokenHash: hash(token), expiresAt, capabilities: request.capabilities, used: false });
-    return { token, expiresAt };
+    return this.store.transaction(() => {
+      if (this.store.listGrants().filter(grant => this.grantStatus(grant) === 'ACTIVE').length >= MAX_ACTIVE_ENROLLMENTS) reject(429, 'ENROLLMENT_LIMIT');
+      const token = secret(); const tokenHash = hash(token); const createdAt = this.now(); const expiresAt = createdAt + request.expiresInMs;
+      this.store.saveGrant({ tokenHash, expiresAt, capabilities: request.capabilities, used: false, createdAt, ...(request.label ? { label: request.label } : {}) });
+      return { token, expiresAt, id: enrollmentId(tokenHash), createdAt, capabilities: request.capabilities, ...(request.label ? { label: request.label } : {}) };
+    });
   }
+  /** Tokens on record (never the token or its hash): active ones, and used, expired and revoked ones for the audit window. */
+  listEnrollments(): EnrollmentTokenInfo[] {
+    return this.store.listGrants().map(grant => ({ id: enrollmentId(grant.tokenHash), status: this.grantStatus(grant), createdAt: grant.createdAt ?? null, expiresAt: grant.expiresAt,
+      usedAt: grant.usedAt ?? null, revokedAt: grant.revokedAt ?? null, capabilities: grant.capabilities, label: grant.label ?? null, nodeId: grant.usedBy ?? null }))
+      .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0) || (a.id < b.id ? -1 : 1)).slice(0, 5000);
+  }
+  /** Withdraws a token that has not been used. A token that already enrolled a node cannot be revoked (revoke the node instead); revoking twice is harmless. */
+  revokeEnrollment(id: string): void {
+    this.store.transaction(() => {
+      const grant = this.store.listGrants().find(candidate => enrollmentId(candidate.tokenHash) === id); if (!grant) reject(404, 'NOT_FOUND');
+      if (grant.used) reject(409, 'ENROLLMENT_ALREADY_USED');
+      if (grant.revokedAt === undefined) this.store.saveGrant({ ...grant, revokedAt: this.now() });
+    });
+  }
+  /** One answer for every reason a token cannot be redeemed (unknown, used, expired, revoked): the caller learns nothing about which, or how close a guess was. */
   private grant(tokenHash: string) {
     const grant = this.store.getGrant(tokenHash);
-    if (!grant || grant.used || grant.expiresAt <= this.now()) reject(401, 'INVALID_ENROLLMENT');
+    if (!grant || grant.used || grant.revokedAt !== undefined || grant.expiresAt <= this.now()) reject(401, 'INVALID_ENROLLMENT');
     return grant;
   }
   beginEnrollment(input: unknown): Challenge {
     const request = EnrollmentStartSchema.parse(input);
     return this.store.transaction(() => {
       const grant = this.grant(hash(request.token));
-      if (request.capabilities.some(capability => !grant.capabilities.includes(capability))) reject(403, 'CAPABILITY_FORBIDDEN');
+      // Omitted means "everything this token grants"; named capabilities must all be granted.
+      const capabilities = request.capabilities ?? grant.capabilities;
+      if (capabilities.some(capability => !grant.capabilities.includes(capability))) reject(403, 'CAPABILITY_FORBIDDEN');
       let key: { publicKey: string; nodeId: string };
       try { key = canonicalPublicKey(request.publicKey); } catch { reject(400, 'INVALID_PUBLIC_KEY'); }
       if (this.store.getNode(key.nodeId)) reject(409, 'NODE_ALREADY_REGISTERED');
       // Do not retain the raw enrollment token in challenge persistence.
-      return this.challenge('enroll', key.nodeId, key.publicKey, { publicKey: request.publicKey, protocolVersion: request.protocolVersion, daemonVersion: request.daemonVersion, capabilities: request.capabilities }, hash(request.token));
+      return this.challenge('enroll', key.nodeId, key.publicKey, { publicKey: request.publicKey, protocolVersion: request.protocolVersion, daemonVersion: request.daemonVersion, capabilities }, hash(request.token));
     });
   }
   beginAuth(nodeId: string): Challenge {
@@ -84,8 +117,10 @@ export class Coordinator {
         this.store.saveNode({ nodeId: challenge.nodeId, publicKey: challenge.publicKey,
           capabilities: challenge.enrollment.capabilities, allowedCapabilities: grant.capabilities,
           protocolVersion: PROTOCOL_VERSION, daemonVersion: challenge.enrollment.daemonVersion,
-          enrolledAt: this.now(), lastHeartbeatAt: null, revoked: false, currentJobs: 0, jobSlots: 1 });
-        this.store.saveGrant({ ...grant, used: true });
+          enrolledAt: this.now(), lastHeartbeatAt: null, revoked: false, currentJobs: 0, jobSlots: 1,
+          ...(grant.label ? { displayName: grant.label } : {}) });
+        // The grant is re-read and consumed in the same transaction that creates the node, so of any number of concurrent redemptions exactly one can pass `this.grant` above.
+        this.store.saveGrant({ ...grant, used: true, usedAt: this.now(), usedBy: challenge.nodeId });
       }
       const node = this.store.getNode(challenge.nodeId);
       if (!node || node.revoked) reject(401, 'UNAUTHORIZED_NODE');
@@ -128,7 +163,7 @@ export class Coordinator {
   revokeNode(id: string): void {
     this.store.transaction(() => {
       const node = this.store.getNode(id); if (!node) reject(404, 'NOT_FOUND');
-      this.store.saveNode({ ...node, revoked: true }); this.store.deleteNodeSessions(id);
+      this.store.saveNode({ ...node, revoked: true, revokedAt: node.revokedAt ?? this.now() }); this.store.deleteNodeSessions(id);
       for (const job of this.store.listPendingJobs()) if (job.status === 'LEASED' && job.assignedNodeId === id) this.retry(job, 'NODE_REVOKED');
     });
   }
@@ -144,7 +179,22 @@ export class Coordinator {
     return this.store.listNodes().map(node => ({ nodeId: node.nodeId, protocolVersion: node.protocolVersion,
       daemonVersion: node.daemonVersion, capabilities: node.capabilities, lastHeartbeatAt: node.lastHeartbeatAt,
       currentJobs: node.currentJobs, jobSlots: node.jobSlots, status: this.status(node),
-      ...(node.resources ? { resources: node.resources } : {}) }));
+      ...(node.resources ? { resources: node.resources } : {}),
+      ...(node.displayName ? { displayName: node.displayName } : {}), enrolledAt: node.enrolledAt, ...(node.revokedAt !== undefined ? { revokedAt: node.revokedAt } : {}) }));
+  }
+  /** Names a node for the administrator's lists (`null` removes the name). A renamed node keeps its identity and credentials; a revoked one can still be renamed. */
+  renameNode(id: string, input: unknown): void {
+    const request = NodeRenameSchema.parse(input);
+    this.store.transaction(() => {
+      const node = this.store.getNode(id); if (!node) reject(404, 'NOT_FOUND');
+      const renamed: NodeRecord = { ...node }; delete renamed.displayName;
+      this.store.saveNode(request.displayName === null ? renamed : { ...renamed, displayName: request.displayName });
+    });
+  }
+  /** What a node may learn about itself with its own session. */
+  nodeSelf(node: NodeRecord) {
+    return { nodeId: node.nodeId, ...(node.displayName ? { displayName: node.displayName } : {}), enrolledAt: node.enrolledAt, capabilities: node.capabilities,
+      allowedCapabilities: node.allowedCapabilities, protocolVersion: node.protocolVersion };
   }
   heartbeat(nodeId: string, input: unknown): void {
     const request = HeartbeatSchema.parse(input);

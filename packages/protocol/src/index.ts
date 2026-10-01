@@ -150,13 +150,34 @@ export const HealthSchema = z.strictObject({
   protocolVersion: ProtocolSchema, serviceVersion: VersionSchema, coordinatorId: IdSchema, status: z.literal('ok'),
 });
 export const ErrorSchema = z.strictObject({ error: z.strictObject({ code: z.string().max(64), message: z.string().max(256) }) });
+/** A human-readable name for a node: letters, digits, space, dot, underscore and hyphen, 1 to 64 characters, starting and ending with a non-space. Chosen by the administrator, never by the node. */
+export const DisplayNameSchema = z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9 ._-]{0,62}[A-Za-z0-9._-])?$/);
+/** Public identifier of an enrollment token (derived from its hash, so it identifies the token without revealing or enabling it). */
+export const EnrollmentTokenIdSchema = z.string().regex(/^enr_[a-f0-9]{16}$/);
 export const EnrollmentTokenRequestSchema = z.strictObject({
   expiresInMs: z.number().int().min(1000).max(86400000), capabilities: CapabilitiesSchema,
+  /** Optional (additive within protocol 1): becomes the display name of the node that redeems the token. */
+  label: DisplayNameSchema.optional(),
 });
-export const EnrollmentTokenSchema = z.strictObject({ token: SecretSchema, expiresAt: TimeSchema });
+/** Answer to creating a token. `token` is shown only here; everything after `expiresAt` is additive within protocol 1 and absent from older Coordinators. */
+export const EnrollmentTokenSchema = z.strictObject({
+  token: SecretSchema, expiresAt: TimeSchema,
+  id: EnrollmentTokenIdSchema.optional(), createdAt: TimeSchema.optional(), capabilities: CapabilitiesSchema.optional(), label: DisplayNameSchema.optional(),
+});
+export const EnrollmentTokenStatusSchema = z.enum(['ACTIVE', 'USED', 'EXPIRED', 'REVOKED']);
+/** What an administrator may see about a token after creation: never the token itself, nor its hash. */
+export const EnrollmentTokenInfoSchema = z.strictObject({
+  id: EnrollmentTokenIdSchema, status: EnrollmentTokenStatusSchema, createdAt: TimeSchema.nullable(), expiresAt: TimeSchema,
+  usedAt: TimeSchema.nullable(), revokedAt: TimeSchema.nullable(), capabilities: CapabilitiesSchema, label: DisplayNameSchema.nullable(),
+  /** The node that redeemed the token, once it has. */
+  nodeId: NodeIdSchema.nullable(),
+});
+export const EnrollmentTokensSchema = z.strictObject({ tokens: z.array(EnrollmentTokenInfoSchema).max(5000) });
 export const EnrollmentStartSchema = z.strictObject({
   token: SecretSchema, publicKey: z.string().min(40).max(256), protocolVersion: ProtocolSchema,
-  daemonVersion: VersionSchema, capabilities: CapabilitiesSchema,
+  daemonVersion: VersionSchema,
+  /** Omitted (additive within protocol 1): enroll with every capability the token grants. A node that names capabilities gets exactly those, and a capability the token does not grant is refused. */
+  capabilities: CapabilitiesSchema.optional(),
 });
 export const AuthStartSchema = z.strictObject({ nodeId: NodeIdSchema, protocolVersion: ProtocolSchema });
 export const ProofMessageSchema = z.strictObject({
@@ -217,6 +238,15 @@ export const NodeViewSchema = z.strictObject({
   nodeId: NodeIdSchema, capabilities: CapabilitiesSchema, daemonVersion: VersionSchema,
   protocolVersion: ProtocolSchema, lastHeartbeatAt: TimeSchema.nullable(), status: NodeStatusSchema,
   currentJobs: z.number().int().min(0).max(MAX_JOB_SLOTS), jobSlots: z.number().int().min(1).max(MAX_JOB_SLOTS), resources: ResourceReportSchema.optional(),
+  // Additive within protocol 1 (Remote Node Onboarding): absent on a record written before it, and from an older Coordinator.
+  displayName: DisplayNameSchema.optional(), enrolledAt: TimeSchema.optional(), revokedAt: TimeSchema.optional(),
+});
+/** Rename a node (administrator only); `null` removes the name. */
+export const NodeRenameSchema = z.strictObject({ displayName: DisplayNameSchema.nullable() });
+/** What a node may ask the Coordinator about itself with its own session: its identity and what it is allowed to do. */
+export const NodeSelfSchema = z.strictObject({
+  nodeId: NodeIdSchema, displayName: DisplayNameSchema.optional(), enrolledAt: TimeSchema,
+  capabilities: CapabilitiesSchema, allowedCapabilities: CapabilitiesSchema, protocolVersion: ProtocolSchema,
 });
 export const NodesSchema = z.strictObject({ nodes: z.array(NodeViewSchema).max(1000) });
 export const AppCreateSchema = z.strictObject({ name: z.string().min(1).max(80), allowedJobTypes: z.array(JobTypeSchema).max(JOB_TYPE_IDS.length), fetchIdentity: FetchIdentitySchema.optional() });
@@ -249,6 +279,8 @@ export const CompleteSchema = z.strictObject({ leaseId: IdSchema, result: z.unkn
 export const FailureSchema = z.strictObject({ leaseId: IdSchema, error: JobErrorSchema });
 export const CapabilitiesResponseSchema = z.strictObject({ capabilities: z.array(z.strictObject({ capability: JobTypeSchema, onlineNodes: z.number().int().nonnegative() })).max(JOB_TYPE_IDS.length) });
 export type NodeView = z.infer<typeof NodeViewSchema>;
+export type EnrollmentTokenInfo = z.infer<typeof EnrollmentTokenInfoSchema>;
+export type EnrollmentTokenStatus = z.infer<typeof EnrollmentTokenStatusSchema>;
 export type Heartbeat = z.infer<typeof HeartbeatSchema>;
 export type EnrollmentStart = z.infer<typeof EnrollmentStartSchema>;
 export type Challenge = z.infer<typeof ChallengeSchema>;
