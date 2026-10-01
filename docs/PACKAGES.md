@@ -14,14 +14,14 @@ The Coordinator and PrivaNode (`apps/*`) are **not** consumer packages. They shi
 
 **Public npm**, under the `@privanet` scope. Reasons: this is a public project, it needs no installation token for consumers, and it keeps the package names independent of the GitHub account name (GitHub Packages would require the scope to equal the repository owner, and consumers would need a token even for public packages). The release workflow publishes with provenance through **npm trusted publishing** (GitHub OIDC, no long-lived token), with an optional token fallback (see [Publishing](#publishing)). The packages are licensed under [Apache-2.0](../LICENSE) and each tarball contains the license text.
 
-**Status: published.** `@privanet/protocol`, `@privanet/shared` and `@privanet/sdk` are on the public registry at `0.3.0-alpha.5`, with trusted publishing configured for future releases. **npm is the primary way to consume them.**
+**Status: published.** `@privanet/protocol`, `@privanet/shared` and `@privanet/sdk` are on the public registry at `0.3.0-alpha.6` (the first release published through trusted publishing; `0.3.0-alpha.5` was the manual bootstrap), with trusted publishing configured for future releases. **npm is the primary way to consume them.**
 
 ```bash
 npm install @privanet/sdk@next       # a pre-release: pulls @privanet/protocol and @privanet/shared at the same version
 npm install @privanet/protocol@next  # only if you use the schemas or types directly
 ```
 
-While PrivaNet-Core is pre-1.0, pin the exact version in your application (`"@privanet/sdk": "0.3.0-alpha.5"`, no caret) so a pre-release never moves under you, and upgrade deliberately. Pre-releases use the `next` dist-tag; stable releases will use `latest`. (npm set `latest` to the first bootstrap version too; until a stable release exists, always ask for `@next` or an exact version.) Every package of a release has the **same version as PrivaNet-Core**, and the internal dependencies are pinned to that exact version, so one `npm install` always yields a matching set. `@privanet/shared` is an internal dependency of the SDK: an application that never imports it should not list it, and npm installs it transitively.
+While PrivaNet-Core is pre-1.0, pin the exact version in your application (`"@privanet/sdk": "0.3.0-alpha.6"`, no caret) so a pre-release never moves under you, and upgrade deliberately. Pre-releases use the `next` dist-tag; stable releases will use `latest`. (npm set `latest` to the first bootstrap version too; until a stable release exists, always ask for `@next` or an exact version.) Every package of a release has the **same version as PrivaNet-Core**, and the internal dependencies are pinned to that exact version, so one `npm install` always yields a matching set. `@privanet/shared` is an internal dependency of the SDK: an application that never imports it should not list it, and npm installs it transitively.
 
 An application must **not** keep sibling `file:` links or GitHub release-asset URLs as its permanent dependency. A local `file:` link to a checkout is fine while developing against an unreleased Core change; it must not be committed to a released application.
 
@@ -33,7 +33,7 @@ The **Coordinator and PrivaNode are not consumer packages.** They come from the 
 
 ### Release tarballs (fallback, always kept)
 
-Every GitHub release also carries the packed tarballs (`privanet-sdk-<version>.tgz`, `privanet-protocol-<version>.tgz`, `privanet-shared-<version>.tgz`) next to the platform archives and `SHA256SUMS.txt`. They are a **fallback and verifiable artifact**, not the install path: use them for an air-gapped install, during a registry outage, or to verify a download against `SHA256SUMS.txt`. Install them by file path or release-asset URL (`npm install ./privanet-sdk-0.3.0-alpha.5.tgz ./privanet-protocol-0.3.0-alpha.5.tgz ./privanet-shared-0.3.0-alpha.5.tgz`). `0.3.0-alpha.1` tarballs carry no license file; use `0.3.0-alpha.5` or newer.
+Every GitHub release also carries the packed tarballs (`privanet-sdk-<version>.tgz`, `privanet-protocol-<version>.tgz`, `privanet-shared-<version>.tgz`) next to the platform archives and `SHA256SUMS.txt`. They are a **fallback and verifiable artifact**, not the install path: use them for an air-gapped install, during a registry outage, or to verify a download against `SHA256SUMS.txt`. Install them by file path or release-asset URL (`npm install ./privanet-sdk-0.3.0-alpha.6.tgz ./privanet-protocol-0.3.0-alpha.6.tgz ./privanet-shared-0.3.0-alpha.6.tgz`). `0.3.0-alpha.1` tarballs carry no license file; use `0.3.0-alpha.5` or newer.
 
 ## Compatibility expectations
 
