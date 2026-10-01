@@ -335,8 +335,9 @@ test('a busy node polls again at once after finishing a job, so throughput is no
   const jobs = []; for (let i = 0; i < 20; i++) jobs.push(await sdk.submit('system.echo.v1', { message: `m${i}` }, `busy-${i}`));
   const abort = new AbortController(); const running = node.run(abort.signal); const started = Date.now();
   try {
-    await Promise.all(jobs.map(job => sdk.waitForResult(job.id, { timeoutMs: 10000, pollMs: 20 })));
-    const took = Date.now() - started; assert.ok(took < 6000, `20 queued jobs took ${took} ms with a 3000 ms poll interval`);
+    await Promise.all(jobs.map(job => sdk.waitForResult(job.id, { timeoutMs: 40000, pollMs: 20 })));
+    // The regression takes about 57 s (one 3 s sleep per job). A loaded Windows runner needed 8 s, so allow a third of the regression time.
+    const took = Date.now() - started; assert.ok(took < 20000, `20 queued jobs took ${took} ms with a 3000 ms poll interval`);
   } finally { abort.abort(); await running; } // never leave the node polling if the assertion fails
 });
 

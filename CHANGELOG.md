@@ -8,6 +8,7 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 ## [Unreleased]
 
 ### Fixed
+- **A timing guard that was calibrated for fast machines.** The "busy node polls again at once" test allowed 6 s for 20 jobs; the regression it guards against (one poll-interval sleep per job) takes about 57 s, and a loaded Windows runner needed 8 s. The bound is now 20 s, still well below the regression.
 - **A multinode test race.** The spread test counted `job.completed` log lines the moment the client had every result, but a node logs that line after it reports the result, so the last line could still be in flight (39 of 40 on a loaded runner). It now waits for the lines to arrive, then still requires exactly one completion per job.
 - **Re-running the Release workflow for an existing tag no longer fails at the GitHub release step.** It now leaves the existing release and its assets untouched and carries on, so the `publish` and `registry-smoke` jobs can be completed afterwards (for example after setting `NPM_PUBLISH`, which a first run would have skipped). The npm side was already safe to re-run.
 
