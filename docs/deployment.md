@@ -1,6 +1,6 @@
 # Deployment: TLS, reverse proxy, backup and recovery
 
-Status: operator guidance for the Coordinator (current through v0.3.0-alpha.5). The Coordinator is a single-process service with a SQLite store; this is a small-deployment runbook, not a high-availability design. **For a home or small-office setup start with [FIRST_DEPLOYMENT.md](FIRST_DEPLOYMENT.md)**, whose Caddy, systemd, policy and environment files ship in the release under `deploy/` and are exercised against real processes behind a real Caddy in [DEPLOYMENT_VALIDATION.md](DEPLOYMENT_VALIDATION.md). The nginx example and the other configuration below are starting points reviewed against the code but **not** exercised against a real internet-facing proxy, and the Internet-facing case is not recommended yet.
+Status: operator guidance for the Coordinator (current through v0.3.0-alpha.6). The Coordinator is a single-process service with a SQLite store; this is a small-deployment runbook, not a high-availability design. **For a home or small-office setup start with [FIRST_DEPLOYMENT.md](FIRST_DEPLOYMENT.md)**, whose Caddy, systemd, policy and environment files ship in the release under `deploy/` and are exercised against real processes behind a real Caddy in [DEPLOYMENT_VALIDATION.md](DEPLOYMENT_VALIDATION.md). The nginx example and the other configuration below are starting points reviewed against the code but **not** exercised against a real internet-facing proxy, and the Internet-facing case is not recommended yet.
 
 ## What the Coordinator does and does not do
 

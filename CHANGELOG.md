@@ -7,6 +7,10 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 
 ## [Unreleased]
 
+## [0.3.0-alpha.6] - 2026-10-01
+
+First release published to npm through trusted publishing (GitHub OIDC with provenance, no long-lived token). Protocol version 1, no wire change and no change to what the three packages contain: `0.3.0-alpha.5` (the manual bootstrap publish) and `0.3.0-alpha.6` interoperate, and the Coordinator and PrivaNode behave identically. The release exists to prove the publish path end to end and to carry the npm-first documentation and the registry smoke test.
+
 ### Added
 - **`scripts/registry-smoke.mjs`** (`npm run smoke:registry`): a live-registry check. In a clean project it confirms `@privanet/protocol`, `shared` and `sdk` exist at the expected version with the dist-tag pointing at it, installs `@privanet/sdk@<tag>`, verifies one matching protocol/shared/sdk set, and imports them. The Release workflow runs it after each publish (`registry-smoke` job, same `NPM_PUBLISH` gate). It is not part of `npm test`, so ordinary test runs never need the network.
 - The publish-job test also pins dependency order, `--tag next` for pre-releases and the smoke job.
