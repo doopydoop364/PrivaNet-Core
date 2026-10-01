@@ -8,6 +8,9 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 ## [Unreleased]
 
 ### Added
+- **`PRIVANET_TRUST_LOOPBACK_PROXY` (off by default): per-client authentication limiting behind a proxy on the same machine.** The authentication rate limit is keyed on the connecting address, so behind Caddy on `127.0.0.1` (the documented first deployment) all clients share one 120-per-minute allowance and a single abusive caller can lock every node out of enrolling and authenticating. With the setting on, a loopback peer is limited by the last `X-Forwarded-For` entry (the address the proxy appended); leading entries, non-IP values and non-loopback peers are never trusted. Default behaviour is unchanged.
+
+### Added
 - **`demo.mjs` can submit a real fetch.** Setting `PRIVANET_DEMO_FETCH_URL` submits `web.fetch.v1` instead of `system.echo.v1` and prints a short summary (outcome, HTTP status, final URL, content type, size, robots verdict; never page text). A failure before a job exists now names a fixed error code such as `JOB_TYPE_FORBIDDEN` or `FETCH_IDENTITY_REQUIRED`.
 
 ### Fixed
