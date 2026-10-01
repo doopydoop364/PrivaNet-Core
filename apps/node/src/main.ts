@@ -12,12 +12,17 @@ import { BindingChangedError } from './identity.js';
 import { ZodError } from 'zod';
 import { readFileSync } from 'node:fs';
 import { runEnroll, runJoin } from './enroll-cli.js';
+import { runDoctor } from './doctor.js';
 /** Exit status for a configuration problem (BSD `EX_CONFIG`): a service manager should not restart-loop on it (`RestartPreventExitStatus=78`). */
 export const EXIT_CONFIG = 78;
 /** Creating this file in the node's state directory asks the running node to drain (any platform; the way to do it on Windows). */
 export const DRAIN_FILE = 'DRAIN';
 async function main() {
   // `privanet-node enroll ...` enrolls this machine and exits; anything else starts the node.
+  if (process.argv[2] === 'doctor') {
+    process.exitCode = await runDoctor(process.argv.slice(3), process.env, { out: text => process.stdout.write(text), err: text => process.stderr.write(text) });
+    return;
+  }
   if (process.argv[2] === 'enroll' || process.argv[2] === 'join') {
     const io = { out: (text: string) => process.stdout.write(text), err: (text: string) => process.stderr.write(text), readStdin: () => readFileSync(0, 'utf8') };
     process.exitCode = await (process.argv[2] === 'enroll' ? runEnroll : runJoin)(process.argv.slice(3), process.env, io);
