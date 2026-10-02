@@ -127,7 +127,7 @@ export function verifyTicket(wire: string, options: VerifyOptions): TicketVerdic
   const { claims, payload, signature } = parsed;
   const key = options.keys.find(candidate => candidate.kid === claims.kid && transferKeyId(candidate.publicKey) === candidate.kid);
   if (!key || (key.notAfter !== null && options.now >= key.notAfter + skew)) return { ok: false, error: 'UNKNOWN_KID' };
-  let valid = false;
+  let valid: boolean;
   try { valid = verify(null, ticketSigningBytes(payload), createPublicKey({ key: Buffer.from(key.publicKey, 'base64'), type: 'spki', format: 'der' }), signature); } catch { valid = false; }
   if (!valid) return { ok: false, error: 'BAD_SIGNATURE' };
   if (claims.expiresAt <= claims.issuedAt || claims.expiresAt - claims.issuedAt > TICKET_MAX_LIFETIME_MS) return { ok: false, error: 'LIFETIME' };

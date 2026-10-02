@@ -445,3 +445,8 @@ export const KeyRotationSchema = z.strictObject({ currentKid: KeyIdSchema, previ
 /** Fixed lifetimes, one place: a ticket lives at most this long, and a verifier tolerates at most this much clock difference. Not configurable on purpose. */
 export const TICKET_MAX_LIFETIME_MS = 120000;
 export const TICKET_MAX_SKEW_MS = 30000;
+export type KeyRotation = z.infer<typeof KeyRotationSchema>;
+export type ChunkStatus = z.infer<typeof ChunkStatusSchema>;
+export type TransferGrant = z.infer<typeof TransferGrantSchema>;
+export type PlacementResponse = z.infer<typeof PlacementResponseSchema>;
+export type TicketResponse = z.infer<typeof TicketResponseSchema>;
