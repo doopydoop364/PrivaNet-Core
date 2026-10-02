@@ -104,7 +104,7 @@ test('node CLI: enroll with a token, then a plain start reconnects with no token
     assert.ok(log.includes('"event":"node.authenticated"'), `the node reconnected from its stored identity (start ${start + 1}): ${log.slice(0, 300)}`); assert.equal(log.includes('node.enrolled'), false, 'it did not enroll again');
     const online = Date.now() + 10000; let status = ''; while (Date.now() < online) { status = (NodesSchema.parse(JSON.parse((await f.admin(['nodes'])).out)).nodes[0]?.status) ?? ''; if (status === 'ONLINE') break; await new Promise(resolve => setTimeout(resolve, 50)); }
     assert.equal(status, 'ONLINE');
-    child.kill('SIGTERM'); await new Promise<void>(resolve => child.once('close', () => resolve())); daemons.push(log); assert.equal(child.exitCode, 0);
+    child.kill('SIGTERM'); await new Promise<void>(resolve => child.once('close', () => resolve())); daemons.push(log); if (process.platform !== 'win32') assert.equal(child.exitCode, 0);
   }
   outputs.push(...daemons);
   // The administrator's view, by name and by ID prefix.

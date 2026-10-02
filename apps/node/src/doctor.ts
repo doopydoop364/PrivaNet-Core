@@ -114,8 +114,14 @@ export async function diagnose(options: DoctorOptions): Promise<DoctorReport> {
   let tcpOk = false;
   if (!dnsOk) add(stage('tcp', `TCP ${port}`, 'SKIPPED', 'no address to connect to'));
   else {
-    try { await tcp(addresses[0] ?? host, port, options.timeoutMs); tcpOk = true; add(stage('tcp', `TCP ${port}`, 'OK', `connected to ${addresses[0]}:${port}`)); }
-    catch (error) {
+    // Every address the name resolves to, in order, as a real client does (a name often has an IPv6 address first that nothing listens on): one that answers is enough.
+    let reached = ''; let firstError: unknown;
+    for (const address of addresses.length ? addresses : [host]) {
+      try { await tcp(address, port, options.timeoutMs); reached = address; break; } catch (error) { firstError ??= error; }
+    }
+    if (reached) { tcpOk = true; add(stage('tcp', `TCP ${port}`, 'OK', `connected to ${reached}:${port}`)); }
+    else {
+      const error = firstError;
       const failure = connectionFailure(Object.assign(new Error('x'), { cause: error }));
       const advice: Record<string, string> = { CONNECTION_REFUSED: 'Nothing is listening there. Check the port and that the Coordinator\'s reverse proxy is running.', TIMEOUT: 'No answer. A firewall, a router that does not forward the port, or a wrong address is the usual cause: the owner must open TCP ' + port + ' to the server.',
         UNREACHABLE: 'This machine has no route to that address. Check your own network connection.' };

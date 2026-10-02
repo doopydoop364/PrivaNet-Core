@@ -53,6 +53,16 @@ test('doctor: a name that does not resolve is named, and nothing after it is att
   assert.equal(real.code, 1); assert.equal(stageOf(real.report as DoctorReport, 'dns').status, 'FAILED');
 });
 
+test('doctor: a name with several addresses is reachable if any one answers (an IPv6 address first that nothing listens on is not a failure)', async t => {
+  const { dir } = await sandbox(t); const tried: string[] = [];
+  const report = await diagnose({ url: 'https://node.example.invalid', stateDir: quietState(dir), allowInsecureLoopback: false, timeoutMs: 1000, env: {}, resolveHost: async () => ['::1', '127.0.0.1'],
+    tcp: async host => { tried.push(host); if (host === '::1') throw Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }); } });
+  assert.deepEqual(tried, ['::1', '127.0.0.1']); assert.equal(stageOf(report, 'tcp').status, 'OK'); assert.match(stageOf(report, 'tcp').detail, /127\.0\.0\.1/);
+  const none = await diagnose({ url: 'https://node.example.invalid', stateDir: quietState(dir), allowInsecureLoopback: false, timeoutMs: 1000, env: {}, resolveHost: async () => ['::1', '127.0.0.1'],
+    tcp: async () => { throw Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }); } });
+  assert.equal(stageOf(none, 'tcp').status, 'FAILED'); assert.match(stageOf(none, 'tcp').detail, /refused/);
+});
+
 test('doctor: a refused connection, a silent port and a connect timeout are told apart', async t => {
   const { dir } = await sandbox(t);
   const closed = createNetServer(); const closedPort = await listenAny(closed); await new Promise<void>(resolve => closed.close(() => resolve()));

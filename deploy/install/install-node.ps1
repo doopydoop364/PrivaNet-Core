@@ -304,7 +304,7 @@ function Install-PrivaNode {
     } finally { $zip.Dispose() }
     $src = Join-Path $extract $top
     foreach ($must in @('bin\privanet-node.cmd', 'deploy\policy\desktop-node.json', 'node_modules\@privanet\node\dist\main.js')) {
-      if (-not (Test-Path -LiteralPath (Join-Path $src $must))) { Fail 3 "the archive is missing $must: refusing to install." }
+      if (-not (Test-Path -LiteralPath (Join-Path $src $must))) { Fail 3 "the archive is missing ${must}: refusing to install." }
     }
 
     if ($DryRun) {
@@ -334,7 +334,7 @@ function Install-PrivaNode {
     if ($NewIdentity -and (Test-Path -LiteralPath $stateDir)) {
       $aside = "$stateDir.old-" + (Get-Date -Format 'yyyyMMddHHmmss')
       Move-Item -LiteralPath $stateDir -Destination $aside
-      Say "  the old identity was moved to $aside: ask the owner to revoke that node, then you may delete it"
+      Say "  the old identity was moved to ${aside}: ask the owner to revoke that node, then you may delete it"
     }
     [void](New-Item -ItemType Directory -Force -Path $stateDir, $configDir)
     if (-not $stage) { Protect-Directory $stateDir; Protect-AdminOnly $configDir }

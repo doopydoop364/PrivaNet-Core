@@ -46,7 +46,7 @@ async function stack(t: TestContext) {
     await writeFile(file, `{\n\tadmin off\n\tlocal_certs\n\tskip_install_trust\n}\nlocalhost:${port} {\n\ttls internal\n${siteBody}\n}\n`);
     const logs: string[] = []; const child = spawn('caddy', ['run', '--config', file, '--adapter', 'caddyfile'], { env: { PATH: process.env.PATH ?? '', HOME: home, XDG_DATA_HOME: join(home, 'data'), XDG_CONFIG_HOME: join(home, 'config'), PRIVANET_UPSTREAM: upstream }, stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout.on('data', (chunk: Buffer) => logs.push(chunk.toString())); child.stderr.on('data', (chunk: Buffer) => logs.push(chunk.toString())); children.push(child);
-    await until('caddy to listen', async () => existsSync(caCert) && await new Promise<boolean>(resolve => { const socket = createConnection({ port, host: '127.0.0.1' }, () => { socket.destroy(); resolve(true); }); socket.once('error', () => resolve(false)); }));
+    try { await until('caddy to listen', async () => existsSync(caCert) && await new Promise<boolean>(resolve => { const socket = createConnection({ port, host: '127.0.0.1' }, () => { socket.destroy(); resolve(true); }); socket.once('error', () => resolve(false)); })); } catch (error) { throw new Error(`${(error as Error).message}; caddy said: ${logs.join('').slice(-1500)}`, { cause: error }); }
     return { port, url: `https://localhost:${port}`, caCert, logs };
   }
   return { dir, core, seen, requests, adminSecret, upstream, caddy,

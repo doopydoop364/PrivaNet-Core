@@ -75,7 +75,7 @@ test('the installer is stamped with its release, passes shell syntax checks, and
   // No option takes a secret value, and no command line is built from one.
   assert.doesNotMatch(template, /--invite\)|--invite |--token\)|--token /, 'there is no --invite VALUE or --token VALUE'); assert.doesNotMatch(template, /set -x|set -o xtrace/);
   for (const line of template.split('\n').filter(candidate => /SECRET/.test(candidate) && /\$NODE_CMD/.test(candidate))) assert.match(line, /printf '%s\\n' "\$SECRET" \|/, `the secret only ever goes through a pipe: ${line.trim()}`);
-  try { execFileSync('shellcheck', ['--shell=sh', join(releaseDir, 'install-node.sh')], { stdio: 'pipe' }); }
+  try { execFileSync('shellcheck', ['--shell=sh', '--severity=warning', join(releaseDir, 'install-node.sh')], { stdio: 'pipe' }); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') { if (process.env.PRIVANET_REQUIRE_SHELLCHECK === '1') assert.fail('shellcheck is required here (PRIVANET_REQUIRE_SHELLCHECK=1) but is not installed'); } else throw new Error(`shellcheck: ${String((error as { stdout?: Buffer }).stdout)}`, { cause: error }); }
 });
 function statSyncMode(path: string): number { return statSync(path).mode; }

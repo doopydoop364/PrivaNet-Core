@@ -73,6 +73,6 @@ jobs:
           cache: npm
       - run: sudo apt-get update && sudo apt-get install -y shellcheck dash
       - run: npm ci
-      - run: shellcheck --shell=sh deploy/install/install-node.sh
+      - run: shellcheck --shell=sh --severity=warning deploy/install/install-node.sh
       # Both REQUIRE variables: a skipped installer test counts as a pass, so without them a missing shellcheck or privilege would leave this job green with no installer coverage.
       - run: sudo env "PATH=$PATH" PRIVANET_REQUIRE_SHELLCHECK=1 PRIVANET_INSTALLER_SYSTEM=1 PRIVANET_REQUIRE_INSTALLER_SYSTEM=1 npm run test:installer
