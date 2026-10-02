@@ -41,7 +41,7 @@ test('completions: every shell has a script that names every command, contains n
   }
   for (const command of LOCAL_COMMANDS) assert.ok(command in COMPLETION_TREE, `${command} is completed`);
   const dir = mkdtempSync(join(tmpdir(), 'privanet-completions-')); try {
-    const file = join(dir, 'c.bash'); writeFileSync(file, completionScript('bash')); execFileSync('bash', ['-n', file]);
+    const file = join(dir, 'c.bash').replaceAll('\\', '/'); writeFileSync(file, completionScript('bash')); execFileSync('bash', ['-n', file]);
     // Drive the real bash completion function.
     const out = execFileSync('bash', ['-c', `source ${file}; COMP_WORDS=(privanet-node po); COMP_CWORD=1; _privanet_node; echo "\${COMPREPLY[@]}"; COMP_WORDS=(privanet-node policy pre); COMP_CWORD=2; _privanet_node; echo "\${COMPREPLY[@]}"; COMP_WORDS=(privanet-node pause ""); COMP_CWORD=2; _privanet_node; echo "\${COMPREPLY[@]}"`]).toString().trim().split('\n');
     assert.equal(out[0], 'policy'); assert.equal(out[1], 'preset'); assert.match(out[2] ?? '', /15m 1h tomorrow reboot indefinite/);

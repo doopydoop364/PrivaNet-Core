@@ -130,5 +130,5 @@ test('`privanet-admin ui` runs as a separate process, prints a sign-in link inst
   const link = /Sign-in link:\s+(\S+)/.exec(out)?.[1] ?? ''; assert.match(link, new RegExp(`^http://127\\.0\\.0\\.1:${free}/#[a-f0-9]{64}$`)); assert.equal(out.includes(f.adminSecret), false);
   const token = link.split('#')[1]!; const login = await call(free, 'POST', '/api/login', { headers: { origin: `http://127.0.0.1:${free}`, 'content-type': 'application/json' }, body: JSON.stringify({ token }) }); assert.equal(login.status, 200);
   const view = await call(free, 'GET', '/api/overview', { headers: { cookie: String(login.headers['set-cookie']).split(';')[0]! } }); assert.equal(view.json().coordinator.reachable, true); assert.equal(view.text.includes(f.adminSecret), false);
-  run.kill('SIGINT'); const code = await new Promise<number | null>(resolve => run.once('close', resolve)); assert.equal(code, 0, 'Ctrl+C stops it cleanly');
+  run.kill('SIGINT'); const code = await new Promise<number | null>(resolve => run.once('close', resolve)); if (process.platform !== 'win32') assert.equal(code, 0, 'Ctrl+C stops it cleanly'); // Windows has no SIGINT delivery to a child: the process is simply ended
 });
