@@ -79,7 +79,7 @@ test('an unsafe store is reported, never repaired by guesswork, and never stops 
 
 test('privanet-node storage status: local facts only, nothing created, no file access commands, exit 1 when the store is unsafe', async t => {
   const { state, run } = await sandbox(t);
-  const off = await run('storage', ['status']); assert.equal(off.code, 0); assert.match(off.out, /DISABLED/); assert.match(off.out, /local store only/); assert.deepEqual(await readdir(state), [], 'asking creates nothing');
+  const off = await run('storage', ['status']); assert.equal(off.code, 0); assert.match(off.out, /DISABLED/); assert.match(off.out, /nothing can send a chunk to it yet/); assert.deepEqual(await readdir(state), [], 'asking creates nothing');
   const json = JSON.parse((await run('storage', ['status', '--json'])).out); assert.deepEqual([json.enabled, json.state, json.health, json.networkAccessible, json.maxChunkBytes, json.policySource], [false, 'DISABLED', 'DISABLED', false, 8 * 1024 * 1024, 'default']);
   await enable(state); const on = await run('storage', ['status']); assert.match(on.out, /ENABLED/); assert.match(on.out, /2\.0? ?GiB|2 GiB/); assert.match(on.out, /saved/);
   const locked = await run('storage', ['status'], { PRIVANODE_POLICY_LOCKED: 'true' }); assert.match(locked.out, /DISABLED/, 'a locked policy ignores the saved one'); assert.match(locked.out, /LOCKED/);
@@ -89,7 +89,7 @@ test('privanet-node storage status: local facts only, nothing created, no file a
 
 test('config check, effective settings and the support bundle carry safe storage facts: switches, limits, counts and health, never a path or an inventory', async t => {
   const { state, dir, run } = await sandbox(t); await enable(state, { maxBytes: 0, reserveFreeBytes: 100 });
-  const findings = policyFindings(ResourcePolicySchema.parse({ storage: { enabled: true, maxBytes: 0, reserveFreeBytes: 100 } })); for (const id of ['STORAGE_LOCAL_ONLY', 'STORAGE_QUOTA_ZERO', 'STORAGE_LOW_RESERVE']) assert.ok(findings.some(f => f.id === id), id);
+  const findings = policyFindings(ResourcePolicySchema.parse({ storage: { enabled: true, maxBytes: 0, reserveFreeBytes: 100 } })); for (const id of ['STORAGE_ENABLED', 'STORAGE_QUOTA_ZERO', 'STORAGE_LOW_RESERVE']) assert.ok(findings.some(f => f.id === id), id);
   assert.equal(policyFindings(defaultResourcePolicy()).some(f => f.id.startsWith('STORAGE_')), false, 'nothing is said while storage is off');
   if (posix) { await mkdir(join(state, 'store', 'chunks'), { recursive: true, mode: 0o700 }); await chmod(join(state, 'store', 'chunks'), 0o777); const check = await checkConfig({ PRIVANODE_STATE_DIR: state }); assert.ok(check.findings.some(f => f.id === 'STORE_UNSAFE' && f.severity === 'error')); assert.equal(check.ok, false); await chmod(join(state, 'store', 'chunks'), 0o700); }
   const gathered = await gatherSettings({}, state, Date.now()); assert.deepEqual([gathered.settings.storage.enabled, gathered.settings.storage.source, gathered.settings.storage.locked, gathered.settings.storage.networkAccessible], [true, 'saved', false, false]);

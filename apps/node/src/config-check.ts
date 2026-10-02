@@ -44,7 +44,7 @@ export function policyFindings(policy: unknown, context: { jobSlots?: number; ca
   if (slots > 1 && biggest * slots > p.maxMemoryBytes) out.push({ severity: 'warning', id: 'SLOTS_EXCEED_MEMORY', setting: 'PRIVANODE_JOB_SLOTS', message: `${slots} job slots at the largest declared per-job memory (${Math.round(biggest / (1024 * 1024))} MiB each) exceed maxMemoryBytes, so not every slot can be used at once.` });
   if (p.reserveDiskBytes < 1 * GiB && p.maxDiskBytes > 0) out.push({ severity: 'info', id: 'LOW_DISK_RESERVE', setting: 'reserveDiskBytes', message: 'Less than 1 GiB of free disk space is reserved for you; a full disk can hurt other programs.' });
   if (p.storage.enabled) {
-    out.push({ severity: 'info', id: 'STORAGE_LOCAL_ONLY', setting: 'storage.enabled', message: 'The local chunk store is on. In this version it is a local store only: it opens no port, advertises nothing and no application can use it yet.' });
+    out.push({ severity: 'info', id: 'STORAGE_ENABLED', setting: 'storage.enabled', message: 'The chunk store is on. It opens no port and nothing can send a chunk to it yet. While it is healthy and this node is allowed to contribute, the node tells the Coordinator how much room it has (a hint, re-checked by the node at every transfer).' });
     if (p.storage.maxBytes === 0) out.push({ severity: 'warning', id: 'STORAGE_QUOTA_ZERO', setting: 'storage.maxBytes', message: 'The storage quota is 0, so the store can hold nothing.' });
     if (p.storage.reserveFreeBytes < 1 * GiB) out.push({ severity: 'warning', id: 'STORAGE_LOW_RESERVE', setting: 'storage.reserveFreeBytes', message: 'Less than 1 GiB of disk space is kept free beyond the store; a full disk can disturb your own work.' });
   }

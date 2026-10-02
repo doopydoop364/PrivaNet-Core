@@ -27,6 +27,10 @@ The Coordinator records a node's status, its last heartbeat, its software and pr
 
 Version information is a note, not a verdict: the protocol decides compatibility, and a node whose software is older or newer than the Coordinator but speaks the same protocol is shown as working. A different protocol is shown as incompatible.
 
+### Storage summary (0.4.0-alpha.2)
+
+The Nodes tab starts with a compact **Storage control plane** card: how many nodes offer storage, how many chunks are stored and pending, and how many transfers are open. It is aggregates only (counts and sizes): no chunk id, ticket, key, application name or inventory, and no action. From a shell, `privanet-admin storage status [--json]` shows the same plus one line per storage node (offered capacity, reported free space, bytes reserved, open transfers), and `privanet-admin storage rotate-key` rotates the ticket-signing key (the old key keeps verifying for 4.5 minutes, so no live ticket breaks). An application gets storage only if it was created with `privanet-admin application NAME --services storage.chunk.v1`; there is no command that marks a chunk stored or edits transfer state. Against an older Coordinator the card is simply absent.
+
 ## Security design
 
 - **A client of the existing administrator API.** The dashboard is a separate process that holds the administrator secret and makes the same schema-checked requests as the CLI. The Coordinator gains no route and no setting; `/v1/admin/*` stays isolated exactly as before (loopback or private network only, never on the public proxy).

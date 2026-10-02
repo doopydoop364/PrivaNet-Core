@@ -12,8 +12,8 @@ import type { StorageStatus } from './status.js';
 
 /**
  * Owns the node's local chunk store while the node runs: opens it when the owner's policy enables storage (verifying the directory, recovering from a crash), applies quota and reserve
- * changes live, closes it when storage is disabled or the node stops, and keeps a cached status for the panel, `status` and the support bundle. In this version nothing calls the
- * store: there is no network or Coordinator interface, so the store can only be used by code inside this process, and enabling it opens no port and advertises nothing.
+ * changes live, closes it when storage is disabled or the node stops, and keeps a cached status for the panel, `status` and the support bundle. The store has no network interface: enabling it opens no port, and
+ * nothing can send it a chunk yet. What the node tells the Coordinator about it is `advertisement()` below (room only, never a path or an inventory).
  */
 export interface StorageServiceOptions {
   stateDir: string; policy: () => ResourcePolicy; inputs: Omit<GateInputs, 'enabled'>;

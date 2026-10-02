@@ -113,7 +113,7 @@ Status: **implemented in v0.3.0-alpha.1** (`apps/node/src/fetch/`; tests in `tes
 
 ## Data-plane threats (planned)
 
-Status: **planned; nothing implemented.** These apply to the future direct-transfer data plane ([DATA_PLANE.md](DATA_PLANE.md), ADR 006, Phase 4 and 5). Today no direct transfer exists and every payload transits the Coordinator within its 32 KiB and 512 KiB limits. The governing rule: a transfer is authorized by a narrow Coordinator-issued authorization and node identity, never by network location; LAN is not trusted.
+Status: **planned for the transfer path (nothing moves yet); the authorization half is implemented in 0.4.0-alpha.2 (see the next sections).** These apply to the future direct-transfer data plane ([DATA_PLANE.md](DATA_PLANE.md), ADR 006, Phase 4 and 5). Today no direct transfer exists and every payload transits the Coordinator within its 32 KiB and 512 KiB limits. The governing rule: a transfer is authorized by a narrow Coordinator-issued authorization and node identity, never by network location; LAN is not trusted.
 
 | Threat | Why it matters | Planned direction |
 | --- | --- | --- |
@@ -162,6 +162,31 @@ The first Phase 4 code is a store of opaque, immutable, SHA-256-addressed chunks
 | The store is not a network service | a real-node test that the process owns no listening socket with storage on; the policy has no network setting |
 
 Not covered in alpha.1 (later milestones): transfer authorization, replay and theft of grants, endpoint substitution, remote disk-exhaustion by many clients, and possession challenges. A store on a filesystem that lies about fsync can lose the most recent write in a power cut (never half of it). No independent review has been done.
+
+## Storage control plane and transfer tickets (Phase 4.0-alpha.2, implemented; no bytes move)
+
+The Coordinator can now record offers, place chunks and sign transfer authorizations ([PHASE4_DESIGN section 16](PHASE4_DESIGN.md#16-40-alpha2-as-built-and-what-changed-from-this-design)). **It carries no chunk bytes, and no route, listener or endpoint exists that could**; what is tested is who may be authorized to do what, and that authorization cannot be forged, widened, replayed, stolen, kept alive after revocation or turned into a stored chunk without a node's evidence. No independent review has been done, and the holder-binding handshake, the persisted replay set and the key lifecycle are the parts that most need one before alpha.3 moves data.
+
+| Invariant | Test |
+| --- | --- |
+| An application has no storage authority unless `allowedServices` names the service (absent means none); service permission grants no job and job permission grants no storage; authorization is checked before the request is even validated | `storage-control.test.ts`, `storage-http.test.ts` (every route, every kind of credential, including the administrator secret and node and application tokens) |
+| A service id is never a job type: it cannot enter enrollment grants, heartbeat `capabilities`, `allowedJobTypes`, the scheduler or `JobTypeSchema` | `services-protocol.test.ts` |
+| A ticket is a fixed-length binary structure, signed with a dedicated Ed25519 key over a domain-separated, exactly specified byte string; every one of its 1872 bits is covered, non-canonical text is refused, and nothing signed can be ambiguous | `transfer-ticket.test.ts` (test vectors, all single-bit flips, all single-character changes, truncation, garbage, canonical-form checks) |
+| A ticket is bound to one operation, application, chunk, target node, size, holder key and a lifetime of at most 120 s; the expiry boundary is exact (exclusive) and skew is at most 30 s | `transfer-ticket.test.ts` (boundaries, wrong node, operation, chunk, application, size, zero and 8 MiB) |
+| A ticket alone is not a bearer credential: the holder must also sign a challenge bound to the transfer and the request line with the key the ticket names | `transfer-ticket.test.ts` (holder proof vectors, wrong key, wrong challenge, wrong transfer, wrong request) |
+| A transfer id is single-use: `begin` happens once, a consumer's replay set refuses a repeat, a retry needs a new ticket, and a new ticket supersedes the old open one | `storage-control.test.ts`, `transfer-ticket.test.ts` (`ReplaySet`) |
+| The transfer state machine allows exactly the listed moves; a final state never changes; a lapsed ticket cannot be revived by a late report | `storage-control.test.ts` (every state pair, and through the service) |
+| A chunk becomes `STORED` only on the target node's evidence (right node, transfer, application, chunk, digest and size); placement, a ticket, or an application's say-so never does | `storage-control.test.ts` (completion evidence, wrong node, mismatches, a revoked node) |
+| Another application's chunk and a missing chunk are indistinguishable (same status, same body) on every route; there is no global "does this hash exist" API | `storage-control.test.ts`, `storage-http.test.ts` |
+| Reservations never exceed what nodes reported, however many placements race; the application's own limits (bytes, chunks, open transfers, tickets per minute) bound the Coordinator's state; abandoned tickets and placements are cleaned up and old audit rows deleted | `storage-control.test.ts`, `storage-http.test.ts` (forty concurrent placements) |
+| Revoking an application or a node revokes its open transfers at once and deletes no logical object; a node's stored copies become `LOST`, not forgotten | `storage-control.test.ts`, `storage-http.test.ts` |
+| The signing key is a dedicated private file outside the database and its backups, never logged or returned, never silently replaced when damaged; rotation keeps live tickets valid for a bounded overlap and then drops the old key | `storage-keys.test.ts` (creation, concurrent start, rotation, overlap, corruption, unsafe files, backup and database bytes) |
+| Nodes accept keys only from the Coordinator they are bound to; an older Coordinator, or a failure, means "no storage", never an error | `storage-compat.test.ts` |
+| Nothing secret is logged or summarized: no ticket, key, token, holder key or chunk id | `storage-http.test.ts`, `storage-admin.test.ts`, `storage-control.test.ts` (summary) |
+| Migration 2 upgrades in place without changing any existing record or giving any credential a service; a failed migration leaves a usable database; applied history cannot be edited; downgrade is refused | `storage-migration.test.ts`, `core.test.ts` |
+| Mixed versions: an older node, admin tool or SDK parses every answer a new Coordinator gives (checked against 0.4.0-alpha.1's real strict schemas), and a new node keeps working against an older Coordinator | `storage-compat.test.ts`, `compat-previous-release.test.ts` |
+
+Open on purpose: any enrolled node may offer storage (whether an operator should be able to restrict this is undecided); a put whose receipt is lost leaves an orphan on the node until alpha.3 reconciles; the Coordinator's view of free space is a hint and the node's own limits are the authority.
 
 ## Local control panel threats (post-3.5, implemented)
 

@@ -158,7 +158,7 @@ Status: **accepted.**
 
 ### ADR 007 (proposed): chunk store and ticketed direct transfer
 
-Proposed in [PHASE4_DESIGN.md](PHASE4_DESIGN.md#12-adr-007-proposed-chunk-store-and-ticketed-direct-transfer): immutable, application-namespaced, SHA-256-addressed chunks on opt-in nodes, authorized per transfer by a Coordinator-signed, holder-bound, single-use, short-lived ticket and moved directly over TLS; metadata stays in SQLite; the service is off by default and owner-limited. Not implemented and not yet accepted.
+Proposed in [PHASE4_DESIGN.md](PHASE4_DESIGN.md#12-adr-007-proposed-chunk-store-and-ticketed-direct-transfer): immutable, application-namespaced, SHA-256-addressed chunks on opt-in nodes, authorized per transfer by a Coordinator-signed, holder-bound, single-use, short-lived ticket and moved directly over TLS; metadata stays in SQLite; the service is off by default and owner-limited. **Partly implemented:** the node-local chunk store (0.4.0-alpha.1) and the control plane (placement, tickets, transfer state, 0.4.0-alpha.2, with the amendments recorded in the design) exist; no bytes can move yet, and the transfer half remains proposed.
 
 ### ADR 006: control plane and data plane are separate
 

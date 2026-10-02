@@ -7,6 +7,30 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 
 ## [Unreleased]
 
+## [0.4.0-alpha.2] - 2026-10-02
+
+Phase 4.0-alpha.2: the storage **control plane** and transfer authorization. **No chunk byte moves and none can:** there is no transfer listener, no `PUT`/`GET /v1/chunks/...`, no endpoint in any message, no replication and nothing carried by the Coordinator. The protocol version stays 1 (every new field is optional and additive; the schemas older nodes and tools parse are unchanged, asserted against 0.4.0-alpha.1's real wire schemas). Design, exact signed bytes and the changes from the original design: [docs/PHASE4_DESIGN.md](docs/PHASE4_DESIGN.md#16-40-alpha2-as-built-and-what-changed-from-this-design).
+
+### Added
+- **Service capabilities:** a second registry (`SERVICES`, `kind: 'service'`) beside the job types, with `storage.chunk.v1`. A service is never a job: it cannot enter `JobTypeSchema`, enrollment grants, heartbeat `capabilities`, `allowedJobTypes` or the scheduler.
+- **Node offers:** an optional heartbeat `services` member (`capacityBytes`, `freeBytes`, `maxChunkBytes`), computed from the real store and policy and sent only while storage is on, the store is healthy, free space is known and the node would accept a write right now (not draining, paused, off-schedule or busy). A withdrawn offer reaches the Coordinator on the next heartbeat. A new node against an older Coordinator drops the member after one refusal and carries on.
+- **`allowedServices`** on applications (default none; absent on every existing credential, which therefore gain no storage authority). `privanet-admin application NAME --services storage.chunk.v1`.
+- **Placement and tickets:** `POST /v1/storage/placements`, `POST /v1/storage/tickets`, `GET /v1/storage/chunks/{id}`, `POST /v1/storage/transfers/{id}/abort`. The Coordinator chooses the node (free-space-weighted, ONLINE, not draining, with room after bounded reservations); a placement is permission to attempt, never to override the node owner's quota. Chunks are namespaced per application, and another application's chunk is indistinguishable from a missing one.
+- **Transfer tickets:** fixed-length binary (234 bytes), Ed25519, domain-separated, at most 120 s, bound to operation, application, chunk, target node, size and a per-transfer holder key; a verifier library (`verifyTicket`, fixed error words), holder-proof helpers and a replay set for alpha.3's node listener. Test vectors, all 1872 bit flips and boundary tests.
+- **Transfer state machine** (`AUTHORIZED`, `IN_PROGRESS`, `COMPLETED`, `FAILED`, `EXPIRED`, `REVOKED`) with one transition table; a chunk becomes `STORED` only on the target node's evidence (receipt rules implemented and tested, deliberately **not** exposed as routes until bytes can move).
+- **Signing key:** a dedicated Ed25519 keyring file outside the database and its backups, created exclusively, never logged or returned, never silently replaced when damaged, rotatable (`privanet-admin storage rotate-key`) with a 4.5-minute overlap. Public keys reach nodes on a new authenticated route, `GET /v1/node/transfer-keys` (not in the strict session response).
+- **Database:** migration 2 adds `chunk`, `replica`, `transfer` and `node_service`; existing records are untouched. Application limits (bytes, chunks, open transfers, tickets per minute), throttled cleanup, and `privanet-admin storage status` plus a dashboard card (aggregates only).
+
+### Changed
+- Messages that said the store "advertises nothing" now say what it tells the Coordinator (room only). The config-check finding `STORAGE_LOCAL_ONLY` is now `STORAGE_ENABLED`. Heartbeats run inside one transaction with the offer update.
+
+### Compatibility and upgrade notes
+- A Coordinator upgrade applies migration 2 automatically and in one transaction. **Downgrading is not supported**: an older Coordinator refuses the upgraded database ("schema is newer than service"); restore a pre-upgrade backup. The signing key is a separate file (`transfer-keys.json`) that is not in `npm run backup`; losing it costs at most two minutes of tickets.
+- Older nodes, admin tools and SDKs keep working unchanged; new nodes keep working against an older Coordinator (without storage).
+
+### Limits
+- Verified locally on Linux; Windows and macOS rely on CI. Any enrolled node may offer storage (restricting that is an open question), a put whose receipt is lost leaves an orphan until alpha.3, and no independent review of the ticket protocol has been done ([docs/MANUAL_VALIDATION.md](docs/MANUAL_VALIDATION.md)).
+
 ## [0.4.0-alpha.1] - 2026-10-02
 
 Phase 4.0-alpha.1: the node-local chunk store. **No network feature:** the store has no listener and no client, the Coordinator is unchanged, the protocol version stays 1, and the storage policy is off by default. Design and as-built differences: [docs/PHASE4_DESIGN.md](docs/PHASE4_DESIGN.md#15-40-alpha1-as-built-and-what-changed-from-this-design).
