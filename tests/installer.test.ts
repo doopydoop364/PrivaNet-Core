@@ -243,6 +243,49 @@ test('--install-only installs without enrolling, and an interrupted run leaves n
   run.child.kill('SIGTERM'); await run.done; await new Promise(resolve => setTimeout(resolve, 200)); assert.deepEqual(sb2.leftovers(), [], 'the temporary directory is removed even when the installer is killed');
 });
 
+// The whole life of a contributor's node, for both ways in: install, enroll, run the INSTALLED node (the service is not systemd in a test, but it is the same program with the same
+// files and the installed state), see it ONLINE, stop and start it again with no invite, show the original invite cannot be used again, revoke it and watch it stop.
+const nodeProcess = (sb: { root: string }, c: { url: string }) => {
+  const installed = join(sb.root, 'opt', 'privanet-node', 'current', 'bin', 'privanet-node'); const state = join(sb.root, 'var', 'lib', 'privanet-node');
+  const env = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: sb.root, PRIVANODE_STATE_DIR: state, NODE_EXTRA_CA_CERTS: join(workDir, 'good.crt'), PRIVANODE_POLICY_FILE: join(sb.root, 'etc', 'privanet', 'node-policy.json') };
+  const start = () => { const child = spawn('/bin/sh', [installed], { env, stdio: ['ignore', 'pipe', 'pipe'] }); let log = ''; child.stdout.on('data', (chunk: Buffer) => { log += chunk.toString(); }); child.stderr.on('data', (chunk: Buffer) => { log += chunk.toString(); }); const exited = new Promise<number>(resolve => child.once('close', code => resolve(code ?? -1))); return { child, exited, log: () => log }; };
+  const doctor = () => exec('/bin/sh', [installed, 'doctor', '--coordinator', c.url, '--json'], { env }).then(result => ({ code: 0, out: result.stdout }), (error: { code?: number; stdout?: string }) => ({ code: error.code ?? -1, out: error.stdout ?? '' }));
+  return { start, doctor, state };
+};
+const until = async (what: string, check: () => boolean, ms = 40000) => { const deadline = Date.now() + ms; while (!check()) { if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`); await new Promise(resolve => setTimeout(resolve, 100)); } };
+
+for (const way of ['invite', 'approval'] as const) {
+  test(`end to end (${way}): install, enroll, online, restart without the ${way === 'invite' ? 'invite' : 'approval'}, the invite is spent, revocation stops the node`, { skip, timeout: 180000 }, async t => {
+    const { sb, base, c, invite } = await reserve(t); let spent = '';
+    if (way === 'invite') {
+      const made = invite('Lifecycle PC'); spent = made.code;
+      const run = await installer(sb, base(['--invite-stdin']), {}, `${made.code}\n`).done; assert.equal(run.code, 0, run.err + run.out);
+    } else {
+      const run = installer(sb, base(['--join', '--name', 'Lifecycle PC'])); await until('the request code', () => /Request code:\s+[0-9A-Z]{4}-[0-9A-Z]{4}/.test(run.seen.out), 20000);
+      c.core.approveRequest(/Request code:\s+([0-9A-Z]{4}-[0-9A-Z]{4})/.exec(run.seen.out)?.[1] ?? '', { capabilities: ['system.echo.v1'], label: 'Lifecycle PC' });
+      const done = await run.done; assert.equal(done.code, 0, done.err + done.out);
+    }
+    const node = nodeProcess(sb, c); const nodeId = c.core.listNodes()[0]?.nodeId ?? ''; assert.ok(nodeId);
+    // The installed node comes ONLINE by itself, from the state the installer made.
+    const first = node.start(); await until('the node to be ONLINE', () => c.core.listNodes()[0]?.status === 'ONLINE'); assert.match(first.log(), /node\.authenticated/);
+    // Stopped, then started again: it reconnects with no invite and no approval.
+    first.child.kill('SIGTERM'); await first.exited;
+    const second = node.start(); await until('the node to reconnect', () => /node\.authenticated/.test(second.log())); await until('ONLINE again', () => c.core.listNodes()[0]?.status === 'ONLINE');
+    const healthy = await node.doctor(); assert.equal(healthy.code, 0, healthy.out); assert.match(healthy.out, /"id":"registered","label":"At the Coordinator","status":"OK"/);
+    // The original invite cannot be used again, from this machine or any other.
+    if (way === 'invite') {
+      const other = await sandbox(t); const again = await installer(other, withRoot(other, [...common((await releaseServer(t, releaseDir)).url), '--coordinator', c.url, '--ca-file', join(workDir, 'good.crt'), '--invite-stdin']), {}, `${spent}\n`).done;
+      assert.equal(again.code, 7, again.err + again.out); assert.match(again.err + again.out, /refused|invite/i); assert.equal(c.core.listNodes().length, 1, 'no second node was created'); assert.deepEqual(other.leftovers(), []);
+    }
+    // Revoked by the owner: the running node loses its session and cannot get another; the doctor says so.
+    c.core.revokeNode(nodeId);
+    await until('the revoked node to stop being ONLINE', () => c.core.listNodes()[0]?.status !== 'ONLINE', 70000);
+    const revoked = await node.doctor(); assert.doesNotMatch(revoked.out, /"id":"registered","label":"At the Coordinator","status":"OK"/, 'the doctor no longer sees it as registered'); assert.match(revoked.out, /not known to the Coordinator, or was revoked/);
+    second.child.kill('SIGTERM'); await second.exited;
+    const third = node.start(); await new Promise(resolve => setTimeout(resolve, 4000)); assert.notEqual(c.core.listNodes()[0]?.status, 'ONLINE', 'a restarted revoked node does not come back'); third.child.kill('SIGTERM'); await third.exited;
+  });
+}
+
 // The real thing, without --root: a service account, real ownership and modes. It changes the machine it runs on (creates the privanet-node user and /opt/privanet-node, /etc/privanet,
 // /var/lib/privanet-node), so it only runs where that is expected: as root, with PRIVANET_INSTALLER_SYSTEM=1 (CI sets it, and then a skip is a failure).
 const system = process.platform === 'linux' && process.getuid?.() === 0 && process.env.PRIVANET_INSTALLER_SYSTEM === '1';
