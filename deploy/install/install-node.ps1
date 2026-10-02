@@ -415,6 +415,11 @@ function Install-PrivaNode {
   }
 }
 
+# Removes a directory only if nothing is left in it (the shared "PrivaNet" folder that holds the node's directory).
+function Remove-EmptyDirectory([string]$Path) {
+  if ($Path -and (Test-Path -LiteralPath $Path) -and -not (Get-ChildItem -LiteralPath $Path -Force | Select-Object -First 1)) { Remove-Item -LiteralPath $Path -Force }
+}
+
 function Uninstall-PrivaNode([string]$OptRoot, [string]$DataRoot, [string]$StateDir, [bool]$Stage) {
   if (-not $Stage -and -not (Test-Elevated)) { Fail 4 'run this from an elevated prompt (Run as administrator)' }
   if (-not $Stage) {
@@ -424,8 +429,10 @@ function Uninstall-PrivaNode([string]$OptRoot, [string]$DataRoot, [string]$State
   $current = Join-Path $OptRoot 'current'
   if (Test-Path -LiteralPath $current) { (Get-Item -LiteralPath $current).Delete() }
   if (Test-Path -LiteralPath $OptRoot) { Remove-Item -LiteralPath $OptRoot -Recurse -Force; Say "  removed $OptRoot" }
+  Remove-EmptyDirectory (Split-Path -Parent $OptRoot)
   if ($Purge) {
     if (Test-Path -LiteralPath $DataRoot) { Remove-Item -LiteralPath $DataRoot -Recurse -Force; Say '  deleted the node''s identity, state and configuration' }
+    Remove-EmptyDirectory (Split-Path -Parent $DataRoot)
     Say 'The identity is gone. Ask the Coordinator''s owner to revoke this node (privanet-admin nodes revoke), so nothing can use it.'
   } else {
     Say "  kept this node's identity and state in $DataRoot (a later install picks it up; -Purge deletes it)"
