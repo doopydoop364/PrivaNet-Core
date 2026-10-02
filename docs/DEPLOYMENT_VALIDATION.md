@@ -1,6 +1,6 @@
 # Deployment validation: server Coordinator, separate desktop worker
 
-Status: v0.3.0-alpha.6. Scope: **trusted** machines you control, on a LAN or private network. The step-by-step procedure is [FIRST_DEPLOYMENT.md](FIRST_DEPLOYMENT.md); this document is the evidence, the security review, what is still unverified, and the verdict.
+Status: v0.3.5. Scope: **trusted** machines you control, on a LAN or private network. The step-by-step procedure is [FIRST_DEPLOYMENT.md](FIRST_DEPLOYMENT.md); this document is the evidence, the security review, what is still unverified, and the verdict.
 
 ## Verdict
 

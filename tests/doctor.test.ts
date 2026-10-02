@@ -35,7 +35,7 @@ async function tlsServer(t: TestContext, cert: string, key: string, answer?: (pa
   const requests: string[] = [];
   const server = createHttpsServer({ cert, key }, (req, res) => {
     requests.push(`${req.method} ${req.url}`);
-    const healthy = { status: 200, body: { protocolVersion: 1, serviceVersion: '0.3.0-alpha.6', coordinatorId: '00000000-0000-4000-8000-000000000000', status: 'ok' } } as { status: number; body: unknown; protocol?: string };
+    const healthy = { status: 200, body: { protocolVersion: 1, serviceVersion: '0.3.5', coordinatorId: '00000000-0000-4000-8000-000000000000', status: 'ok' } } as { status: number; body: unknown; protocol?: string };
     const reply = answer ? answer(req.url ?? '') : healthy;
     res.writeHead(reply.status, { 'content-type': 'application/json', 'x-privanet-protocol': reply.protocol ?? '1' }); res.end(JSON.stringify(reply.body));
   });

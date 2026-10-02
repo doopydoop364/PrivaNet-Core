@@ -1,6 +1,6 @@
 # Reinstall, recovery and revocation
 
-Status: implemented (unreleased, after `0.3.0-alpha.6`); part of [Phase 3.5](../ROADMAP.md#phase-35--remote-node-onboarding--contributor-experience--implemented). This page is for contributors and for the owner who invited them.
+Status: implemented (`0.3.5`); part of [Phase 3.5](../ROADMAP.md#phase-35--remote-node-onboarding--contributor-experience--implemented). This page is for contributors and for the owner who invited them.
 
 The one fact everything below follows from: **a node's identity is a private key (`identity.json` in its state directory) that never leaves its machine, and the Coordinator knows only the matching public key.** One key is one node. A key that is copied to a second machine is two machines acting as one node: neither the Coordinator nor the owner can tell them apart, and revoking one revokes both. So the rules are: never copy an identity from a machine that is still in use, and treat a lost or exposed key as a reason to revoke, not to restore.
 

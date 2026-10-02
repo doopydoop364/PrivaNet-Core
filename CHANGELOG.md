@@ -7,6 +7,8 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-10-02
+
 ### Added
 - **Phase 3.5 completed: one-command installers, invite codes, approval, diagnostics and a public-hostname deployment** ([docs/INSTALLER.md](docs/INSTALLER.md), [docs/ONBOARDING.md](docs/ONBOARDING.md), [docs/PUBLIC_NODE.md](docs/PUBLIC_NODE.md), [docs/RECOVERY.md](docs/RECOVERY.md), [docs/EXPOSURE_REVIEW.md](docs/EXPOSURE_REVIEW.md)); protocol version stays 1 and every addition is optional.
   - **Invite codes:** `privanet-admin invite create|list|revoke` makes a short `XXXX-XXXX` code (single use, at most one hour, a capability ceiling, a label). Stored only as a keyed hash, redeemed through the existing Ed25519 enrollment over verified TLS, with a per-address limit (5 refusals a minute), a per-invite lock (5 wrong guesses), a global pause, and one generic `INVALID_INVITE` answer. `privanet-node enroll` accepts `--invite-file`, `--invite-stdin` or `PRIVANODE_INVITE_CODE`.

@@ -1,7 +1,7 @@
 # PrivaNet Core Foundation
 
 PrivaNet supplies shared infrastructure to separate self-hosted applications.
-PrivaNet (v0.3.0-alpha.6) runs a Coordinator and operator-controlled PrivaNodes, with an application SDK and three typed jobs:
+PrivaNet (v0.3.5) runs a Coordinator and operator-controlled PrivaNodes, with an application SDK and three typed jobs:
 two harmless diagnostics (`system.echo.v1`, the CPU-bound, checkpointable `system.hashchain.v1`) and the constrained, SSRF-guarded `web.fetch.v1`
 that the separate PrivaSearch application uses.
 
@@ -14,7 +14,7 @@ is implemented. No application/local execution bypass exists.
 
 ## Status and limits
 
-Version **0.3.0-alpha.6**: Phase 1 (Core Foundation) and Phase 2 (Adaptive Resource Engine) are complete, and Phase 3's Core side (`web.fetch.v1`, multi-slot nodes, waiting leases) is implemented and measured; see the [roadmap](ROADMAP.md). Trusted multi-node operation and a separate-host LAN deployment are validated ([multi-node](docs/MULTI_NODE_VALIDATION.md), [deployment](docs/DEPLOYMENT_VALIDATION.md)); first-deployment steps: [FIRST_DEPLOYMENT.md](docs/FIRST_DEPLOYMENT.md). This is a small, operator-run control plane, **not** a production-ready or community-ready network.
+Version **0.3.5**: Phase 1 (Core Foundation) and Phase 2 (Adaptive Resource Engine) are complete, and Phase 3's Core side (`web.fetch.v1`, multi-slot nodes, waiting leases) is implemented and measured, and Phase 3.5 (remote node onboarding: invite codes, approval, installers for Linux and Windows, `doctor`, a public-hostname deployment) is implemented with the Windows service steps still to be verified on a real machine; see the [roadmap](ROADMAP.md). Trusted multi-node operation and a separate-host LAN deployment are validated ([multi-node](docs/MULTI_NODE_VALIDATION.md), [deployment](docs/DEPLOYMENT_VALIDATION.md)); first-deployment steps: [FIRST_DEPLOYMENT.md](docs/FIRST_DEPLOYMENT.md). This is a small, operator-run control plane, **not** a production-ready or community-ready network.
 
 | State | What |
 | --- | --- |

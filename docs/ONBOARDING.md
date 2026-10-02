@@ -1,6 +1,6 @@
 # Remote node onboarding
 
-Status: implemented (unreleased, after `0.3.0-alpha.6`). This is [Phase 3.5](../ROADMAP.md#phase-35--remote-node-onboarding--contributor-experience--implemented): how a trusted contributor's machine joins, and how the owner sees, names and withdraws nodes. There are four ways in, from most to least manual, and every one ends with the **owner's explicit decision**: the owner issues each token, invite or approval one at a time. Enrollment is never public.
+Status: implemented (`0.3.5`). This is [Phase 3.5](../ROADMAP.md#phase-35--remote-node-onboarding--contributor-experience--implemented): how a trusted contributor's machine joins, and how the owner sees, names and withdraws nodes. There are four ways in, from most to least manual, and every one ends with the **owner's explicit decision**: the owner issues each token, invite or approval one at a time. Enrollment is never public.
 
 | Way in | The contributor needs | The owner does | Doc |
 | --- | --- | --- | --- |

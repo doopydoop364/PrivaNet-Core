@@ -203,7 +203,7 @@ function Install-PrivaNode {
     if ($VersionStamp -eq '@PRIVANET_VERSION@') { Fail 2 'this copy of the installer is not pinned to a release: give -Version X.Y.Z (the installer published with a release is pinned to it)' }
     $Version = $VersionStamp
   }
-  if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$') { Fail 2 'the version is not a release version like 0.3.0 or 0.3.0-alpha.6' }
+  if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$') { Fail 2 'the version is not a release version like 0.3.5 or 0.3.5-rc.1' }
   if ($Sha256 -and $Sha256 -notmatch '^[0-9a-fA-F]{64}$') { Fail 2 '-Sha256 must be 64 hexadecimal characters' }
   if ($Slots -lt 1 -or $Slots -gt 64) { Fail 2 '-Slots must be a number from 1 to 64' }
   if ($Capabilities -and $Capabilities -notmatch '^[a-z0-9._,-]+$') { Fail 2 '-Capabilities is a comma-separated list of capability names' }

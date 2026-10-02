@@ -1,6 +1,6 @@
 # A public Coordinator address (public hostname, publicly trusted TLS)
 
-Status: implemented (unreleased, after `0.3.0-alpha.6`); part of [Phase 3.5](../ROADMAP.md#phase-35--remote-node-onboarding--contributor-experience--implemented). The configuration and checker are tested against a real Caddy; **buying a domain, pointing DNS at your server and opening the ports are your steps** (this project cannot do them for you), and a certificate from a real certificate authority was not obtained in the tests (Caddy's own local CA stood in for it).
+Status: implemented (`0.3.5`); part of [Phase 3.5](../ROADMAP.md#phase-35--remote-node-onboarding--contributor-experience--implemented). The configuration and checker are tested against a real Caddy; **buying a domain, pointing DNS at your server and opening the ports are your steps** (this project cannot do them for you), and a certificate from a real certificate authority was not obtained in the tests (Caddy's own local CA stood in for it).
 
 This lets a contributor outside your LAN use `https://node.example.com` with no private root certificate to install. It changes nothing about the LAN setup in [FIRST_DEPLOYMENT.md](FIRST_DEPLOYMENT.md): that (private CA, an address or `.lan` name) stays valid and supported, and the same node, installer and doctor work with either.
 
