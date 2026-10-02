@@ -105,8 +105,11 @@ async function main() {
   try { unlinkSync(drainFile); } catch { /* none */ }
   const watcher = setInterval(() => { if (existsSync(drainFile)) { try { unlinkSync(drainFile); } catch { /* removal is best effort */ } stop(); } }, 500);
   watcher.unref();
-  await node.run(abort.signal); clearTimeout(forced); clearInterval(watcher); clearInterval(publisher); control.stop(); await panel?.close();
-  try { unlinkSync(join(config.stateDir, STATUS_FILE)); } catch { /* none */ }
+  // However the run ends (a drain, or a refusal such as a changed Coordinator binding), everything this process started must be stopped, or the panel's listener and the timers would keep it alive.
+  try { await node.run(abort.signal); } finally {
+    clearTimeout(forced); clearInterval(watcher); clearInterval(publisher); control.stop(); await panel?.close().catch(() => undefined);
+    try { unlinkSync(join(config.stateDir, STATUS_FILE)); } catch { /* none */ }
+  }
   if (restartRequested) process.exitCode = EXIT_RESTART;
 }
 main().catch((error: unknown) => {

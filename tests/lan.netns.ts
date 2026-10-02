@@ -46,9 +46,11 @@ test('a desktop on another host enrolls over TLS, runs a job, and needs no inbou
   await eventually('the node to be ONLINE', () => online(lan, nodeId));
   const summary = await lan.client(lan.desktop, app.token, { type: 'system.hashchain.v1', inputs: [{ seed: 'lan', iterations: 200000 }], inflight: 1, keyPrefix: 'one' });
   assert.deepEqual(summary.results[0], { digest: chain('lan', 200000), iterations: 200000 });
-  // The desktop's firewall admits nothing inbound but replies: the node never needed a listening port.
-  const listeners = await lan.desktop.run('sh', ['-c', 'cat /proc/net/tcp /proc/net/tcp6 | awk \'$4=="0A"\' | wc -l']);
-  assert.equal(Number(listeners.trim()), 0, 'the worker host has no listening TCP socket');
+  // The desktop's firewall admits nothing inbound but replies: the node never needed a listening port. The only socket it listens on is the local control panel, on loopback.
+  const listeners = (await lan.desktop.run('sh', ['-c', 'cat /proc/net/tcp /proc/net/tcp6 | awk \'$4=="0A" { print $2 }\''])).split('\n').map(line => line.trim()).filter(Boolean);
+  const loopback = (address: string) => address.startsWith('0100007F:') || address.startsWith('00000000000000000000000001000000:');
+  assert.deepEqual(listeners.filter(address => !loopback(address)), [], 'the worker host has no listening TCP socket reachable from the network');
+  assert.ok(listeners.length <= 1, 'at most the node\'s own loopback-only control panel is listening');
   assert.ok(lan.server.ip !== lan.desktop.ip);
 });
 

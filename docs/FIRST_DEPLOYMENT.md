@@ -16,7 +16,7 @@ application (PrivaSearch, anywhere) --- HTTPS -------------->        |
                                                           Coordinator 127.0.0.1:4010 (plain HTTP, loopback only)
 ```
 
-- Everything is initiated by the node or the application. The Coordinator never opens a connection, and a node opens no listening port.
+- Everything is initiated by the node or the application. The Coordinator never opens a connection, and a node needs no inbound port. (Its local control panel listens on 127.0.0.1:4040 only, reachable from that machine alone; set `PRIVANODE_PANEL=off` to remove even that. See [NODE_CONTROL_PANEL.md](NODE_CONTROL_PANEL.md).)
 - The Coordinator speaks plain HTTP and refuses a non-loopback bind unless you acknowledge TLS termination. TLS is a reverse proxy's job (Caddy here), and nodes and the SDK refuse plain HTTP to anything but literal loopback.
 - The Coordinator does not depend on the server's PrivaNode. Stop, crash or remove that node and the Coordinator is untouched.
 

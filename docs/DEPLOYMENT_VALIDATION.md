@@ -33,7 +33,7 @@ The Coordinator, PrivaNode and admin tool are the **shipped release binaries** (
 
 | Claim | Proof in `tests/lan.netns.ts` |
 | --- | --- |
-| A desktop on another host enrols over TLS at the IP address, authenticates, runs a job from an application on the same host, and the worker host has **no listening TCP socket** | test 1 |
+| A desktop on another host enrols over TLS at the IP address, authenticates, runs a job from an application on the same host, and the worker host has **no listening TCP socket reachable from the network** (since the control panel, the node listens on one loopback-only socket, `127.0.0.1:4040`; the test asserts there is no other) | test 1 |
 | Certificate verification is real: without the CA the certificate is rejected; the admin API is 403 at the proxy **even with the correct admin secret**; the Coordinator's own port 4010 and plain 80/8080 do not answer from the LAN; a node refuses `http://` to a LAN address even with the loopback exception switched on | test 2 |
 | A node without the CA never enrols, logs `reason: TLS_CERTIFICATE`, keeps retrying, and leaves the enrollment token unused for a correctly configured node | test 3 |
 | Coordinator killed while a node idles: the node logs, stays up (same process) and reconnects. Caddy down: `CONNECTION_REFUSED`, then recovery. Coordinator `SIGKILL`ed **mid-job** for 4 s: the application, waiting through the outage, gets one correct result and no error | test 4 |
@@ -78,7 +78,7 @@ This measured the deployment, not the platform: it is not a throughput benchmark
 | Bind to a LAN address safely? | Only behind a TLS proxy, as an acknowledgement; the flag does not add TLS. The shipped setup keeps the Coordinator on loopback and exposes only the proxy. |
 | Ports | One listener (4010 by default) for nodes, applications and the admin API. With Caddy: TCP 443 on the LAN. |
 | Native TLS | No. TLS is the reverse proxy's job. |
-| Does a node need inbound connectivity? | **No.** `apps/node`, `packages/sdk` and `packages/shared` contain no `listen` or `createServer`; the LAN test ran the desktop with an inbound-drop firewall and no listening socket. |
+| Does a node need inbound connectivity? | **No.** The node's work path (heartbeat, leases, results) only makes outbound requests; the LAN test ran the desktop with an inbound-drop firewall and no socket listening on the network. (Since the control panel the node also listens on `127.0.0.1:4040`, reachable from that machine only; `PRIVANODE_PANEL=off` removes it. This was true as validated at 0.3.0-alpha.5: then there was no listener at all.) |
 | Does the Coordinator connect out? | **No.** `apps/coordinator` contains no outbound request code. |
 | What is node-initiated? | Everything: enrollment, authentication, heartbeats, lease polls and waits, renewals, completions, releases, goodbye. Applications likewise. |
 | DNS and IP assumptions | None beyond the URL you configure (IP or name). A node pins the exact origin and the Coordinator ID on first contact. |
