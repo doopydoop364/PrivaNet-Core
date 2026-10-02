@@ -113,4 +113,6 @@ Install the new release over the old one (the installer keeps the identity and s
 
 Another user on the same machine who can read the node's state directory can read the panel secret (the state directory is private to the node's account by design). A browser extension with access to `127.0.0.1` pages is outside this model. Nothing here is an independent security review.
 
+The operator's side is [OPERATOR_DASHBOARD.md](OPERATOR_DASHBOARD.md).
+
 See also [RESOURCES.md](RESOURCES.md), [ONBOARDING.md](ONBOARDING.md), [INSTALLER.md](INSTALLER.md) and [security.md](security.md).

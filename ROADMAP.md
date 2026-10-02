@@ -166,7 +166,7 @@ Dependencies and guardrails (a milestone is not done without them):
 
 ### Post-3.5 contributor experience: node control panel (implemented, unreleased)
 
-Not a new phase and no renumbering. Local, owner-only tooling so a contributor can configure and understand a node without editing files: a loopback control panel, presets, pause, "why am I idle?", a safe job view, a support bundle, `config check`, policy export/import and installer first-run integration. It changes nothing in the Coordinator, the protocol or the trust model. See [docs/NODE_CONTROL_PANEL.md](docs/NODE_CONTROL_PANEL.md). Not done: system tray, in-place update and rollback, operator dashboard (see the document's status notes).
+Not a new phase and no renumbering. Local, owner-only tooling so a contributor can configure and understand a node without editing files: a loopback control panel, presets, pause, "why am I idle?", a safe job view, a support bundle, `config check`, policy export/import and installer first-run integration. It changes nothing in the Coordinator, the protocol or the trust model. See [docs/NODE_CONTROL_PANEL.md](docs/NODE_CONTROL_PANEL.md). The operator side is `privanet-admin ui` ([docs/OPERATOR_DASHBOARD.md](docs/OPERATOR_DASHBOARD.md)). Not done: system tray, in-place update and rollback.
 
 ## Phase 4 — Generic Storage + Data Plane Foundation — Planned
 

@@ -16,6 +16,7 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
   - **Saved policy** `<state>/policy.json` (versioned, atomic, `.bak`, migrated from the bare file; newer or invalid files are reported and never overwritten). `fetch.unsafeLocal` can never be set through any of these paths.
   - **Support bundle** with allowlisted facts, redaction of every string and a fail-closed final scan, tested with planted secrets.
   - **Installers:** `--preset` / `-Preset`, a `privanet-panel` helper and desktop entry on Linux, a Start Menu shortcut on Windows, and first-steps output.
+- **Operator dashboard** `privanet-admin ui` ([docs/OPERATOR_DASHBOARD.md](docs/OPERATOR_DASHBOARD.md)): nodes (with honest, stored-data-only states and version notes), join requests (approve with the capabilities you choose, deny) and invites (create, revoke; the code is shown once), in a browser on this machine only. A separate process holding the administrator secret; application credentials and enrollment tokens are not on it; the guard is the new shared `local-ui` module (loopback, Host/Origin/CSRF, nonce CSP).
 - Coordinator, protocol and `/v1/admin/*` are unchanged; a 0.3.5 node upgrades in place (see the upgrade notes in the control panel document).
 
 ## [0.3.5] - 2026-10-02

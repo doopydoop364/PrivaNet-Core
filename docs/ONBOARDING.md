@@ -48,6 +48,8 @@ The enrollment token is written on the node nowhere at all.
 
 ## Administrator workflow
 
+Prefer a browser? `privanet-admin ui` shows nodes, join requests and invites and can create, approve, deny, rename and revoke ([OPERATOR_DASHBOARD.md](OPERATOR_DASHBOARD.md)); everything below also works from the CLI.
+
 On the Coordinator host (the admin API is reachable only on loopback; on a standard install `privanet-admin` reads the secret from the Coordinator's environment file, so it never appears on a command line).
 
 ```sh
