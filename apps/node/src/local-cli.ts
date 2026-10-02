@@ -20,6 +20,9 @@ import { DEFAULT_PANEL_PORT, loadOrCreatePanelToken, panelUrl } from './panel-to
 import { explainIdle } from './status.js';
 import { diagnose } from './doctor.js';
 import { UnsafeBundleError, buildSupportBundle } from './support-bundle.js';
+import { checkForUpdate } from './update-check.js';
+import { SHELLS, completionScript } from './completions.js';
+import type { Shell } from './completions.js';
 
 export interface CliIo { out: (text: string) => void; err: (text: string) => void }
 export const EXIT_USAGE = 78;
@@ -45,7 +48,7 @@ const done = (io: CliIo, parsed: Parsed, data: unknown, human: string): void => 
 const bytes = (n: number | null | undefined): string => n === null || n === undefined ? 'unlimited' : n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(n % 1024 ** 3 === 0 ? 0 : 1)} GiB` : n >= 1024 ** 2 ? `${Math.round(n / 1024 ** 2)} MiB` : `${Math.round(n / 1024)} KiB`;
 const ago = (at: number | null, now: number): string => at === null ? 'never' : `${Math.max(0, Math.round((now - at) / 1000))}s ago`;
 
-export const LOCAL_COMMANDS = ['status', 'pause', 'resume', 'config', 'policy', 'name', 'capability', 'panel', 'support-bundle'] as const;
+export const LOCAL_COMMANDS = ['status', 'pause', 'resume', 'config', 'policy', 'name', 'capability', 'panel', 'support-bundle', 'update', 'completions'] as const;
 
 /** `status`: the live document the running node publishes, or an offline view built from the files when it is not running. Never contacts the Coordinator. */
 async function statusCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
@@ -217,6 +220,20 @@ async function supportBundleCommand(argv: string[], env: NodeJS.ProcessEnv, io: 
   return 0;
 }
 
+/** `update check`: a user-initiated, read-only question to the project's release address (see update-check.ts). */
+async function updateCommand(argv: string[], io: CliIo): Promise<number> {
+  const parsed = parse(argv, { flags: ['--json', '--help'] });
+  if (parsed.positional[0] !== 'check' || parsed.positional.length !== 1) throw new UsageError('usage: privanet-node update check [--json]');
+  const result = await checkForUpdate();
+  done(io, parsed, result, [result.message, result.releaseUrl ? `  release notes: ${result.releaseUrl}` : '', result.howToUpgrade ? `  ${result.howToUpgrade}` : ''].filter(Boolean).join('\n'));
+  return result.state === 'failed' ? 1 : 0;
+}
+function completionsCommand(argv: string[], io: CliIo): number {
+  const parsed = parse(argv, { flags: ['--help'] }); const shell = parsed.positional[0] as Shell | undefined;
+  if (!shell || !SHELLS.includes(shell) || parsed.positional.length !== 1) throw new UsageError(`usage: privanet-node completions ${SHELLS.join('|')}`);
+  io.out(completionScript(shell)); return 0;
+}
+
 const USAGE = `Usage: privanet-node COMMAND [options]
   status [--json]                      what the node is doing, and why it is idle if it is
   pause 15m|1h|tomorrow|reboot|indefinite     stop contributing for a while (resume ends it)
@@ -227,7 +244,9 @@ const USAGE = `Usage: privanet-node COMMAND [options]
   capability enable|disable NAME       switch an enrolled capability on or off
   panel                                how to open the local control panel
   support-bundle [FILE] [--no-network] [--log-file F]    a sanitized troubleshooting file you can share
-  doctor | enroll | join | support-bundle | update | completions   (see each command's --help)
+  update check [--json]                ask GitHub (only now) whether a newer release exists; nothing is downloaded or installed
+  completions bash|zsh|fish|powershell   print a shell completion script (no secrets, no network)
+  doctor | enroll | join                 (see each command's --help)
 Common options: --state-dir DIR (default: PRIVANODE_STATE_DIR or ./var/node), --json. Exit status: 0 ok, 1 a problem was found, 78 bad usage.`;
 
 /** Dispatches the local-control commands. Returns the exit status; usage errors name the problem without echoing values. */
@@ -244,6 +263,8 @@ export async function runLocal(command: string, argv: string[], env: NodeJS.Proc
       case 'capability': return await capabilityCommand(argv, env, io);
       case 'panel': return await panelCommand(argv, env, io);
       case 'support-bundle': return await supportBundleCommand(argv, env, io);
+      case 'update': return await updateCommand(argv, io);
+      case 'completions': return completionsCommand(argv, io);
       default: io.err(USAGE + '\n'); return EXIT_USAGE;
     }
   } catch (error) {
