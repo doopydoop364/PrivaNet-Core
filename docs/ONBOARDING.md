@@ -1,6 +1,15 @@
 # Remote node onboarding
 
-Status: implemented (unreleased, after `0.3.0-alpha.6`). This is the enrollment and registry part of [Phase 3.5](../ROADMAP.md#phase-35--remote-node-onboarding--contributor-experience--partly-implemented). It makes adding a trusted machine a two-command job and gives the administrator a registry to see, name and withdraw nodes. It does **not** make enrollment public: the network owner still decides, one token at a time. Installers, short invite codes, an approval flow and a public hostname with a public certificate are still planned and are not here.
+Status: implemented (unreleased, after `0.3.0-alpha.6`). This is [Phase 3.5](../ROADMAP.md#phase-35--remote-node-onboarding--contributor-experience--implemented): how a trusted contributor's machine joins, and how the owner sees, names and withdraws nodes. There are four ways in, from most to least manual, and every one ends with the **owner's explicit decision**: the owner issues each token, invite or approval one at a time. Enrollment is never public.
+
+| Way in | The contributor needs | The owner does | Doc |
+| --- | --- | --- | --- |
+| One command (Linux or Windows) | the installer and a short **invite code** | `privanet-admin invite create` | [INSTALLER.md](INSTALLER.md) |
+| Approval ("device code") | the installer and nothing secret | `privanet-admin approve CODE` | [Approval](#approval-flow-no-secret-at-all) below |
+| `privanet-node enroll` | the release and a long one-time **token** | `privanet-admin enrollment create` | [Node workflow](#node-workflow) below |
+| Manual (`node.env`) | the release and a token in the environment | the same | [FIRST_DEPLOYMENT.md](FIRST_DEPLOYMENT.md) |
+
+Related: [PUBLIC_NODE.md](PUBLIC_NODE.md) (a public hostname with a normal certificate), [RECOVERY.md](RECOVERY.md) (reinstall, lost machine, revoke), [EXPOSURE_REVIEW.md](EXPOSURE_REVIEW.md) (what the Internet can reach), and `privanet-node doctor` ([below](#diagnosing-a-node-privanet-node-doctor)).
 
 Nothing about what a node may do changes. A node still runs only the registered, typed, versioned handlers it was enrolled for (`web.fetch.v1` with its SSRF guard, the diagnostic jobs), under its owner's policy. There is no remote shell, no arbitrary script or container, no tunnel and no exit-proxy behaviour, and enrollment adds none.
 
@@ -76,6 +85,69 @@ sudo privanet-admin nodes revoke node_3a7f19c2
 Revoking stops the node at once: its live session is deleted, no new session can be created, every request is refused, and its leased jobs go back to the queue. Renaming never changes an identity or a credential, and a revoked node stays revoked.
 
 Everything above also exists as API calls for an administrator's own tooling (`docs/protocol.md`). The older forms (`privanet-admin enrollment`, `nodes`, `revoke-node ID`, `application NAME`) behave exactly as before and still print one line of JSON.
+
+## Invite codes (short, for people)
+
+A token is 64 characters, which is fine for a script and miserable for a person. An **invite** is a short code the owner can read over the phone:
+
+```sh
+sudo privanet-admin invite create --expires 30m --capabilities web.fetch.v1 --label "Anna's desktop"
+
+Invite created.
+Code:          N7K4-PQ2M
+Invite ID:     inv_5d0c1f7e2a91b3c4
+Expires:       2026-10-01T22:40:59Z (in 30m)
+Capabilities:  web.fetch.v1
+Name:          Anna's desktop
+
+Give the code to Anna over a channel you trust. It works once, over verified TLS, and is not shown again.
+```
+
+`sudo privanet-admin invite list [--all]` and `invite revoke INVITE_ID` work like their token counterparts. On the machine, the installer (or `privanet-node enroll --coordinator URL --invite-file FILE`, `--invite-stdin` or `PRIVANODE_INVITE_CODE`) redeems it; the code is typed or pasted case-insensitively, with or without the hyphen, and never goes on a command line.
+
+**An invite is an introduction, not a credential.** Eight characters of an unambiguous alphabet (Crockford base 32: no `I L O U`; typed `O`, `I` and `L` are read as `0`, `1`, `1`) carry 40 bits, which a patient guesser could cover if nothing stopped them, so the design assumes it is guessable and bounds what a guess can do:
+
+| Property | How |
+| --- | --- |
+| Not the token | the code is unrelated to the 256-bit token; redeeming it runs the **same** Ed25519 challenge-and-proof enrollment as a token, so the node's key, not the code, is its credential |
+| Short life, single use | at most 1 hour (default 10 minutes); one redemption, decided in one `BEGIN IMMEDIATE` transaction, so of any number of simultaneous attempts exactly one wins (tested) |
+| Capability ceiling | the owner sets the most the node can get; the contributor can only ask for less |
+| Not stored | the Coordinator keeps a keyed HMAC of the code (the key derives from the administrator secret and is not in the database), so a copy of the database cannot be used to guess codes offline. The code appears in no log, no audit field and no error |
+| Guessing cut off three ways | the **handle** (first four characters) finds the invite, and a wrong **second half** counts against *that invite*, which locks after 5 wrong guesses; an address gets 5 refused invite attempts per minute (stricter than the 10 for tokens); and 100 refusals in ten minutes across all addresses switches invite redemption off for everyone until it clears. Together a guesser cannot get through the 2^20 second halves of one invite, let alone find one |
+| One generic answer | an unknown, used, expired, revoked, locked, wrong or malformed code all get `401 INVALID_INVITE`, the same body |
+| Verified TLS only | the node refuses a non-HTTPS address (loopback excepted for development) and an untrusted certificate, and a redirect cannot move redemption to another origin |
+| Audited without the code | invite ID, created, expiry, label, capabilities, used-by, revoked, wrong-guess count; kept 30 days past expiry |
+
+If a code is lost, revoke the invite and issue another. If many invites are being guessed, `invite list --all` shows the locked ones.
+
+## Approval flow (no secret at all)
+
+When there is no safe channel for a code, the contributor asks and the owner approves. Nothing secret is ever sent to the contributor:
+
+```sh
+# on the contributor's machine (or: install-node.sh --join / install-node.ps1 -Join)
+privanet-node join --coordinator https://node.example.com --name "Anna's desktop"
+
+Request sent. Waiting for the owner to approve it.
+  Request code:  J4M7-K2Q9
+  Node ID:       node_3a7f19c2...
+Tell the owner the request code ...
+
+# on the Coordinator host
+sudo privanet-admin requests list                     # CODE  STATUS  NODE  NAME HINT  ASKED FOR  FROM  EXPIRES
+sudo privanet-admin approve J4M7-K2Q9 --capabilities web.fetch.v1 --label "Anna's desktop"
+sudo privanet-admin deny J4M7-K2Q9
+```
+
+The machine makes its own key first and the request is **bound to that key**; the request code is only a label for the owner to read out, and knowing it grants nothing (the node polls with a separate 122-bit request ID). The owner compares the Node ID the machine printed, approves with a capability ceiling and a name, and the machine finishes enrolling with the same signed proof as any other way in. A request expires (10 minutes by default), can be denied or cancelled, is answered once, and survives a restart of `join` (it resumes from `join-request.json` in the state directory). At most 50 requests are pending (5 per address), polling is bounded, and `requests list` never shows a secret because there is none. The admin API stays loopback-only.
+
+## Diagnosing a node: `privanet-node doctor`
+
+```sh
+privanet-node doctor --coordinator https://node.example.com [--json] [--state-dir DIR]
+```
+
+Stages, each OK, WARN, FAILED, INFO or SKIPPED, with a plain-language next step: configuration, address, DNS, TCP, TLS (handshake, trust, host name, expiry), Coordinator health and protocol, enrollment and invite endpoints, state directory (exists, owner, mode), identity (valid, bound to this Coordinator), enrollment consistency, whether this node is registered and signs in, and the service. A failure in the network stages skips what depends on it. It sends **no** enrollment-changing request (the endpoint probes carry a deliberately invalid body), prints no key, token or code, and never relaxes certificate verification. Exit status: 0 no problems, 1 a problem, 78 bad usage; `--json` is stable for scripts. The installers run it to confirm sign-in.
 
 ## Node workflow
 

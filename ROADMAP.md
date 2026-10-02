@@ -125,7 +125,7 @@ Initial PrivaSearch scaling targets are measured milestones rather than attempts
 
 **Deployment readiness (v0.3.0-alpha.5):** a server Coordinator behind TLS with a separate desktop worker was validated with real separate network stacks and firewalls (no inbound port on the worker, admin API unreachable from the LAN, outage recovery, mixed versions, a two-node workload), with the procedure in [docs/FIRST_DEPLOYMENT.md](docs/FIRST_DEPLOYMENT.md) and the verdict, unverified items and manual check in [docs/DEPLOYMENT_VALIDATION.md](docs/DEPLOYMENT_VALIDATION.md). It proves trusted, owner-run nodes only.
 
-## Phase 3.5 — Remote Node Onboarding / Contributor Experience — Partly implemented
+## Phase 3.5 — Remote Node Onboarding / Contributor Experience — Implemented
 
 Goal: make it simple for a **trusted, invited** contributor outside the local network to join as a PrivaNode, without changing who decides who joins. This sits after the basic deployment and multi-node readiness work in Phase 3 (which proved the trusted, owner-run setup) and before community-scale participation. It is numbered 3.5 so the existing phase numbers and order stay as they are; it needs nothing from Phases 4 to 9 and can be scheduled alongside any of them.
 
@@ -150,9 +150,18 @@ Dependencies and guardrails (a milestone is not done without them):
 - **The installer is part of the trust chain.** Serve it over HTTPS from the official release, pin it to a release version and checksum, and never place a credential on a command line or in a log.
 - **No new trust in the node.** Scheduling, resource limits and the SSRF guard behave exactly as for any node; a joined contributor's node is still a trusted-by-the-owner machine, not a verified one.
 
-**Status:** the enrollment and registry core is implemented (unreleased, after `0.3.0-alpha.6`; [docs/ONBOARDING.md](docs/ONBOARDING.md)): one-time, expiring, hashed, single-use enrollment tokens that an administrator can create, list and revoke (`privanet-admin enrollment create|list|revoke`); `privanet-node enroll --coordinator URL --token T`, after which the node remembers its Coordinator and restarts with no token or configuration; a node registry with names, last seen, capabilities, protocol, slots, enrolled and revoked times (`privanet-admin nodes list|show|rename|revoke`); a separate limiter on refused enrollment attempts; and actionable enrollment failure messages (untrusted certificate, DNS, refused connection, refused token, protocol mismatch). This covers goals 6 and part of 7 above for a trusted contributor who already has the release and a reachable, TLS-protected Coordinator.
+**Status: implemented (unreleased, after `0.3.0-alpha.6`), with one verification still owed.** Every goal above has working, tested code and documentation:
 
-Still planned, and **not** implemented: a public hostname with a publicly trusted certificate (goal 1), the Linux and Windows installers (goals 2 and 3), short human-friendly invite codes (goal 4), the optional approval/device-code flow (goal 5), and deeper reachability diagnostics (goal 7). Until then, use the manual procedure in [docs/FIRST_DEPLOYMENT.md](docs/FIRST_DEPLOYMENT.md) with `privanet-node enroll` in place of editing `node.env`.
+1. **Public hostname and publicly trusted TLS** (goal 1): `deploy/caddy/Caddyfile.public` and `public-routes.caddy` (an allowlist of exactly the routes a node needs; `/v1/admin/*` and the application API never reach the Coordinator; size and timeout limits; HSTS), run against a real Caddy in CI (`npm run test:proxy`), and `tools/check-exposure.mjs`, a verified-TLS checker to run from another machine. The private-CA LAN setup is unchanged. Buying a domain, DNS, port forwarding and NAT are operator actions, not software ([docs/PUBLIC_NODE.md](docs/PUBLIC_NODE.md)); a certificate from a real certificate authority has not been obtained in a test.
+2. **Installers** (goals 2 and 3): `install-node.sh` for Linux and `install-node.ps1` for Windows, published next to each release and pinned to it, with checksum verification before anything is unpacked, an optional hash pin and GitHub attestation, a dedicated service account, a default policy, secrets only on standard input, a service, and a sign-in check ([docs/INSTALLER.md](docs/INSTALLER.md)). `curl | sh` is deliberately not offered. There is no code-signing key, so there are no GPG or Authenticode signatures; that is stated in the docs rather than hidden.
+3. **Invite codes** (goal 4): `privanet-admin invite create|list|revoke`, `XXXX-XXXX`, single use, at most one hour, a capability ceiling, keyed-hash storage, per-address, per-invite and global limits, one generic failure, redeemed through the same Ed25519 enrollment ([docs/ONBOARDING.md](docs/ONBOARDING.md)).
+4. **Approval flow** (goal 5): `privanet-node join` and `privanet-admin requests|approve|deny`, key-bound, owner-approved, expiring, bounded.
+5. **Recovery, reinstall and revocation** (goal 6): [docs/RECOVERY.md](docs/RECOVERY.md), with `--upgrade`, `--new-identity --yes` and `--uninstall [--purge]` in both installers.
+6. **Diagnostics** (goal 7): `privanet-node doctor` (staged, actionable, `--json`, no secrets, no enrollment-changing requests).
+7. **Owner-controlled** (goal 8): every path ends with the owner's explicit decision; nothing here is public enrollment.
+8. **Exposure review** (guardrail): [docs/EXPOSURE_REVIEW.md](docs/EXPOSURE_REVIEW.md), the project's own review with a test per finding. It is not an independent audit.
+
+**Honest limits:** (a) the **Windows installer's service registration, access-control and reboot behaviour have not been run on a real Windows machine** by the project (its static checks and staged-install tests run on `windows-latest` in CI and have not been seen to pass by the author); the manual check in [docs/INSTALLER.md](docs/INSTALLER.md#what-is-verified-and-what-is-not) is the verification that remains; (b) the Linux unit was verified as generated text and with a real service account, but not started under a real systemd in an automated test; (c) the release attestation step has not run yet (no release has been cut with it). None of these needs new design; they need a first run on real systems, and none changes who may join or what a node may do. Phase 10 (hostile nodes, public enrollment, reputation) is unchanged and is not started.
 
 ## Phase 4 — Generic Storage + Data Plane Foundation — Planned
 
@@ -340,7 +349,7 @@ Areas to address:
 
 Community deployment should happen only after the local/small-network architecture is stable.
 
-Invite-only onboarding of **trusted** remote contributors is a separate, earlier milestone ([Phase 3.5](#phase-35--remote-node-onboarding--contributor-experience--partly-implemented)) and does not wait for this phase. What waits for this phase is anything that admits nodes the owner does not individually know and trust: anonymous or open enrollment, Sybil resistance, reputation and hostile-node verification.
+Invite-only onboarding of **trusted** remote contributors is a separate, earlier milestone ([Phase 3.5](#phase-35--remote-node-onboarding--contributor-experience--implemented)) and does not wait for this phase. What waits for this phase is anything that admits nodes the owner does not individually know and trust: anonymous or open enrollment, Sybil resistance, reputation and hostile-node verification.
 
 ## Phase 11 — Stable PrivaNet Protocol — Planned
 

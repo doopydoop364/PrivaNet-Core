@@ -136,6 +136,16 @@ Status: **planned; nothing implemented.** These apply to the future direct-trans
 | Coordinator as accidental bulk relay | Bandwidth cost and a central bottleneck | Keep the 32 KiB and 512 KiB limits; any relay is a separate bounded data-plane service |
 | Data privacy | Plaintext or keys reaching PrivaNet or its logs | Applications encrypt before transfer (PrivaDrive owns keys); never log contents, keys or raw private data |
 
+## Remote onboarding threats (Phase 3.5, implemented)
+
+Invites, approval requests, the installers and a public hostname add a Internet-facing surface. The review, with the test behind each finding, is [EXPOSURE_REVIEW.md](EXPOSURE_REVIEW.md); it is the project's own review and not an independent audit.
+
+- **Invite codes** are 40 bits and therefore guessable by an unbounded attacker. They are introductions, not credentials: the Coordinator stores only a keyed HMAC (the key derives from the administrator secret and is not in the database), a wrong second half counts against that invite, which locks after five, an address gets five refused attempts a minute, and one hundred refusals in ten minutes pause invite redemption for everyone. Redeeming one runs the ordinary Ed25519 enrollment, so the node's key, not the code, is its credential. Cost: a determined distributed guesser can pause invite redemption (token enrollment and running nodes are unaffected).
+- **Approval requests** are bound to the requesting machine's key; the request code is only an identifier and grants nothing. The owner's approval is a trust decision on a name and an address the requester supplied; approve only what you expect. Requests are bounded (50 pending, 5 per address) and expire.
+- **Public hostname:** the shipped proxy rules are an allowlist, so the administrator and application APIs do not reach the Coordinator from the Internet; the Coordinator stays on loopback. Caddy provides no rate limiting; the Coordinator's limits need `PRIVANET_TRUST_LOOPBACK_PROXY=true` to see real client addresses.
+- **Installers** are part of the trust chain: HTTPS only, pinned to a release, the archive's SHA-256 verified before it is unpacked, an optional out-of-band pin and GitHub attestation, no secret on a command line, in a file or in output. There is no code-signing key, so no GPG or Authenticode signature exists; the checksum list shares a location with the files it describes, which is why the pin and attestation matter.
+- **No new trust in nodes.** A joined node is trusted by its owner, not verified (Phase 10), and can still only run the typed handlers it was enrolled for.
+
 ## Limits and threats left open
 
 A stolen grant can enroll the thief before the owner; restrict grant capability,

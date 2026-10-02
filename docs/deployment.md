@@ -90,7 +90,7 @@ The automated test `online backup restores into a working Coordinator with the s
 
 ## Node key rotation
 
-Remote nodes outside your network are set up by hand today, the same way as a LAN node ([FIRST_DEPLOYMENT.md](FIRST_DEPLOYMENT.md), Part 2). Simpler onboarding for trusted, invited contributors (a public hostname with a publicly trusted certificate, an installer, short invite codes) is a planned milestone, not something that exists: see [the roadmap](../ROADMAP.md#phase-35--remote-node-onboarding--contributor-experience--partly-implemented). Enrollment stays under the network owner's control.
+Remote nodes outside your network can be set up by hand, the same way as a LAN node ([FIRST_DEPLOYMENT.md](FIRST_DEPLOYMENT.md), Part 2), or with the installers and invite codes of [Phase 3.5](../ROADMAP.md#phase-35--remote-node-onboarding--contributor-experience--implemented) ([INSTALLER.md](INSTALLER.md), [ONBOARDING.md](ONBOARDING.md)). A Coordinator that outside contributors reach under a public host name uses `deploy/caddy/Caddyfile.public`, which forwards only the routes a node needs and never `/v1/admin/*`: [PUBLIC_NODE.md](PUBLIC_NODE.md), with `PRIVANET_TRUST_LOOPBACK_PROXY=true` so the strict invite and enrollment limits see real client addresses. Enrollment stays under the network owner's control.
 
 Nodes have no in-place key rotation. To replace a node key: revoke the node with `npm run admin -- revoke-node NODE_ID`, delete its state directory, and enroll it again with a fresh enrollment grant. Application credentials rotate in place (`rotate-application`). In-place node-key rotation is tracked with credential rotation in Phase 10.
 

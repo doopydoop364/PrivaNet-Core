@@ -293,3 +293,16 @@ test('approval: requests are bounded, one per key, and a registered node cannot 
   assert.equal(registered.outcome, 'ENROLLED');
   assert.equal((await joinNode({ url: f.url, stateDir: stateOf(f, 'r'), allowInsecureLoopback: true, pollMs: 25 })).outcome, 'ALREADY_ENROLLED', 'an enrolled node just reports that it is enrolled, and asks for nothing');
 });
+
+test('a redirect can never move redemption to another origin: the node refuses to follow it and sends the invite nowhere', async t => {
+  const { createServer } = await import('node:http'); const { mkdtemp, rm } = await import('node:fs/promises'); const { tmpdir } = await import('node:os');
+  const targetSeen: string[] = [];
+  const target = createServer((request, response) => { targetSeen.push(request.url ?? ''); response.writeHead(200); response.end('{}'); });
+  await new Promise<void>(resolve => target.listen(0, '127.0.0.1', resolve)); t.after(() => { target.close(); target.closeAllConnections(); });
+  const targetPort = (target.address() as { port: number }).port;
+  const redirector = createServer((request, response) => { request.resume(); response.writeHead(307, { location: `http://127.0.0.1:${targetPort}${request.url ?? '/'}` }); response.end(); });
+  await new Promise<void>(resolve => redirector.listen(0, '127.0.0.1', resolve)); t.after(() => { redirector.close(); redirector.closeAllConnections(); });
+  const dir = await mkdtemp(join(tmpdir(), 'privanet-redirect-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  const failure = await failureOf(enrollNode({ url: `http://127.0.0.1:${(redirector.address() as { port: number }).port}`, invite: 'N7K4-PQ2M', stateDir: dir, allowInsecureLoopback: true }));
+  assert.notEqual(failure.failure, undefined); assert.deepEqual(targetSeen, [], 'nothing reached the redirect target');
+});
