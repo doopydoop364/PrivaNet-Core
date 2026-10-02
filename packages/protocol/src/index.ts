@@ -120,10 +120,10 @@ const FETCH_RESOURCES: ResourceEstimate = Object.freeze({
   expectedDurationMs: 30000, preemptible: true, checkpointable: false,
 });
 export const JOB_TYPES = Object.freeze({
-  'system.echo.v1': Object.freeze({ version: 1, capability: 'system.echo.v1', input: EchoSchema, output: EchoSchema, resources: ECHO_RESOURCES }),
-  'system.hashchain.v1': Object.freeze({ version: 1, capability: 'system.hashchain.v1', input: HashChainInputSchema, output: HashChainOutputSchema, resources: HASHCHAIN_RESOURCES }),
+  'system.echo.v1': Object.freeze({ kind: 'job' as const, version: 1, capability: 'system.echo.v1', input: EchoSchema, output: EchoSchema, resources: ECHO_RESOURCES }),
+  'system.hashchain.v1': Object.freeze({ kind: 'job' as const, version: 1, capability: 'system.hashchain.v1', input: HashChainInputSchema, output: HashChainOutputSchema, resources: HASHCHAIN_RESOURCES }),
   // A generic, function-named capability (ADR 005). `requiresClientIdentity`: only applications with a registered fetch identity may submit it.
-  'web.fetch.v1': Object.freeze({ version: 1, capability: 'web.fetch.v1', input: FetchInputSchema, output: FetchOutputSchema, resources: FETCH_RESOURCES, requiresClientIdentity: true }),
+  'web.fetch.v1': Object.freeze({ kind: 'job' as const, version: 1, capability: 'web.fetch.v1', input: FetchInputSchema, output: FetchOutputSchema, resources: FETCH_RESOURCES, requiresClientIdentity: true }),
 });
 export type JobType = keyof typeof JOB_TYPES;
 /** True for capabilities that act on the outside world on an application's behalf and so need its registered identity. */
@@ -136,6 +136,39 @@ export const JOB_TYPE_IDS = Object.keys(JOB_TYPES) as [JobType, ...JobType[]];
 export const JobTypeSchema = z.enum(JOB_TYPE_IDS);
 export const CapabilitiesSchema = z.array(JobTypeSchema).max(JOB_TYPE_IDS.length)
   .refine(list => new Set(list).size === list.length, 'duplicate capability');
+// ---- Services (Phase 4): typed, versioned, registry-defined, and never jobs ----------------------------------------------------------------------------------------------------
+/** The hard limit on one chunk. One constant: the node's store, the Coordinator's placement and every schema below use it. Raised only by a protocol decision, never by configuration. */
+export const STORAGE_MAX_CHUNK_BYTES = 8 * 1024 * 1024;
+/** `chk_` plus the lowercase hex SHA-256 of the stored bytes. */
+export const ChunkIdSchema = z.string().regex(/^chk_[a-f0-9]{64}$/);
+/**
+ * A service is something a node offers that is not a leased job: there is no lease, no handler run and no scheduler involvement. It has its own registry so that a service id can never
+ * be a job type (and the scheduler, enrollment grants, heartbeats `capabilities` and `allowedJobTypes`, all of which are built from JOB_TYPES, can never see one). Adding a service
+ * means adding one entry here and its advertisement schema below, and nothing else on the wire accepts an unregistered service.
+ */
+export const SERVICES = Object.freeze({
+  'storage.chunk.v1': Object.freeze({ kind: 'service' as const, version: 1, capability: 'storage.chunk.v1' }),
+});
+export type ServiceId = keyof typeof SERVICES;
+export const SERVICE_IDS = Object.keys(SERVICES) as [ServiceId, ...ServiceId[]];
+export const ServiceIdSchema = z.enum(SERVICE_IDS);
+export const ServiceListSchema = z.array(ServiceIdSchema).max(SERVICE_IDS.length).refine(list => new Set(list).size === list.length, 'duplicate service');
+/** What kind of capability an id names, from the two registries (the single source of truth); undefined for anything unregistered. */
+export function capabilityKind(id: string): 'job' | 'service' | undefined {
+  if (Object.hasOwn(JOB_TYPES, id)) return 'job';
+  if (Object.hasOwn(SERVICES, id)) return 'service';
+  return undefined;
+}
+const StorageBytesSchema = z.number().int().min(0).max(2 ** 50);
+/** What a node says it can hold right now: owner-allowed capacity and free room (a hint, never a promise: the node re-checks its own quota at every transfer), and the chunk limit it enforces. No endpoint: there is no transfer listener yet. */
+export const StorageAdvertisementSchema = z.strictObject({
+  capacityBytes: StorageBytesSchema, freeBytes: StorageBytesSchema, maxChunkBytes: z.number().int().min(1).max(STORAGE_MAX_CHUNK_BYTES),
+}).refine(advertisement => advertisement.freeBytes <= advertisement.capacityBytes, 'free space exceeds capacity');
+export type StorageAdvertisement = z.infer<typeof StorageAdvertisementSchema>;
+const ADVERTISEMENTS = { 'storage.chunk.v1': StorageAdvertisementSchema } satisfies Record<ServiceId, z.ZodType>;
+/** The optional heartbeat member: absent from nodes that offer no service (every node before 0.4.0-alpha.2), and a service the owner has turned off is simply not listed. */
+export const ServicesAdvertisementSchema = z.strictObject({ 'storage.chunk.v1': ADVERTISEMENTS['storage.chunk.v1'].optional() });
+export type ServicesAdvertisement = z.infer<typeof ServicesAdvertisementSchema>;
 type Payload = { type: JobType; input?: unknown; result?: unknown };
 /** Validates payload fields against the schema registered for `type`; never trusts the sender's shape. */
 function registered<S extends z.ZodType<Payload>>(schema: S) {
@@ -281,6 +314,8 @@ export const HeartbeatSchema = z.strictObject({
   protocolVersion: ProtocolSchema, daemonVersion: VersionSchema, capabilities: CapabilitiesSchema,
   jobSlots: z.number().int().min(1).max(MAX_JOB_SLOTS), currentJobs: z.number().int().min(0).max(MAX_JOB_SLOTS),
   lifecycle: LifecycleSchema.optional(), resources: ResourceReportSchema.optional(),
+  /** Additive within protocol 1 (0.4.0-alpha.2): the services this node offers right now. Absent means none. */
+  services: ServicesAdvertisementSchema.optional(),
 });
 export const ReleaseReasonSchema = z.enum(['DRAINING', 'PREEMPTED', 'SHUTDOWN']);
 /** A node hands a leased job back without failing it; the job is requeued and the attempt is refunded. */
@@ -307,7 +342,8 @@ export const NodeSelfSchema = z.strictObject({
   capabilities: CapabilitiesSchema, allowedCapabilities: CapabilitiesSchema, protocolVersion: ProtocolSchema,
 });
 export const NodesSchema = z.strictObject({ nodes: z.array(NodeViewSchema).max(1000) });
-export const AppCreateSchema = z.strictObject({ name: z.string().min(1).max(80), allowedJobTypes: z.array(JobTypeSchema).max(JOB_TYPE_IDS.length), fetchIdentity: FetchIdentitySchema.optional() });
+/** `allowedServices` is additive (0.4.0-alpha.2) and absent means none: an application never gains a service it was not explicitly given. */
+export const AppCreateSchema = z.strictObject({ name: z.string().min(1).max(80), allowedJobTypes: z.array(JobTypeSchema).max(JOB_TYPE_IDS.length), fetchIdentity: FetchIdentitySchema.optional(), allowedServices: ServiceListSchema.optional() });
 export const AppCredentialSchema = z.strictObject({ applicationId: IdSchema, token: SecretSchema });
 export const SubmitSchema = registered(z.strictObject({
   type: JobTypeSchema, input: z.unknown(), idempotencyKey: z.string().min(1).max(128).regex(/^[a-zA-Z0-9_.:-]+$/),
@@ -350,3 +386,62 @@ export type Submit = z.infer<typeof SubmitSchema>;
 export type Job = z.infer<typeof JobSchema>;
 export type Lease = z.infer<typeof LeaseSchema>;
 export type JobError = z.infer<typeof JobErrorSchema>;
+
+// ---- Storage control plane (0.4.0-alpha.2): placement, transfer tickets and their state. Metadata only: no schema here carries chunk bytes, a path, an address or an endpoint. ----
+/** An opaque application label (for quotas and metrics only), for example `drive-chunk`. */
+export const StorageClassSchema = z.string().regex(/^[a-z][a-z0-9._-]{0,31}$/);
+/** A holder key: the canonical base64 of an Ed25519 SubjectPublicKeyInfo (the same encoding as a node's public key). The application makes a fresh pair per transfer and never sends the private half. */
+export const HolderKeySchema = z.string().length(60);
+export const StorageOperationSchema = z.enum(['put', 'get', 'delete']);
+export type StorageOperation = z.infer<typeof StorageOperationSchema>;
+export const TransferIdSchema = z.string().regex(/^[a-f0-9]{32}$/);
+/** The Coordinator's key identifier: 16 hex characters of the SHA-256 of the SPKI public key. */
+export const KeyIdSchema = z.string().regex(/^[a-f0-9]{16}$/);
+/** A ticket on the wire: base64url, fixed length (see packages/shared/src/transfer-ticket.ts). */
+export const TicketWireSchema = z.string().regex(/^[A-Za-z0-9_-]{312}$/);
+export const ChunkStateSchema = z.enum(['PENDING', 'STORED', 'DELETING']);
+export const ReplicaStateSchema = z.enum(['RESERVED', 'STORED', 'LOST']);
+/** AUTHORIZED: a ticket was issued. IN_PROGRESS: the target node accepted it. The rest are final. */
+export const TransferStateSchema = z.enum(['AUTHORIZED', 'IN_PROGRESS', 'COMPLETED', 'FAILED', 'EXPIRED', 'REVOKED']);
+export type TransferState = z.infer<typeof TransferStateSchema>;
+/** Ask where to store a chunk, and get permission to try: the Coordinator chooses the node and the application sends only bounded metadata. */
+export const PlacementRequestSchema = z.strictObject({ chunkId: ChunkIdSchema, size: z.number().int().min(1).max(STORAGE_MAX_CHUNK_BYTES), class: StorageClassSchema.optional(), holderKey: HolderKeySchema });
+export const TicketRequestSchema = z.strictObject({ operation: StorageOperationSchema, chunkId: ChunkIdSchema, holderKey: HolderKeySchema });
+/** One authorization. The ticket is shown here only: the Coordinator stores the transfer's state, never the ticket. There is deliberately no endpoint field yet. */
+export const TransferGrantSchema = z.strictObject({ transferId: TransferIdSchema, operation: StorageOperationSchema, chunkId: ChunkIdSchema, expiresAt: TimeSchema, ticket: TicketWireSchema });
+/** `grant` is null when nothing needs transferring (the chunk is already STORED, or a delete had nothing left to remove). */
+export const PlacementResponseSchema = z.strictObject({ chunkId: ChunkIdSchema, size: z.number().int().min(1).max(STORAGE_MAX_CHUNK_BYTES), state: ChunkStateSchema, grant: TransferGrantSchema.nullable() });
+export const TicketResponseSchema = z.strictObject({ chunkId: ChunkIdSchema, state: z.enum(['PENDING', 'STORED', 'DELETING', 'DELETED']), grant: TransferGrantSchema.nullable() });
+/** What an application may learn about one of its own chunks. A chunk that is absent and one that belongs to another application are the same answer (404). */
+export const ChunkStatusSchema = z.strictObject({ chunkId: ChunkIdSchema, size: z.number().int().min(1).max(STORAGE_MAX_CHUNK_BYTES), class: StorageClassSchema.nullable(), state: ChunkStateSchema, createdAt: TimeSchema, available: z.boolean() });
+/** The public verification keys a node needs to check tickets offline, delivered on an authenticated node route (not in the session response, whose strict schema older nodes parse). */
+export const TransferKeysSchema = z.strictObject({
+  coordinatorId: IdSchema,
+  keys: z.array(z.strictObject({ kid: KeyIdSchema, publicKey: HolderKeySchema, notAfter: TimeSchema.nullable() })).min(1).max(4),
+});
+export type TransferKeys = z.infer<typeof TransferKeysSchema>;
+/**
+ * What a storage node reports when it has finished (or removed) a chunk: the evidence the Coordinator needs before a chunk becomes STORED or is forgotten. It travels over the node's
+ * own authenticated session (no second node key exists). In 0.4.0-alpha.2 there is no route that accepts it, because no bytes can be moved yet; the validator exists and is tested so that
+ * alpha.3 adds a route, not a rule.
+ */
+export const TransferReceiptSchema = z.strictObject({
+  transferId: TransferIdSchema, operation: z.enum(['put', 'delete']), applicationId: IdSchema, chunkId: ChunkIdSchema,
+  /** Bytes the node verified and stored (put), or removed (delete). */
+  bytes: z.number().int().min(0).max(STORAGE_MAX_CHUNK_BYTES),
+  /** The SHA-256 the node computed over the stored bytes; must equal the digest in the chunk id (put). */
+  sha256: z.string().regex(/^[a-f0-9]{64}$/), nodeId: NodeIdSchema, completedAt: TimeSchema,
+});
+export type TransferReceipt = z.infer<typeof TransferReceiptSchema>;
+/** Aggregate control-plane facts for the operator: counts and sizes, never chunk ids, tickets, keys or application names. */
+export const StorageSummarySchema = z.strictObject({
+  keyring: z.strictObject({ available: z.boolean(), currentKid: KeyIdSchema.nullable(), keys: z.number().int().min(0).max(4) }),
+  nodes: z.array(z.strictObject({ nodeId: NodeIdSchema, status: NodeStatusSchema, capacityBytes: z.number().int().min(0), freeBytes: z.number().int().min(0), reservedBytes: z.number().int().min(0), openTransfers: z.number().int().min(0) })).max(1000),
+  chunks: z.strictObject({ pending: z.number().int().min(0), stored: z.number().int().min(0), deleting: z.number().int().min(0), storedBytes: z.number().int().min(0), reservedBytes: z.number().int().min(0) }),
+  transfers: z.strictObject({ open: z.number().int().min(0), last24h: z.strictObject({ completed: z.number().int().min(0), failed: z.number().int().min(0), expired: z.number().int().min(0), revoked: z.number().int().min(0) }) }),
+});
+export type StorageSummary = z.infer<typeof StorageSummarySchema>;
+export const KeyRotationSchema = z.strictObject({ currentKid: KeyIdSchema, previousKid: KeyIdSchema.nullable(), previousValidUntil: TimeSchema.nullable() });
+/** Fixed lifetimes, one place: a ticket lives at most this long, and a verifier tolerates at most this much clock difference. Not configurable on purpose. */
+export const TICKET_MAX_LIFETIME_MS = 120000;
+export const TICKET_MAX_SKEW_MS = 30000;
