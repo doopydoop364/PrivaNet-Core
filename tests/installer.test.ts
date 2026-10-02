@@ -255,7 +255,7 @@ const nodeProcess = (sb: { root: string }, c: { url: string }) => {
 const until = async (what: string, check: () => boolean, ms = 40000) => { const deadline = Date.now() + ms; while (!check()) { if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`); await new Promise(resolve => setTimeout(resolve, 100)); } };
 
 for (const way of ['invite', 'approval'] as const) {
-  test(`end to end (${way}): install, enroll, online, restart without the ${way === 'invite' ? 'invite' : 'approval'}, the invite is spent, revocation stops the node`, { skip, timeout: 180000 }, async t => {
+  test(`end to end (${way}): install, enroll, online, restart without the ${way === 'invite' ? 'invite' : 'approval'}, ${way === 'invite' ? 'the invite cannot be reused, ' : ''}revocation stops the node`, { skip, timeout: 180000 }, async t => {
     const { sb, base, c, invite } = await reserve(t); let spent = '';
     if (way === 'invite') {
       const made = invite('Lifecycle PC'); spent = made.code;

@@ -100,21 +100,29 @@ function Test-HttpsUrl([string]$Url) {
 }
 
 # Only used with -Root (the tests): trust exactly one given certificate authority for the download, with the name still checked. Never available in a real install.
-$script:TrustedCa = $null
+# It is compiled C# rather than a script block because the callback runs on a network thread that has no PowerShell runspace.
 function Enable-TestCa([string]$Path) {
-  $script:TrustedCa = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList (Resolve-Path -LiteralPath $Path).Path
-  [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {
-    param($sender, $certificate, $chain, $errors)
-    if (($errors -band [System.Net.Security.SslPolicyErrors]::RemoteCertificateNameMismatch) -ne 0) { return $false }
-    $probe = New-Object System.Security.Cryptography.X509Certificates.X509Chain
-    $probe.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
-    $probe.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::AllowUnknownCertificateAuthority
-    [void]$probe.ChainPolicy.ExtraStore.Add($script:TrustedCa)
-    $leaf = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList $certificate
-    [void]$probe.Build($leaf)
-    $top = $probe.ChainElements[$probe.ChainElements.Count - 1].Certificate
-    return ($top.Thumbprint -eq $script:TrustedCa.Thumbprint)
+  Add-Type -TypeDefinition @'
+using System.Net;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
+public static class PrivaNetTestTrust {
+  public static X509Certificate2 Ca;
+  public static RemoteCertificateValidationCallback Callback = Check;
+  public static bool Check(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors errors) {
+    if ((errors & SslPolicyErrors.RemoteCertificateNameMismatch) != 0) { return false; }
+    X509Chain probe = new X509Chain();
+    probe.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+    probe.ChainPolicy.VerificationFlags = X509VerificationFlags.AllowUnknownCertificateAuthority;
+    probe.ChainPolicy.ExtraStore.Add(Ca);
+    probe.Build(new X509Certificate2(certificate));
+    X509Certificate2 top = probe.ChainElements[probe.ChainElements.Count - 1].Certificate;
+    return top.Thumbprint == Ca.Thumbprint;
   }
+}
+'@
+  [PrivaNetTestTrust]::Ca = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList (Resolve-Path -LiteralPath $Path).Path
+  [System.Net.ServicePointManager]::ServerCertificateValidationCallback = [PrivaNetTestTrust]::Callback
 }
 
 # https only, certificate verification always on, and no way to be moved to another scheme by a redirect (the response is thrown away if it arrived over anything but https).
@@ -155,10 +163,22 @@ function Protect-AdminOnly([string]$Path) {
   if ($LASTEXITCODE -ne 0) { Fail 6 "could not restrict access to $Path" }
 }
 
-function Invoke-Node([string]$NodeCmd, [string[]]$NodeArguments, [string]$StdIn = $null) {
-  # The secret (if any) goes through the pipeline into the child's standard input, never into its arguments.
-  if ($null -ne $StdIn) { $StdIn | & $NodeCmd @NodeArguments } else { & $NodeCmd @NodeArguments }
-  return $LASTEXITCODE
+# Native commands write to stdout, and in PowerShell whatever a function writes becomes part of its return value. So the node's output is sent straight to the console and only the exit code is returned.
+# Windows PowerShell 5.1 also turns any stderr text from a native command into a terminating error when $ErrorActionPreference is 'Stop' and stderr is redirected, so it is relaxed around these calls.
+function Invoke-Node([string]$NodeCmd, [string[]]$NodeArguments, $StdIn = $null) {
+  $previous = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  try {
+    # The secret (if any) goes through the pipeline into the child's standard input, never into its arguments.
+    if (-not [string]::IsNullOrEmpty($StdIn)) { $StdIn | & $NodeCmd @NodeArguments | ForEach-Object { [Console]::Out.WriteLine($_) } }
+    else { & $NodeCmd @NodeArguments | ForEach-Object { [Console]::Out.WriteLine($_) } }
+    return $LASTEXITCODE
+  } finally { $ErrorActionPreference = $previous }
+}
+
+# The standard output of a native command as one string, with its stderr discarded (see above for why the error preference is relaxed).
+function Get-NativeText([string]$Command, [string[]]$CommandArguments) {
+  $previous = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  try { return (@(& $Command @CommandArguments 2>$null) -join "`n") } finally { $ErrorActionPreference = $previous }
 }
 
 # ---- the work ---------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -212,7 +232,7 @@ function Install-PrivaNode {
   if (-not $nodeBin) { $found = Get-Command node.exe -ErrorAction SilentlyContinue; if ($found) { $nodeBin = $found.Source } }
   if (-not $nodeBin -or -not (Test-Path -LiteralPath $nodeBin)) { Fail 4 "Node.js $NodeMin or newer is required and was not found. Install it for all users (https://nodejs.org) and run this again." }
   $nodeBin = (Resolve-Path -LiteralPath $nodeBin).Path
-  $nodeText = (& $nodeBin --version 2>$null)
+  $nodeText = Get-NativeText $nodeBin @('--version')
   if ($nodeText -notmatch '^v?([0-9]+\.[0-9]+\.[0-9]+)') { Fail 4 'could not read the Node.js version' }
   if ([version]$Matches[1] -lt $NodeMin) { Fail 4 "Node.js $($Matches[1]) is too old: PrivaNet needs $NodeMin or newer." }
   if (-not $stage -and -not $NoService -and $nodeBin.StartsWith($env:USERPROFILE, [StringComparison]::OrdinalIgnoreCase)) {
@@ -375,7 +395,7 @@ function Install-PrivaNode {
     Say 'Waiting for the node to sign in...'
     $ok = $false
     for ($attempt = 0; $attempt -lt 30 -and -not $ok; $attempt++) {
-      $report = (& $nodeCmd doctor --coordinator $Coordinator --json 2>$null) -join ''
+      $report = Get-NativeText $nodeCmd @('doctor', '--coordinator', $Coordinator, '--json')
       $state = (Get-ScheduledTask -TaskName $TaskName).State
       if ($report -match '"id":"registered","label":"At the Coordinator","status":"OK"' -and $state -eq 'Running') { $ok = $true } else { Start-Sleep -Seconds 2 }
     }

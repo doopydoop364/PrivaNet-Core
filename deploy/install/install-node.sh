@@ -201,7 +201,7 @@ fi
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/privanet-install.XXXXXX") || die 6 'could not create a temporary directory'
 chmod 700 "$TMP"
 CHILD=''
-# shellcheck disable=SC2329  # run by the traps below
+# shellcheck disable=SC2317,SC2329  # run by the traps below (older shellchecks call this SC2317)
 cleanup() { SECRET=''; [ -z "$CHILD" ] || kill "$CHILD" 2>/dev/null || true; rm -rf "$TMP"; }
 trap cleanup EXIT; trap 'cleanup; exit 130' INT; trap 'cleanup; exit 143' TERM HUP
 ARCHIVE="privanet-$VERSION-linux.tar.gz"; TOP="privanet-$VERSION-linux"

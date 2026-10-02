@@ -100,10 +100,11 @@ Expires:       2026-10-01T22:40:59Z (in 30m)
 Capabilities:  web.fetch.v1
 Name:          Anna's desktop
 
-Give the code to Anna over a channel you trust. It works once, over verified TLS, and is not shown again.
+The code works once, from a machine that reaches this Coordinator over verified TLS, and is not shown again. Give it to the contributor over a private channel:
+  privanet-node enroll --coordinator https://node.example.com --invite-stdin      (then type or paste the code)
 ```
 
-`sudo privanet-admin invite list [--all]` and `invite revoke INVITE_ID` work like their token counterparts. On the machine, the installer (or `privanet-node enroll --coordinator URL --invite-file FILE`, `--invite-stdin` or `PRIVANODE_INVITE_CODE`) redeems it; the code is typed or pasted case-insensitively, with or without the hyphen, and never goes on a command line.
+`sudo privanet-admin invite list [--all]` and `invite revoke INVITE_ID` work like their token counterparts. On the machine, the installer (or `privanet-node enroll --coordinator URL --invite-file FILE`, `--invite-stdin` or `PRIVANODE_INVITE_CODE`) redeems it; the code is typed or pasted case-insensitively, with or without the hyphen, and the installers never put it on a command line (`privanet-node enroll --invite CODE` exists like `--token`, and is visible to other users of the machine while it runs: prefer the file, stdin or environment forms).
 
 **An invite is an introduction, not a credential.** Eight characters of an unambiguous alphabet (Crockford base 32: no `I L O U`; typed `O`, `I` and `L` are read as `0`, `1`, `1`) carry 40 bits, which a patient guesser could cover if nothing stopped them, so the design assumes it is guessable and bounds what a guess can do:
 
@@ -239,4 +240,8 @@ The schemas are in `@privanet/protocol` (`EnrollmentTokenInfoSchema`, `NodeRenam
 
 ## Tests
 
-`tests/onboarding.test.ts` (18 tests, in-process Coordinator over real HTTP) and `tests/onboarding-cli.test.ts` (3 tests that run the shipped admin and node entry points as separate processes, including a node daemon that restarts from stored state alone). They cover: token creation and hashed storage (including the database and its write-ahead log), successful enrollment and consumption, invalid, expired, reused, revoked and near-miss tokens with identical answers, concurrent redemption, the restart and reconnect, revocation of nodes and of unused tokens, nodes and tokens written before this change, malformed input and protocol mismatch, the failed-enrollment limiter, capability ceilings, renaming, token limits and audit retention, file permissions and refusal of unsafe state, and that no token or secret appears in any log or output.
+- `tests/onboarding.test.ts` (18 tests, in-process Coordinator over real HTTP) and `tests/onboarding-cli.test.ts` (5 tests that run the shipped admin and node entry points as separate processes: token enrollment, a node daemon restarting from stored state alone, and the invite and approval flows). They cover: token creation and hashed storage (including the database and its write-ahead log), successful enrollment and consumption, invalid, expired, reused, revoked and near-miss tokens with identical answers, concurrent redemption, the restart and reconnect, revocation of nodes and of unused tokens, nodes and tokens written before this change, malformed input and protocol mismatch, the failed-enrollment limiter, capability ceilings, renaming, token limits and audit retention, file permissions and refusal of unsafe state, and that no token or secret appears in any log or output.
+- `tests/invites.test.ts` (22 tests): the code alphabet and tolerant typing, keyed-hash storage, one generic refusal, the per-invite lock, the per-address and global limits and their recovery, expiry, revocation, the live-invite bound, exactly one winner among many simultaneous redemptions, malformed input, redirects, and the whole approval flow (key binding, ceilings, denial, expiry, polling, replay, concurrency, bounds).
+- `tests/doctor.test.ts` (10 tests): every stage and failure class against real and fake servers, with no secret in any output and nothing created or changed.
+- `tests/public-proxy.proxy.ts` (`npm run test:proxy`, a real Caddy): the shipped routes, the exposure checker (including against a deliberately naive proxy), and enrollment, doctor, restart and revocation across the proxy.
+- `tests/installer.test.ts` (`npm run test:installer`) and `tests/installer-windows.test.ts`: the installers ([INSTALLER.md](INSTALLER.md#what-is-verified-and-what-is-not)), including the whole life of a node for an invite and for an approval.
