@@ -61,7 +61,7 @@ test('rotation persists across restarts, drops expired keys on open, and refuses
   clock.t += KEY_OVERLAP_MS; const later = await TransferKeyring.open(dir, () => clock.t); assert.deepEqual(later.verificationKeys().map(key => key.kid), [r1.currentKid]); assert.equal(later.size, 1);
   assert.equal(JSON.parse(await readFile(join(dir, KEYRING_FILE), 'utf8')).keys.length, 1); // pruned on disk too
   const spam = await TransferKeyring.open(await tmp(t), () => clock.t); await spam.rotate(); await spam.rotate(); await spam.rotate();
-  assert.equal(await codeOf(spam.rotate()), 'KEYRING_INVALID'); assert.equal(spam.size, 4); clock.t += KEY_OVERLAP_MS; await spam.rotate(); assert.equal(spam.size, 2);
+  assert.equal(await codeOf(spam.rotate()), 'KEYRING_LIMIT'); assert.equal(spam.size, 4); clock.t += KEY_OVERLAP_MS; await spam.rotate(); assert.equal(spam.size, 2);
 });
 test('concurrent rotations are serialized: every one succeeds or is refused, and the file always agrees with memory', async t => {
   const dir = await tmp(t); const ring = await TransferKeyring.open(dir); const results = await Promise.allSettled([ring.rotate(), ring.rotate(), ring.rotate(), ring.rotate(), ring.rotate()]);

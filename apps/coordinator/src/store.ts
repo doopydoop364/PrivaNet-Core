@@ -151,6 +151,9 @@ export class SqliteStore implements Store {
     if (filter.nodeId !== undefined) { clauses.push('node_id=?'); args.push(filter.nodeId); }
     return num(this.stmt(`SELECT COUNT(*) AS count FROM transfer WHERE ${clauses.join(' AND ')}`).get(...args)?.count);
   }
+  openTransferCounts(): Map<string, { total: number; puts: number }> {
+    return new Map(this.stmt(`SELECT node_id, COUNT(*) AS total, COALESCE(SUM(operation='put'),0) AS puts FROM transfer WHERE ${OPEN} GROUP BY node_id`).all().map(row => [String(row.node_id), { total: num(row.total), puts: num(row.puts) }]));
+  }
   listOverdueTransfers(now: number, graceMs: number): TransferRecord[] {
     return this.stmt("SELECT * FROM transfer WHERE (state='AUTHORIZED' AND expires_at<=?) OR (state='IN_PROGRESS' AND expires_at+?<=?) ORDER BY expires_at, id LIMIT 1000").all(now, graceMs, now).map(transferOf);
   }

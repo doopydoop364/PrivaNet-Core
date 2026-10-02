@@ -27,7 +27,7 @@ const KeyEntrySchema = z.strictObject({ kid: KeyIdSchema, privateKey: z.string()
 const FileSchema = z.strictObject({ version: z.literal(1), keys: z.array(KeyEntrySchema).min(1).max(MAX_KEYS) });
 type KeyEntry = z.infer<typeof KeyEntrySchema>;
 /** A fixed code only; never the file's content or a library message. */
-export class KeyringError extends Error { constructor(readonly code: 'KEYRING_INVALID' | 'KEYRING_UNSAFE' | 'KEYRING_IO') { super(code); } }
+export class KeyringError extends Error { constructor(readonly code: 'KEYRING_INVALID' | 'KEYRING_UNSAFE' | 'KEYRING_IO' | 'KEYRING_LIMIT') { super(code); } }
 
 const generate = (now: number): KeyEntry => {
   const pair = generateKeyPairSync('ed25519'); const publicKey = pair.publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
@@ -93,7 +93,7 @@ export class TransferKeyring {
     const run = this.serial.then(async () => {
       const now = this.now(); const previous = this.current_();
       const live = this.keys.filter(key => key.retireAt === null || key.retireAt > now);
-      if (live.length >= MAX_KEYS) throw new KeyringError('KEYRING_INVALID'); // four live keys means rotations are being spammed; wait for an overlap to pass
+      if (live.length >= MAX_KEYS) throw new KeyringError('KEYRING_LIMIT'); // four live keys means rotations are being spammed; wait for an overlap to pass
       const fresh = generate(now); const retireAt = now + KEY_OVERLAP_MS;
       const next = [...live.map(key => key.kid === previous.kid ? { ...key, retireAt } : key), fresh];
       await this.persist(next); this.keys = next;

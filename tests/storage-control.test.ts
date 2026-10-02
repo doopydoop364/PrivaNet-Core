@@ -167,6 +167,15 @@ test('a node never holds more open puts than its own in-flight limit, and a refu
   const before = rig.store.chunkUsage(app.record.id); assert.equal(refusal(() => place(rig, app, rig.chunk(10), holder.publicKey)).code, 'NO_CAPACITY'); assert.deepEqual(rig.store.chunkUsage(app.record.id), before);
 });
 
+test('a node is never given more open transfers than the per-node ceiling, for gets and deletes as well as for placements', async t => {
+  const { rig, app, node, holder } = await one(t, { limits: { maxOpenTransfersPerNode: 3, maxOpenPutsPerNode: 2 } }); const chunk = rig.chunk(); const grant = place(rig, app, chunk, holder.publicKey).grant; assert(grant);
+  rig.core.storage.complete(node.nodeId, rig.receipt(grant.transferId, app.record.id, chunk.id, node.nodeId, {}, 'put', chunk.size));
+  const get = () => rig.core.storage.ticket(app.record, { operation: 'get', chunkId: chunk.id, holderKey: holder.publicKey });
+  get(); get(); get(); assert.equal(refusal(get).code, 'NODE_BUSY'); // three open, the fourth is refused, whoever asks
+  const other = rig.app(); assert.equal(refusal(() => place(rig, other, rig.chunk(), holder.publicKey)).code, 'NO_CAPACITY'); // and the node is not chosen for new chunks either
+  assert.equal(rig.store.listOpenTransfers().length, 3); assert.equal(rig.store.openTransferCounts().get(node.nodeId)?.total, 3);
+  assert.equal(rig.store.openTransferCounts().get(node.nodeId)?.puts, 0);
+});
 test('completion evidence: only the target node, for the right transfer, with matching hash and size, promotes a chunk to STORED', async t => {
   const { rig, app, node, holder } = await one(t); const other = rig.node(null); const chunk = rig.chunk(); const grant = place(rig, app, chunk, holder.publicKey).grant; assert(grant);
   const good = (extra: Record<string, unknown> = {}, nodeId = node.nodeId) => rig.receipt(grant.transferId, app.record.id, chunk.id, nodeId, extra, 'put', chunk.size);

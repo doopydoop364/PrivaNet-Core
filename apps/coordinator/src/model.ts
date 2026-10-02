@@ -91,6 +91,8 @@ export interface Store {
   /** Transfers in AUTHORIZED or IN_PROGRESS, filtered; the filters combine. */
   listOpenTransfers(filter?: { applicationId?: string; nodeId?: string; chunk?: { applicationId: string; chunkId: string } }): TransferRecord[];
   countOpenTransfers(filter: { applicationId?: string; nodeId?: string }): number;
+  /** Open transfers per node (all operations, and puts alone) in one grouped query. */
+  openTransferCounts(): Map<string, { total: number; puts: number }>;
   /** Open transfers whose time has run out: AUTHORIZED past `expiresAt`, IN_PROGRESS past `expiresAt` plus `graceMs`. */
   listOverdueTransfers(now: number, graceMs: number): TransferRecord[];
   /** Deletes final transfers that ended at or before the cutoff; returns how many. */

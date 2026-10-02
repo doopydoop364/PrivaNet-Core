@@ -98,6 +98,10 @@ test('administrator: storage summary and key rotation are admin-only and aggrega
   const keys = rig.core.storage.transferKeys(rig.core.store.coordinatorId).keys; assert.equal(verifyTicket(placed.grant.ticket, { keys, now: Date.now(), expect: { nodeId } }).ok, true);
   assert.equal((await rig.raw('/v1/admin/storage/keys/rotate', { method: 'POST', headers: { authorization: `Bearer ${rig.adminSecret}`, 'content-type': 'application/json' }, body: '{"force":true}' })).status, 400);
 });
+test('rotating the key over and over is refused politely (409) once four keys are live, never a 500', async t => {
+  const rig = await httpRig(t); for (let i = 0; i < 3; i++) await rig.admin.rotate();
+  assert.deepEqual(await failure(rig.admin.rotate()), { status: 409, code: 'ROTATION_LIMIT' }); assert.equal((await rig.admin.storage()).keyring.keys, 4);
+});
 test('without a signing key the storage routes answer 503 but jobs and everything else are untouched', async t => {
   const rig = await httpRig(t, { keyring: false }); const app = await rig.admin.app({ name: 'drive', allowedJobTypes: ['system.echo.v1'], allowedServices: ['storage.chunk.v1'] });
   assert.deepEqual(await failure(rig.apiFor(app.token).place({ chunkId: newChunk().id, size: 10, holderKey: generateHolderKey().publicKey })), { status: 503, code: 'STORAGE_UNAVAILABLE' });

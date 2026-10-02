@@ -5,6 +5,7 @@ import {
 import type { ChunkStatus, NodeView, PlacementResponse, ServicesAdvertisement, StorageSummary, TicketResponse, TransferGrant, TransferState } from '@privanet/protocol';
 import { ApiError, canonicalPublicKey, signTicket } from '@privanet/shared';
 import type { ApplicationRecord, ChunkRecord, NodeRecord, ReplicaRecord, Store, TransferRecord } from './model.js';
+import { KeyringError } from './transfer-keys.js';
 import type { TransferKeyring } from './transfer-keys.js';
 
 /**
@@ -109,7 +110,7 @@ export class StorageControl {
 
   // ---- Placement: choose a node and authorize an attempt --------------------------------------------------------------------------------------------------------------------------
   private eligible(size: number, exclude?: string): { node: NodeRecord; room: number }[] {
-    const reserved = this.store.reservedBytes(); const out: { node: NodeRecord; room: number }[] = [];
+    const reserved = this.store.reservedBytes(); const open = this.store.openTransferCounts(); const out: { node: NodeRecord; room: number }[] = [];
     for (const advertisement of this.store.listNodeServices(SERVICE)) {
       if (advertisement.nodeId === exclude) continue;
       const node = this.store.getNode(advertisement.nodeId);
@@ -117,8 +118,8 @@ export class StorageControl {
       if (!node || node.revoked || this.deps.status(node) !== 'ONLINE' || node.resources?.contribution === 'PAUSED' || advertisement.maxChunkBytes < size) continue;
       const room = advertisement.freeBytes - (reserved.get(node.nodeId) ?? 0);
       if (room < size) continue;
-      const open = this.store.listOpenTransfers({ nodeId: node.nodeId });
-      if (open.length >= this.limits.maxOpenTransfersPerNode || open.filter(transfer => transfer.operation === 'put').length >= this.limits.maxOpenPutsPerNode) continue;
+      const counts = open.get(node.nodeId) ?? { total: 0, puts: 0 };
+      if (counts.total >= this.limits.maxOpenTransfersPerNode || counts.puts >= this.limits.maxOpenPutsPerNode) continue;
       out.push({ node, room });
     }
     return out;
@@ -137,6 +138,9 @@ export class StorageControl {
   private issue(app: ApplicationRecord, keyring: TransferKeyring, chunk: ChunkRecord, node: NodeRecord, operation: TransferGrant['operation'], holderKey: string): TransferGrant {
     this.rate(app.id);
     if (this.store.countOpenTransfers({ applicationId: app.id }) >= this.limits.maxOpenTransfersPerApplication) reject(429, 'TRANSFER_LIMIT');
+    // Per-node ceilings apply to every operation, not only to the choice of a node for a new chunk: a node is never asked to hold more open transfers than this, whoever the application is.
+    const counts = this.store.openTransferCounts().get(node.nodeId) ?? { total: 0, puts: 0 };
+    if (counts.total >= this.limits.maxOpenTransfersPerNode || (operation === 'put' && counts.puts >= this.limits.maxOpenPutsPerNode)) reject(503, 'NODE_BUSY');
     const now = this.now; const { kid, privateKey } = keyring.current(); const id = randomBytes(16).toString('hex');
     const expiresAt = now + TICKET_MAX_LIFETIME_MS; const maxBytes = operation === 'delete' ? 0 : chunk.size;
     const ticket = signTicket({ kid, transferId: id, operation, applicationId: app.id, chunkId: chunk.chunkId, nodeId: node.nodeId, maxBytes, issuedAt: now, expiresAt, holderKey, nonce: randomBytes(16).toString('hex') }, privateKey);
@@ -333,7 +337,11 @@ export class StorageControl {
   }
   /** The public verification keys for a node. Only an authenticated node may ask (the route), only public halves are returned. */
   transferKeys(coordinatorId: string) { const keyring = this.deps.keyring ?? reject(503, 'STORAGE_UNAVAILABLE'); return { coordinatorId, keys: keyring.verificationKeys() }; }
-  rotateKeys() { return (this.deps.keyring ?? reject(503, 'STORAGE_UNAVAILABLE')).rotate(); }
+  /** A refused rotation (four live keys already) is a 409; a keyring that cannot be written is a 503. Neither leaks a library message. */
+  async rotateKeys() {
+    const keyring = this.deps.keyring ?? reject(503, 'STORAGE_UNAVAILABLE');
+    try { return await keyring.rotate(); } catch (error) { if (error instanceof KeyringError && error.code === 'KEYRING_LIMIT') reject(409, 'ROTATION_LIMIT'); throw error instanceof KeyringError ? new ApiError(503, 'STORAGE_UNAVAILABLE', 'storage unavailable') : error; }
+  }
 }
 /** The service registry is consulted at load so that a typo in the service id above is a start-up failure, not a silent no-op. */
 if (!(SERVICE in SERVICES)) throw new Error('storage service is not registered');
