@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { DEFAULT_PANEL_PORT, loadOrCreatePanelToken, panelUrl } from './panel-token.js';
 import { explainIdle } from './status.js';
 import { diagnose } from './doctor.js';
+import { gatherSettings, renderSettings } from './effective-settings.js';
 import { UnsafeBundleError, buildSupportBundle } from './support-bundle.js';
 import { checkForUpdate } from './update-check.js';
 import { SHELLS, completionScript } from './completions.js';
@@ -48,7 +49,7 @@ const done = (io: CliIo, parsed: Parsed, data: unknown, human: string): void => 
 const bytes = (n: number | null | undefined): string => n === null || n === undefined ? 'unlimited' : n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(n % 1024 ** 3 === 0 ? 0 : 1)} GiB` : n >= 1024 ** 2 ? `${Math.round(n / 1024 ** 2)} MiB` : `${Math.round(n / 1024)} KiB`;
 const ago = (at: number | null, now: number): string => at === null ? 'never' : `${Math.max(0, Math.round((now - at) / 1000))}s ago`;
 
-export const LOCAL_COMMANDS = ['status', 'pause', 'resume', 'config', 'policy', 'name', 'capability', 'slots', 'panel', 'support-bundle', 'update', 'completions'] as const;
+export const LOCAL_COMMANDS = ['status', 'pause', 'resume', 'config', 'policy', 'name', 'capability', 'slots', 'settings', 'panel', 'support-bundle', 'update', 'completions'] as const;
 
 /** `status`: the live document the running node publishes, or an offline view built from the files when it is not running. Never contacts the Coordinator. */
 async function statusCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
@@ -62,7 +63,7 @@ async function statusCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo):
   }
   // Not running (or the snapshot is stale): say so, and still show what the files say.
   const local = await readLocalState(stateDir); const pause = activePause(local.state.pause, now);
-  const resolved = await resolvePolicy(stateDir, env.PRIVANODE_POLICY_FILE).catch(() => undefined);
+  const resolved = await resolvePolicy(stateDir, env.PRIVANODE_POLICY_FILE, { locked: env.PRIVANODE_POLICY_LOCKED === 'true' }).catch(() => undefined);
   const idle = explainIdle({ now, node: null, report: null, engine: null, pause, localStateProblem: local.kind === 'error' ? local.code : undefined });
   const offline = { running: false, lastSeenAt: file?.publishedAt ?? null, localName: local.state.name ?? null, pause: pause ?? null, preset: resolved ? detectPreset(resolved.policy) : null,
     policySource: resolved?.source ?? null, disabledCapabilities: local.state.disabledCapabilities, idle };
@@ -122,15 +123,16 @@ async function readPolicyArg(path: string): Promise<string> {
 async function policyCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
   const parsed = parse(argv, { flags: [...COMMON.flags, '--force'], values: COMMON.values }); const stateDir = stateDirOf(parsed, env); const [action, arg] = parsed.positional;
   const context = () => { const enrolled = (() => { try { return readEnrollmentRecordSync(stateDir)?.capabilities; } catch { return undefined; } })(); return { jobSlots: Number(env.PRIVANODE_JOB_SLOTS ?? 1) || 1, ...(enrolled ? { capabilities: enrolled } : {}) }; };
+  if ((action === 'import' || action === 'reset' || action === 'preset') && env.PRIVANODE_POLICY_LOCKED === 'true') throw new PolicyError('POLICY_LOCKED_BY_ENVIRONMENT', ['PRIVANODE_POLICY_LOCKED=true: the policy file is authoritative here; change that file (or unset the lock) instead']);
   switch (action) {
     case 'show': {
-      const resolved = await resolvePolicy(stateDir, env.PRIVANODE_POLICY_FILE);
+      const resolved = await resolvePolicy(stateDir, env.PRIVANODE_POLICY_FILE, { locked: env.PRIVANODE_POLICY_LOCKED === 'true' });
       done(io, parsed, { source: resolved.source, preset: detectPreset(resolved.policy), problem: resolved.problem ?? null, policy: resolved.policy }, [`Policy in force: ${resolved.source.kind === 'defaults' ? 'conservative defaults' : resolved.source.kind === 'saved' ? `saved policy (${resolved.source.path})` : `policy file (${resolved.source.path})`}; preset: ${detectPreset(resolved.policy)}.`, JSON.stringify(resolved.policy, null, 2)].join('\n'));
       return 0;
     }
     case 'export': {
       if (!arg || parsed.positional.length !== 2) throw new UsageError('usage: privanet-node policy export FILE [--force]');
-      const resolved = await resolvePolicy(stateDir, env.PRIVANODE_POLICY_FILE);
+      const resolved = await resolvePolicy(stateDir, env.PRIVANODE_POLICY_FILE, { locked: env.PRIVANODE_POLICY_LOCKED === 'true' });
       let fd: number;
       try { fd = openSync(arg, fsConstants.O_WRONLY | fsConstants.O_CREAT | (parsed.flags.has('--force') ? fsConstants.O_TRUNC : fsConstants.O_EXCL) | (fsConstants.O_NOFOLLOW ?? 0), 0o600); }
       catch { io.err(`Cannot create ${arg} (it exists? add --force to overwrite).\n`); return 1; }
@@ -150,7 +152,7 @@ async function policyCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo):
     case 'preset': {
       const id = arg as PresetId | undefined;
       if (!id || !PRESET_IDS.includes(id) || parsed.positional.length !== 2) throw new UsageError(`usage: privanet-node policy preset ${PRESET_IDS.join('|')}`);
-      const resolved = await resolvePolicy(stateDir, env.PRIVANODE_POLICY_FILE); const next = applyPreset(resolved.policy, id);
+      const resolved = await resolvePolicy(stateDir, env.PRIVANODE_POLICY_FILE, { locked: env.PRIVANODE_POLICY_LOCKED === 'true' }); const next = applyPreset(resolved.policy, id);
       await savePolicyFile(stateDir, next, id);
       done(io, parsed, { ok: true, preset: id }, `Preset "${PRESETS[id].label}" applied: ${PRESETS[id].summary} Your schedule and per-capability limits were kept.`);
       return 0;
@@ -169,6 +171,17 @@ async function nameCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): P
     return 0;
   }
   throw new UsageError('usage: privanet-node name show|clear|set NAME');
+}
+/** `settings`: what the node is using and where each value comes from (environment, saved, enrollment, installer file, default), and what the panel and CLI cannot change because the environment sets it. */
+async function settingsCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
+  const parsed = parse(argv, COMMON); const stateDir = stateDirOf(parsed, env);
+  if (parsed.positional.length > 1 || (parsed.positional[0] !== undefined && parsed.positional[0] !== 'show')) throw new UsageError('usage: privanet-node settings [show] [--json]');
+  let running: number | undefined;
+  try { const file = StatusFileSchema.parse(JSON.parse(await readPrivateFileUpTo(join(stateDir, STATUS_FILE), 262144))); if (Date.now() - file.publishedAt <= STATUS_STALE_MS) running = (file.status as { jobs?: { slots?: { configured?: number } } }).jobs?.slots?.configured; } catch { /* not running */ }
+  const { settings, localProblem, policyProblem } = await gatherSettings(env, stateDir, Date.now(), running);
+  done(io, parsed, { ...settings, ...(localProblem ? { localStateProblem: localProblem } : {}), ...(policyProblem ? { policyProblem } : {}) },
+    [renderSettings(settings), localProblem ? `PROBLEM ${localProblem}: local-state.json cannot be read; run "privanet-node config check", then fix or remove that file (the node stays paused until then).` : '', policyProblem ? `PROBLEM ${policyProblem}: the saved policy was not applied; run "privanet-node config check".` : ''].filter(Boolean).join('\n'));
+  return localProblem || policyProblem ? 1 : 0;
 }
 /** `slots`: how many jobs may run at once. Saved in the local state; it applies the next time the node starts, and an explicit PRIVANODE_JOB_SLOTS (when set) takes priority. */
 async function slotsCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
@@ -215,18 +228,19 @@ async function panelCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): 
 async function supportBundleCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
   const parsed = parse(argv, { flags: [...COMMON.flags, '--no-network', '--stdout'], values: [...COMMON.values, '--log-file'] });
   const stateDir = stateDirOf(parsed, env); const now = Date.now();
-  const resolved = await resolvePolicy(stateDir, env.PRIVANODE_POLICY_FILE).catch(() => undefined);
+  const resolved = await resolvePolicy(stateDir, env.PRIVANODE_POLICY_FILE, { locked: env.PRIVANODE_POLICY_LOCKED === 'true' }).catch(() => undefined);
   if (!resolved) { io.err('The policy could not be read; run `privanet-node config check`.\n'); return 1; }
   const local = await readLocalState(stateDir);
   let status: Record<string, unknown> | undefined;
   try { const file = StatusFileSchema.parse(JSON.parse(await readPrivateFileUpTo(join(stateDir, STATUS_FILE), 262144))); if (now - file.publishedAt <= STATUS_STALE_MS) status = file.status; } catch { /* the node is not running */ }
   const config = await checkConfig({ ...env, PRIVANODE_STATE_DIR: stateDir }).catch(() => undefined);
+  const gathered = await gatherSettings(env, stateDir, now, (status as { jobs?: { slots?: { configured?: number } } } | undefined)?.jobs?.slots?.configured).catch(() => undefined);
   const doctor = parsed.flags.has('--no-network') ? undefined : await diagnose({ stateDir, allowInsecureLoopback: env.PRIVANODE_ALLOW_INSECURE_LOOPBACK === 'true', timeoutMs: 8000, env }).catch(() => undefined);
   let logText: string | undefined;
   const logFile = parsed.values.get('--log-file');
   if (logFile) { try { const { readFileSync, statSync } = await import('node:fs'); const size = statSync(logFile).size; logText = readFileSync(logFile, 'utf8').slice(-Math.min(size, 120000)); } catch { io.err('The log file could not be read; continuing without it.\n'); } }
   let bundle: Record<string, unknown>;
-  try { bundle = buildSupportBundle({ env, now, policy: resolved, local: local.state, ...(local.kind === 'error' ? { localProblem: local.code } : {}), status, doctor, logText }); }
+  try { bundle = buildSupportBundle({ env, now, policy: resolved, local: local.state, ...(local.kind === 'error' ? { localProblem: local.code } : {}), status, doctor, logText, settings: gathered?.settings }); }
   catch (error) { if (error instanceof UnsafeBundleError) { io.err(`No bundle was written: something that looks like a secret (${error.kind}) survived redaction. This is a bug in the redaction rules; please report it without attaching anything.\n`); return 1; } throw error; }
   if (config) bundle.configurationCheck = { ok: config.ok, findings: config.findings.map(finding => ({ severity: finding.severity, id: finding.id, ...(finding.setting ? { setting: finding.setting } : {}) })) };
   const text = JSON.stringify(bundle, null, 2) + '\n';
@@ -241,7 +255,7 @@ async function supportBundleCommand(argv: string[], env: NodeJS.ProcessEnv, io: 
 
 /** `update check`: a user-initiated, read-only question to the project's release address (see update-check.ts). */
 async function updateCommand(argv: string[], io: CliIo): Promise<number> {
-  const parsed = parse(argv, { flags: ['--json', '--help'] });
+  const parsed = parse(argv, COMMON);
   if (parsed.positional[0] !== 'check' || parsed.positional.length !== 1) throw new UsageError('usage: privanet-node update check [--json]');
   const result = await checkForUpdate();
   done(io, parsed, result, [result.message, result.releaseUrl ? `  release notes: ${result.releaseUrl}` : '', result.howToUpgrade ? `  ${result.howToUpgrade}` : ''].filter(Boolean).join('\n'));
@@ -262,6 +276,7 @@ const USAGE = `Usage: privanet-node COMMAND [options]
   name show|set NAME|clear             this machine's local display name
   capability enable|disable NAME       switch an enrolled capability on or off
   slots show|set N|clear               how many jobs may run at once (applies at the next start)
+  settings [--json]                    what the node is using and where each value comes from; what the environment locks
   panel                                how to open the local control panel
   support-bundle [FILE] [--no-network] [--log-file F]    a sanitized troubleshooting file you can share
   update check [--json]                ask GitHub (only now) whether a newer release exists; nothing is downloaded or installed
@@ -280,6 +295,7 @@ export async function runLocal(command: string, argv: string[], env: NodeJS.Proc
       case 'config': return await configCommand(argv, env, io);
       case 'policy': return await policyCommand(argv, env, io);
       case 'name': return await nameCommand(argv, env, io);
+      case 'settings': return await settingsCommand(argv, env, io);
       case 'slots': return await slotsCommand(argv, env, io);
       case 'capability': return await capabilityCommand(argv, env, io);
       case 'panel': return await panelCommand(argv, env, io);
@@ -291,6 +307,7 @@ export async function runLocal(command: string, argv: string[], env: NodeJS.Proc
   } catch (error) {
     if (error instanceof UsageError) { io.err(`${error.message}\n`); return EXIT_USAGE; }
     if (error instanceof PolicyError) { io.err(`Not accepted: ${error.code}${error.issues.length ? '\n  ' + error.issues.join('\n  ') : ''}\n`); return 1; }
+    if (error instanceof Error && /^LOCAL_STATE_/.test(error.message)) { io.err(`${command} failed: ${error.message}. The saved local choices (local-state.json in the state directory) cannot be read, so nothing was changed. Run "privanet-node config check"; then fix that file or move it aside (the node stays paused until you do).\n`); return 1; }
     io.err(`${command} failed${error instanceof Error && /^(LOCAL_STATE_|Unsafe|State directory)/.test(error.message) ? `: ${error.message}` : ' (check the state directory exists and is private)'}\n`); return 1;
   }
 }

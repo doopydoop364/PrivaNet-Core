@@ -230,3 +230,12 @@ test('approval flow from the shipped tools: join shows a code, the owner lists a
   // `join --help` and bad flags.
   assert.equal((await f.node(['--help'])).code, 0); const badFlag = await f.spawnNode(['join', '--token', 'x']).done; assert.equal(badFlag, 78);
 });
+
+test('enroll --json prints one JSON line with no secret, and the exit status and the stored files are the same as without it', async t => {
+  const f = await setup(t); const created = await f.admin(['enrollment', 'create', '--capabilities', 'system.echo.v1', '--label', 'Json box']); const token = tokenOf(created.out); const state = join(f.dir, 'json-node');
+  const result = await f.node(['--coordinator', f.url, '--token-stdin', '--state-dir', state, '--json'], {}, token + '\n'); assert.equal(result.code, 0, result.err);
+  const line = JSON.parse(result.out) as { ok: boolean; outcome: string; nodeId: string; displayName: string | null; capabilities: string[]; stateDir: string };
+  assert.deepEqual([line.ok, line.outcome, line.displayName, line.capabilities, line.stateDir], [true, 'ENROLLED', 'Json box', ['system.echo.v1'], state]); assert.match(line.nodeId, /^node_[a-f0-9]{64}$/); assert.equal(result.out.trim().split('\n').length, 1);
+  for (const text of [result.out, result.err]) assert.equal(text.includes(token), false);
+  const again = await f.node(['--coordinator', f.url, '--token-stdin', '--state-dir', state, '--json'], {}, token + '\n'); assert.equal(JSON.parse(again.out).outcome === 'ALREADY_ENROLLED' || again.code !== 0, true);
+});

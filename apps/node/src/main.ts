@@ -25,6 +25,7 @@ import { diagnose } from './doctor.js';
 import type { PanelHandle } from './panel.js';
 import { DEFAULT_PANEL_PORT } from './panel-token.js';
 import { jobSlotsChoice, readLocalState } from './local-state.js';
+import { gatherSettings } from './effective-settings.js';
 import { checkForUpdate } from './update-check.js';
 import { STATUS_FILE, STATUS_PUBLISH_MS } from './status-file.js';
 import { privateDirectory, replacePrivateFile } from '@privanet/shared';
@@ -59,7 +60,7 @@ async function main() {
   const logs = new LogRing();
   const log = (entry: { event: string; code?: string; reason?: string }) => { logs.push(entry); console.log(JSON.stringify(entry)); };
   // The owner's saved policy (from the panel or `policy import`) wins over the installer's file while it is good; a damaged or newer one is not applied and not overwritten.
-  const resolved = await resolvePolicy(config.stateDir, process.env.PRIVANODE_POLICY_FILE).catch(() => ({ policy: installedPolicy, source: { kind: 'defaults' } as const }));
+  const resolved = await resolvePolicy(config.stateDir, process.env.PRIVANODE_POLICY_FILE, { locked: process.env.PRIVANODE_POLICY_LOCKED === 'true' }).catch(() => ({ policy: installedPolicy, source: { kind: 'defaults' } as const }));
   const policy = resolved.policy;
   if ('problem' in resolved && resolved.problem) log({ event: 'node.policy_invalid', code: resolved.problem.code });
   const transfer = new TransferMeter({ stateDir: config.stateDir, ratePerSec: policy.maxBandwidthBytesPerSec, monthlyBytes: policy.monthlyTransferBytes });
@@ -73,7 +74,7 @@ async function main() {
   const slots = jobSlotsChoice(config.jobSlots, process.env.PRIVANODE_JOB_SLOTS !== undefined, earlyLocal.kind === 'error' ? undefined : earlyLocal.state.jobSlots);
   const node = new PrivaNode({ ...config, jobSlots: slots.value, handlers, engine, transfer, checkpoints, log });
   const history = new ResourceHistory(config.stateDir);
-  const control = new LocalControl({ stateDir: config.stateDir, envPolicyFile: process.env.PRIVANODE_POLICY_FILE, node, engine, transfer, history, log, jobSlots: { running: slots.value, fromEnvironment: slots.source === 'environment' }, onChange: () => { void publish(); } });
+  const control = new LocalControl({ stateDir: config.stateDir, envPolicyFile: process.env.PRIVANODE_POLICY_FILE, node, engine, transfer, history, log, jobSlots: { running: slots.value, fromEnvironment: slots.source === 'environment' }, policyLocked: process.env.PRIVANODE_POLICY_LOCKED === 'true', onChange: () => { void publish(); } });
   // The snapshot `privanet-node status` reads: private, replaced atomically, no secrets (see status-document.ts).
   const publish = async () => {
     try { await replacePrivateFile(join(await privateDirectory(config.stateDir), STATUS_FILE), JSON.stringify({ version: 1, publishedAt: Date.now(), status: buildStatus({ node, engine, control, transfer, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities }) })); } catch { /* status is a convenience */ }
@@ -97,7 +98,7 @@ async function main() {
     try {
       if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('bad port');
       panel = await startPanel({ stateDir: config.stateDir, port, node, engine, control, transfer, history, logs, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities, jobSlots: slots.value, env: process.env, actions,
-        supportBundle: async () => buildSupportBundle({ env: process.env, policy: resolved, local: control.view.local, localProblem: control.view.localProblem, status: JSON.parse(JSON.stringify(buildStatus({ node, engine, control, transfer, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities }))) as Record<string, unknown>,
+        supportBundle: async () => buildSupportBundle({ env: process.env, settings: (await gatherSettings(process.env, config.stateDir, Date.now(), slots.value)).settings, policy: resolved, local: control.view.local, localProblem: control.view.localProblem, status: JSON.parse(JSON.stringify(buildStatus({ node, engine, control, transfer, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities }))) as Record<string, unknown>,
           doctor: await diagnose({ url: config.url, stateDir: config.stateDir, allowInsecureLoopback: process.env.PRIVANODE_ALLOW_INSECURE_LOOPBACK === 'true', timeoutMs: 8000, env: process.env }).catch(() => undefined), logs: logs.recent(200) }), updateCheck: () => checkForUpdate() });
       log({ event: 'panel.listening', code: String(panel.port) });
     } catch { log({ event: 'panel.unavailable', code: 'LISTEN_FAILED' }); }

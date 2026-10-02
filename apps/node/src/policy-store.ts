@@ -17,7 +17,7 @@ const PresetLabel = z.enum(['minimal', 'balanced', 'generous', 'maximum-idle']);
 export const PolicyFileSchema = z.strictObject({ version: z.literal(POLICY_FILE_VERSION), preset: PresetLabel.optional(), savedAt: z.number().int().min(0), policy: ResourcePolicySchema });
 export type PolicyFile = z.infer<typeof PolicyFileSchema>;
 
-export type PolicyProblemCode = 'POLICY_FILE_INVALID' | 'POLICY_FILE_NEWER' | 'POLICY_FILE_UNSAFE' | 'UNSAFE_LOCAL_NOT_ALLOWED' | 'POLICY_TOO_LARGE' | 'POLICY_NOT_JSON' | 'JOB_SLOTS_SET_BY_ENVIRONMENT';
+export type PolicyProblemCode = 'POLICY_FILE_INVALID' | 'POLICY_FILE_NEWER' | 'POLICY_FILE_UNSAFE' | 'UNSAFE_LOCAL_NOT_ALLOWED' | 'POLICY_TOO_LARGE' | 'POLICY_NOT_JSON' | 'JOB_SLOTS_SET_BY_ENVIRONMENT' | 'POLICY_LOCKED_BY_ENVIRONMENT';
 /** A policy that cannot be accepted. `issues` name the settings (paths) that are wrong, never a file's raw contents. */
 export class PolicyError extends Error {
   constructor(readonly code: PolicyProblemCode, readonly issues: string[] = []) { super(code); this.name = 'PolicyError'; }
@@ -77,7 +77,7 @@ export async function removePolicyFile(stateDir: string): Promise<boolean> {
 }
 
 export type PolicySource = { kind: 'defaults' } | { kind: 'env-file'; path: string } | { kind: 'saved'; path: string; preset?: string };
-export interface ResolvedPolicy { policy: ResourcePolicy; source: PolicySource; problem?: { code: PolicyProblemCode; issues: string[]; fellBackTo: 'env-file' | 'defaults' } }
+export interface ResolvedPolicy { policy: ResourcePolicy; source: PolicySource; /** True when PRIVANODE_POLICY_LOCKED made the policy file authoritative (a saved policy is ignored and cannot be changed). */ locked?: boolean; problem?: { code: PolicyProblemCode; issues: string[]; fellBackTo: 'env-file' | 'defaults' } }
 /** The file the installer wrote (or nothing), strictly as before. */
 export function readBasePolicy(envFile: string | undefined): { policy: ResourcePolicy; source: PolicySource } {
   if (envFile === undefined) return { policy: ResourcePolicySchema.parse({}), source: { kind: 'defaults' } };
@@ -87,7 +87,9 @@ export function readBasePolicy(envFile: string | undefined): { policy: ResourceP
  * The policy in force: the owner's saved policy when there is a good one, otherwise the installer's file, otherwise the conservative defaults. A saved policy that is
  * damaged or from a newer version is not applied and not overwritten: the fallback is used and `problem` says why, so nothing is silently discarded or silently trusted.
  */
-export async function resolvePolicy(stateDir: string, envFile: string | undefined): Promise<ResolvedPolicy> {
+export async function resolvePolicy(stateDir: string, envFile: string | undefined, options: { locked?: boolean } = {}): Promise<ResolvedPolicy> {
+  // Locked by the administrator: the installer's file (or the defaults) is the policy; a saved policy is neither read nor changed.
+  if (options.locked) return { ...readBasePolicy(envFile), locked: true };
   const saved = await readPolicyFile(stateDir);
   const base = readBasePolicy(envFile);
   if (saved.kind === 'ok') return { policy: saved.file.policy, source: { kind: 'saved', path: policyFilePath(stateDir), ...(saved.file.preset ? { preset: saved.file.preset } : {}) } };

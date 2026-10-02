@@ -19,6 +19,8 @@ export interface LocalControlOptions {
   history?: ResourceHistory | undefined; clock?: () => number; log?: (entry: { event: string; code?: string }) => void;
   /** Used to decide when the machine has rebooted (a "until reboot" pause); injectable for tests. */
   bootTime?: () => number;
+  /** True when PRIVANODE_POLICY_LOCKED is set: policy changes are refused and a saved policy is ignored. */
+  policyLocked?: boolean;
   /** The job slots this process started with, and whether PRIVANODE_JOB_SLOTS set them (then a saved choice cannot override it). */
   jobSlots?: { running: number; fromEnvironment: boolean };
   /** Called after a change has been applied, so the status snapshot can be republished at once. */
@@ -65,7 +67,7 @@ export class LocalControl {
     this.options.engine.setOwnerPause(this.pauseNow);
   }
   private async reloadPolicy(): Promise<void> {
-    const next = await resolvePolicy(this.options.stateDir, this.options.envPolicyFile).catch(() => undefined);
+    const next = await resolvePolicy(this.options.stateDir, this.options.envPolicyFile, { locked: this.options.policyLocked === true }).catch(() => undefined);
     if (!next) return;
     if (next.problem && this.resolved) { this.resolved = { ...this.resolved, problem: next.problem }; this.options.log?.({ event: 'node.policy_invalid', code: next.problem.code }); return; }
     this.resolved = next; this.options.engine.setPolicy(next.policy);
@@ -94,7 +96,7 @@ export class LocalControl {
       preset: policy ? detectPreset(policy.policy) : 'custom' as const,
       /** Settings changed since start-up that only take effect after a restart (the web-fetch limits are built into the handler when the node starts). */
       restartRequired: [...(policy && JSON.stringify(policy.policy.fetch) !== this.startupFetch ? ['fetch'] : []), ...(this.jobSlotsPending ? ['job slots'] : [])] as string[],
-      jobSlots: this.jobSlotsView };
+      jobSlots: this.jobSlotsView, policyLocked: this.options.policyLocked === true };
   }
   private get jobSlotsView() {
     const slots = this.options.jobSlots; const saved = this.local.jobSlots ?? null;
@@ -103,7 +105,9 @@ export class LocalControl {
   private get jobSlotsPending(): boolean { const slots = this.options.jobSlots; return !!slots && !slots.fromEnvironment && this.local.jobSlots !== undefined && this.local.jobSlots !== slots.running; }
 
   // ---- changes: each validates, writes atomically, then applies at once ----
+  private assertPolicyEditable(): void { if (this.options.policyLocked) throw new PolicyError('POLICY_LOCKED_BY_ENVIRONMENT'); }
   async savePolicy(policy: ResourcePolicy, context: { jobSlots: number; capabilities: JobType[] }): Promise<{ findings: ReturnType<typeof policyFindings> }> {
+    this.assertPolicyEditable();
     const findings = policyFindings(policy, context);
     if (findings.some(finding => finding.severity === 'error')) throw new PolicyError('POLICY_FILE_INVALID', findings.filter(finding => finding.severity === 'error').map(finding => finding.message));
     await savePolicyFile(this.options.stateDir, policy, detectPreset(policy), this.clock());
@@ -114,7 +118,7 @@ export class LocalControl {
     const current = this.resolved?.policy; if (!current) throw new Error('POLICY_NOT_READY');
     return this.savePolicy(applyPreset(current, id), context);
   }
-  async resetPolicy(): Promise<void> { await removePolicyFile(this.options.stateDir); await this.reloadPolicy(); this.stamps.policy = policyStamp(this.options.stateDir); this.options.onChange?.(); }
+  async resetPolicy(): Promise<void> { this.assertPolicyEditable(); await removePolicyFile(this.options.stateDir); await this.reloadPolicy(); this.stamps.policy = policyStamp(this.options.stateDir); this.options.onChange?.(); }
   async pause(request: PauseRequest): Promise<void> {
     const now = this.clock();
     await updateLocalState(this.options.stateDir, state => ({ ...state, pause: makePause(request, now, this.options.bootTime?.()) }));

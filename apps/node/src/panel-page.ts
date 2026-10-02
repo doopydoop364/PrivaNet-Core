@@ -58,7 +58,7 @@ function show(name) { current = name; TABS.forEach(function (t) { $('tab-' + t[0
 var flash = null;
 function toast(el, message, bad) { flash = { text: (bad ? 'WARNING: ' : 'OK: ') + message, bad: !!bad, at: Date.now() }; clear(el); el.appendChild(h('p', { role: 'alert', class: bad ? 'note err' : 'note', text: flash.text })); }
 function flashNode() { return flash && Date.now() - flash.at < 12000 ? h('p', { role: 'alert', class: flash.bad ? 'card err' : 'card', text: flash.text }) : null; }
-function act(path, body, el, ok) { return api('POST', path, body).then(function (r) { if (r.status === 200) { if (ok) ok(r.body); refresh(); } else toast(el, (r.body.error && r.body.error.code || 'failed') + (r.body.error && r.body.error.issues ? ': ' + r.body.error.issues.join('; ') : ''), true); }); }
+function act(path, body, el, ok) { return api('POST', path, body).then(function (r) { if (r.status === 200) { if (ok) ok(r.body); refresh(); } else toast(el, (r.body.error && r.body.error.code || 'failed') + (r.body.error && r.body.error.issues ? ': ' + r.body.error.issues.join('; ') : '') + (r.body.error && r.body.error.hint ? ' ' + r.body.error.hint : ''), true); }); }
 
 function renderStatus(s) {
   var root = clear($('tab-status')); var idle = s.idle; var c = s.contribution; { var fl = flashNode(); if (fl) root.appendChild(fl); }
@@ -72,6 +72,15 @@ function renderStatus(s) {
     h('div', { class: 'card' }, h('h3', { text: 'Coordinator' }), kv('Host', s.coordinator.host), kv('Connection', s.connection.state.toUpperCase()), kv('Last contact', ago(s.connection.lastContactAt)), kv('Version / protocol', (s.coordinator.serviceVersion || '?') + ' / ' + (s.coordinator.protocolVersion || '?')), kv('Compatibility', s.coordinator.compatibility.state + ': ' + s.coordinator.compatibility.message)),
     h('div', { class: 'card' }, h('h3', { text: 'Contribution' }), kv('Mode', pause), kv('Schedule says', c.scheduleLevel), kv('Preset', c.preset), kv('Pressure', c.pressure), kv('Policy in force', c.policySource ? c.policySource.kind : 'defaults'),
       kv('Jobs', s.jobs.active.length + ' running; ' + s.jobs.slots.effective + ' slot(s)'), kv('Counters', 'completed ' + s.jobs.counters.completed + ', failed ' + s.jobs.counters.failed + ', preempted ' + s.jobs.counters.preempted))));
+  var L = s.limits; var cfg = L.configured || {}; var per = L.permitted || {}; var me = L.measured || {}; var tr = L.transfer;
+  root.appendChild(h('div', { class: 'card' }, h('h3', { text: 'What this node may use right now' }), h('p', { class: 'note', text: 'Your limits are absolute. "Allowed now" is what the node is offering at this moment after your schedule, battery rules and what you are doing on the machine; "Your limit" is the setting. These are budgets and host samples, not a measure of work done.' }),
+    h('table', null, h('tr', null, ['', 'Allowed now', 'Your limit'].map(function (x) { return h('th', { text: x }); })),
+      h('tr', null, h('td', { text: 'CPU' }), h('td', { text: per.cpuPercent + '%' }), h('td', { text: cfg.maxCpuPercent + '% (always leaves ' + cfg.reserveCpuPercent + '% to you)' })),
+      h('tr', null, h('td', { text: 'Memory' }), h('td', { text: bytes(per.memoryBytes) }), h('td', { text: bytes(cfg.maxMemoryBytes) + ' (always leaves ' + bytes(cfg.reserveMemoryBytes) + ' free)' })),
+      h('tr', null, h('td', { text: 'Scratch disk' }), h('td', { text: per.diskBytes == null ? 'not reported' : bytes(per.diskBytes) }), h('td', { text: bytes(cfg.maxDiskBytes) + ' (always leaves ' + bytes(cfg.reserveDiskBytes) + ' free; I/O ' + cfg.maxDiskIo + ')' })),
+      h('tr', null, h('td', { text: 'Network' }), h('td', { text: per.networkBytes == null ? 'not reported' : bytes(per.networkBytes) }), h('td', { text: (cfg.maxBandwidthBytesPerSec == null ? 'no rate cap' : bytes(cfg.maxBandwidthBytesPerSec) + '/s') + '; monthly ' + (tr ? bytes(tr.remainingBytes) + ' left of ' + bytes(tr.monthlyBytes) : (cfg.monthlyTransferBytes == null ? 'no cap' : bytes(cfg.monthlyTransferBytes))) })),
+      h('tr', null, h('td', { text: 'Power / battery' }), h('td', { text: String(me.power) }), h('td', { text: 'on battery: ' + cfg.onBattery })),
+      h('tr', null, h('td', { text: 'Your own CPU use' }), h('td', { text: Math.round(me.ownerCpuPercent) + '%' }), h('td', { text: 'free memory above your reserve: ' + bytes(me.memoryHeadroomBytes) })))));
   c.problems.forEach(function (p) { root.appendChild(h('div', { class: 'card err' }, h('strong', { text: 'PROBLEM ' + p.code }), h('div', { text: p.issues.join('; ') }))); });
   if (c.restartRequired.length) root.appendChild(h('div', { class: 'card' }, 'Restart needed for: ' + c.restartRequired.join(', ')));
   var msg = h('div', { id: 'statusmsg' });
@@ -97,10 +106,11 @@ function renderContribute(d) {
   if (dirty) return; policyDoc = d; var root = clear($('tab-contribute')); var msg = h('div'); var p = d.policy; { var fl = flashNode(); if (fl) root.appendChild(fl); }
   if (!p) { root.appendChild(h('p', { text: 'The policy is not available yet.' })); return; }
   root.appendChild(h('div', { class: 'card' }, h('h3', { text: 'Contribution preset' }), h('p', { class: 'note', text: 'Presets change the limits below; your schedule and per-capability limits are kept. Changing any single value switches to Custom.' }),
-    h('div', { class: 'row' }, d.presets.map(function (pr) { return h('button', { 'aria-pressed': d.preset === pr.id ? 'true' : 'false', title: pr.summary, text: pr.label, on: { click: function () { act('/api/policy', { preset: pr.id }, msg, function (b) { toast(msg, 'Preset applied.'); dirty = false; }); } } }); }).concat([h('button', { 'aria-pressed': d.preset === 'custom' ? 'true' : 'false', disabled: true, text: 'Custom' })])),
+    h('div', { class: 'row' }, d.presets.map(function (pr) { return h('button', { 'aria-pressed': d.preset === pr.id ? 'true' : 'false', title: pr.summary, text: pr.label, disabled: !!d.locked, on: { click: function () { act('/api/policy', { preset: pr.id }, msg, function (b) { toast(msg, 'Preset applied.'); dirty = false; }); } } }); }).concat([h('button', { 'aria-pressed': d.preset === 'custom' ? 'true' : 'false', disabled: true, text: 'Custom' })])),
     h('p', { class: 'note', text: d.source ? 'Policy in force: ' + (d.source.kind === 'saved' ? 'saved from this panel/CLI' : d.source.kind === 'env-file' ? 'the installer\\'s policy file (read only)' : 'conservative defaults') + '.' : '' })));
+  if (d.locked) root.appendChild(h('div', { class: 'card err', role: 'status' }, h('strong', { text: 'LOCKED: ' }), 'The administrator set PRIVANODE_POLICY_LOCKED in this node\\'s environment, so the policy file is authoritative. The limits below are shown but cannot be changed from this panel; edit the policy file (or unset the lock) and restart.'));
   var inputs = {}; var form = h('div', { class: 'card' }, h('h3', { text: 'Resource limits' }), h('p', { class: 'note', text: 'Your limits are absolute: the Coordinator can never raise them.' }));
-  FIELDS.forEach(function (f) { var input = h('input', { type: 'number', step: 'any', value: String(toUi(f[2], p[f[0]])), 'aria-label': f[1], on: { input: function () { dirty = true; } } }); inputs[f[0]] = [input, f[2]]; form.appendChild(h('label', null, f[1] + ' ', input)); });
+  FIELDS.forEach(function (f) { var input = h('input', { type: 'number', step: 'any', value: String(toUi(f[2], p[f[0]])), 'aria-label': f[1], disabled: !!d.locked, on: { input: function () { dirty = true; } } }); inputs[f[0]] = [input, f[2]]; form.appendChild(h('label', null, f[1] + ' ', input)); });
   var selects = {};
   [['defaultLevel', 'Mode when no schedule rule applies', ['OFF', 'MINIMAL', 'ADAPTIVE', 'FULL']], ['maxDiskIo', 'Disk-I/O class', ['none', 'low', 'medium', 'high']], ['onBattery', 'On battery', ['normal', 'reduce', 'disable']]].forEach(function (s) {
     var sel = h('select', { 'aria-label': s[1], on: { change: function () { dirty = true; } } }, s[2].map(function (o) { return h('option', { value: o, text: o, selected: p[s[0]] === o }); })); selects[s[0]] = sel; form.appendChild(h('label', null, s[1] + ' ', sel)); });
@@ -116,19 +126,26 @@ function renderContribute(d) {
       sched.appendChild(h('div', { class: 'row' }, days, ' from ', from, ' to ', to, ' ', lvl, h('button', { text: 'Remove', on: { click: function () { dirty = true; rules.splice(i, 1); drawSchedule(); } } }))); });
     sched.appendChild(h('button', { text: 'Add a rule', on: { click: function () { dirty = true; rules.push({ days: [1, 2, 3, 4, 5], from: '09:00', to: '17:00', level: 'OFF' }); drawSchedule(); } } })); }
   drawSchedule();
-  var save = h('button', { class: 'primary', text: 'Save changes', on: { click: function () {
+  var save = h('button', { class: 'primary', text: 'Save changes', disabled: !!d.locked, on: { click: function () {
     var next = JSON.parse(JSON.stringify(p)); var bad = null;
     for (var k in inputs) { var v = fromUi(inputs[k][1], inputs[k][0].value); if (v !== null && (typeof v !== 'number' || isNaN(v))) bad = k; next[k] = v; }
     for (var s in selects) next[s] = selects[s].value; next.schedule = rules;
     if (bad) { toast(msg, 'Check the value for ' + bad + '.', true); return; }
     act('/api/policy', { policy: next }, msg, function (b) { dirty = false; toast(msg, 'Saved and applied.' + (b.findings.length ? ' ' + b.findings.map(function (x) { return x.severity.toUpperCase() + ': ' + x.message; }).join(' ') : '') + (b.restartRequired.length ? ' Restart needed for: ' + b.restartRequired.join(', ') : '')); }); } } });
   var reset = h('button', { text: 'Discard unsaved changes', on: { click: function () { dirty = false; refresh(); } } });
-  var undo = h('button', { text: 'Forget saved policy (use the installer\\'s)', on: { click: function () { if (confirm('Remove the policy saved from this panel?')) act('/api/policy', { reset: true }, msg, function () { dirty = false; toast(msg, 'Saved policy removed.'); }); } } });
+  var undo = h('button', { text: 'Forget saved policy (use the installer\\'s)', disabled: !!d.locked, on: { click: function () { if (confirm('Remove the policy saved from this panel?')) act('/api/policy', { reset: true }, msg, function () { dirty = false; toast(msg, 'Saved policy removed.'); }); } } });
   var caps = h('div', { class: 'card' }, h('h3', { text: 'Capabilities' }), h('p', { class: 'note', text: 'Only capabilities this node enrolled with can be switched. A switched-off capability is not advertised, so the Coordinator stops sending that kind of job.' }));
   var name = h('div', { class: 'card' }, h('h3', { text: 'Local name' }), h('p', { class: 'note', text: 'Shown only on this machine. The Coordinator\\'s label and the cryptographic node ID are separate.' }));
   var nameInput = h('input', { type: 'text', maxlength: '64', 'aria-label': 'Local name', placeholder: 'for example, My laptop' }); name.appendChild(h('div', { class: 'row' }, nameInput, h('button', { text: 'Save name', on: { click: function () { act('/api/name', { name: nameInput.value.trim() === '' ? null : nameInput.value.trim() }, msg, function () { toast(msg, 'Name saved.'); }); } } })));
   root.appendChild(form); root.appendChild(sched); root.appendChild(h('div', { class: 'row' }, save, reset, undo)); root.appendChild(msg); root.appendChild(caps); root.appendChild(name);
   d.findings.forEach(function (f) { root.appendChild(h('p', { class: 'note', text: f.severity.toUpperCase() + ': ' + f.message })); });
+  api('GET', '/api/settings').then(function (r) { if (r.status !== 200) return; var s = r.body; function row(k, v, locked) { return h('tr', null, h('th', { text: k }), h('td', { text: v + (locked ? ' (set by the environment: locked)' : '') })); }
+    var rows = [row('Job slots', s.jobSlots.value + ' [' + s.jobSlots.source + ']' + (s.jobSlots.restartRequired ? ', saved ' + s.jobSlots.saved + ', applies at the next start' : ''), s.jobSlots.locked),
+      row('Resource policy', s.policy.preset + ' [' + s.policy.source + ']', s.policy.locked),
+      row('Capabilities offered', (s.capabilities.advertised.join(', ') || 'none') + ' [' + s.capabilities.source + ']' + (s.capabilities.disabledByOwner.length ? '; switched off by you: ' + s.capabilities.disabledByOwner.join(', ') : ''), s.capabilities.source === 'environment'),
+      row('Coordinator', (s.coordinator.host || 'unknown') + ' [' + s.coordinator.source + '] (not editable here)', s.coordinator.source === 'environment'),
+      row('This panel', (s.panel.enabled ? 'on, port ' + s.panel.port : 'off') + ' [' + s.panel.source + '] (set in the environment)', false)];
+    root.appendChild(h('div', { class: 'card' }, h('h3', { text: 'Where each setting comes from' }), h('p', { class: 'note', text: 'An administrator\\'s environment setting wins over what you save here. Saved: your choice from this panel or the CLI. Default: nothing set.' }), h('table', null, rows))); });
   api('GET', '/api/status').then(function (r) { if (r.status !== 200) return; nameInput.value = r.body.node.localName || ''; r.body.capabilities.forEach(function (c) { var cb = h('input', { type: 'checkbox', checked: c.enabled, on: { change: function () { var off = []; caps.querySelectorAll('input[type=checkbox]').forEach(function (x) { if (!x.checked) off.push(x.getAttribute('data-id')); }); act('/api/capabilities', { disabled: off }, msg, function () { toast(msg, 'Capabilities updated.'); }); } } }); cb.setAttribute('data-id', c.id); caps.appendChild(h('label', null, cb, ' ' + c.id)); }); });
 }
 

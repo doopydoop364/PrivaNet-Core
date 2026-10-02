@@ -13,6 +13,8 @@ const schema = z.object({
   PRIVANODE_CAPABILITIES: z.string().default(''),
   PRIVANODE_ENROLLMENT_TOKEN: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   PRIVANODE_POLICY_FILE: z.string().min(1).optional(),
+  // true: the policy file is authoritative, so a policy saved from the panel or the CLI is ignored and cannot be changed there.
+  PRIVANODE_POLICY_LOCKED: z.enum(['true', 'false']).default('false'),
   PRIVANODE_DRAIN_TIMEOUT_MS: z.coerce.number().int().min(0).max(600000).default(30000),
   PRIVANODE_HEARTBEAT_MS: interval(5000), PRIVANODE_POLL_MS: interval(1000),
   // How long an idle poll may wait at the Coordinator for work (0 = plain polling). Falls back to plain polling against a Coordinator that does not support it.

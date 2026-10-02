@@ -1,5 +1,6 @@
 import { totalmem } from 'node:os';
 import { existsSync, lstatSync } from 'node:fs';
+import { join } from 'node:path';
 import { ZodError } from 'zod';
 import { CapabilitiesSchema, JOB_TYPES } from '@privanet/protocol';
 import type { JobType } from '@privanet/protocol';
@@ -65,9 +66,14 @@ export async function checkConfig(env: NodeJS.ProcessEnv): Promise<ConfigCheck> 
   if (!existsSync(stateDir)) findings.push({ severity: 'info', id: 'STATE_DIR_MISSING', setting: 'PRIVANODE_STATE_DIR', message: 'The state directory does not exist yet; it is created (private) when the node enrolls.' });
   else if (process.platform !== 'win32') { const stat = lstatSync(stateDir); if ((stat.mode & 0o077) !== 0) findings.push({ severity: 'error', id: 'STATE_DIR_NOT_PRIVATE', setting: 'PRIVANODE_STATE_DIR', message: 'The state directory is accessible to other users; it must be mode 700.' }); }
   if (env.PRIVANODE_POLICY_FILE !== undefined && !existsSync(env.PRIVANODE_POLICY_FILE)) findings.push({ severity: 'error', id: 'POLICY_FILE_MISSING', setting: 'PRIVANODE_POLICY_FILE', message: 'The policy file named by PRIVANODE_POLICY_FILE does not exist.' });
+  const local = await readLocalState(stateDir);
+  // The job slots that will apply at the next start: an explicit PRIVANODE_JOB_SLOTS, else the saved choice, else the default (so a saved number is checked against the policy too).
+  if (jobSlots !== undefined && env.PRIVANODE_JOB_SLOTS === undefined && local.state.jobSlots !== undefined) jobSlots = local.state.jobSlots;
+  if (env.PRIVANODE_JOB_SLOTS !== undefined && local.state.jobSlots !== undefined && local.state.jobSlots !== jobSlots) findings.push({ severity: 'info', id: 'JOB_SLOTS_ENVIRONMENT_WINS', setting: 'PRIVANODE_JOB_SLOTS', message: `PRIVANODE_JOB_SLOTS (${jobSlots}) is set, so the ${local.state.jobSlots} saved from the panel or "privanet-node slots" is not used. Unset the variable to use the saved number.` });
+  if (env.PRIVANODE_POLICY_LOCKED === 'true' && existsSync(join(stateDir, 'policy.json'))) findings.push({ severity: 'info', id: 'POLICY_LOCKED_SAVED_IGNORED', setting: 'PRIVANODE_POLICY_LOCKED', message: 'PRIVANODE_POLICY_LOCKED is true, so the policy saved from the panel or the CLI (policy.json) is ignored; the policy file is authoritative.' });
   let source = 'defaults'; let preset: string | undefined;
   try {
-    const resolved = await resolvePolicy(stateDir, env.PRIVANODE_POLICY_FILE);
+    const resolved = await resolvePolicy(stateDir, env.PRIVANODE_POLICY_FILE, { locked: env.PRIVANODE_POLICY_LOCKED === 'true' });
     source = resolved.source.kind === 'defaults' ? 'defaults' : `${resolved.source.kind === 'saved' ? 'saved policy' : 'policy file'} (${resolved.source.path})`;
     if (resolved.source.kind === 'saved' && resolved.source.preset) preset = resolved.source.preset;
     if (resolved.problem) findings.push({ severity: 'error', id: resolved.problem.code, message: `The saved policy was not applied (${resolved.problem.code}); the ${resolved.problem.fellBackTo === 'env-file' ? 'installer policy file' : 'conservative defaults'} apply instead. ${resolved.problem.issues.join('; ')}`.trim() });
@@ -75,7 +81,6 @@ export async function checkConfig(env: NodeJS.ProcessEnv): Promise<ConfigCheck> 
   } catch (error) {
     findings.push({ severity: 'error', id: 'POLICY_UNREADABLE', setting: 'PRIVANODE_POLICY_FILE', message: error instanceof PolicyError ? `The policy file is not acceptable (${error.code}). ${error.issues.join('; ')}`.trim() : 'The policy file could not be read or parsed.' });
   }
-  const local = await readLocalState(stateDir);
   if (local.kind === 'error') findings.push({ severity: 'error', id: local.code, message: 'The saved local choices (local-state.json) cannot be read; the node holds itself paused until they are fixed or the file is removed.' });
   return { ok: !findings.some(finding => finding.severity === 'error'), findings, policy: { source, ...(preset ? { preset } : {}) } };
 }

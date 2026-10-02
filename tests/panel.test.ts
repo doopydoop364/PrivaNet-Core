@@ -36,19 +36,19 @@ function call(port: number, method: string, path: string, options: { headers?: R
     req.on('error', reject); req.end(options.body);
   });
 }
-async function rig(t: TestContext, options: { clock?: () => number; actions?: { drainAndStop: () => void; restart: () => void } } = {}) {
+async function rig(t: TestContext, options: { clock?: () => number; actions?: { drainAndStop: () => void; restart: () => void }; policyLocked?: boolean; slotsFromEnvironment?: boolean; env?: NodeJS.ProcessEnv } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'privanet-panel-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const state = join(dir, 'state'); await mkdir(state, { mode: 0o700 }); await chmod(state, 0o700);
   const host: HostSample = { availableMemoryBytes: 12 * GiB, ownerCpuPercent: 3, power: 'AC', freeDiskBytes: 100 * GiB };
   const policy = ResourcePolicySchema.parse({ maxMemoryBytes: 8 * GiB });
   const engine = new ResourceEngine(policy, { sample: () => ({ ...host }) });
   const node = new PrivaNode({ url: 'https://127.0.0.1:9', stateDir: state, capabilities: ['system.echo.v1', 'web.fetch.v1'], engine });
-  const history = new ResourceHistory(state); const control = new LocalControl({ stateDir: state, node, engine, history, jobSlots: { running: 1, fromEnvironment: false } });
+  const history = new ResourceHistory(state); const control = new LocalControl({ stateDir: state, node, engine, history, jobSlots: { running: 1, fromEnvironment: options.slotsFromEnvironment === true }, ...(options.policyLocked ? { policyLocked: true } : {}) });
   await control.init({ policy, source: { kind: 'defaults' } }); engine.update();
   const calls = { drain: 0, restart: 0 }; const actions = options.actions ?? { drainAndStop: () => { calls.drain++; }, restart: () => { calls.restart++; } };
   const logs = new LogRing(); logs.push({ event: 'node.authenticated' });
   const panel = await startPanel({ stateDir: state, port: 0, node, engine, control, history, logs, coordinatorUrl: 'http://127.0.0.1:1', enrolledCapabilities: ['system.echo.v1', 'web.fetch.v1'], jobSlots: 1,
-    env: { PRIVANODE_ALLOW_INSECURE_LOOPBACK: 'true' }, actions, ...(options.clock ? { clock: options.clock } : {}),
+    env: { PRIVANODE_ALLOW_INSECURE_LOOPBACK: 'true', ...(options.env ?? {}) }, actions, ...(options.clock ? { clock: options.clock } : {}),
     supportBundle: async () => ({ ok: true }), updateCheck: async () => ({ message: 'up to date' }) });
   t.after(() => panel.close());
   const origin = `http://127.0.0.1:${panel.port}`;
@@ -64,7 +64,7 @@ async function rig(t: TestContext, options: { clock?: () => number; actions?: { 
   const get = (session: { cookie: string }, path: string) => call(panel.port, 'GET', path, { headers: { cookie: session.cookie } });
   return { dir, state, panel, origin, login, post, get, calls, control, engine, node, history, logs };
 }
-const API_GETS = ['/api/session', '/api/status', '/api/policy', '/api/jobs', '/api/history', '/api/logs', '/api/privacy'];
+const API_GETS = ['/api/session', '/api/status', '/api/policy', '/api/settings', '/api/jobs', '/api/history', '/api/logs', '/api/privacy'];
 
 test('the panel listens on loopback only, on a numeric loopback address, and not on any other interface', async t => {
   const r = await rig(t);
@@ -296,4 +296,29 @@ test('the real node program serves the panel on loopback, `status` and `pause` w
   for (const secretLike of [token, cookie.split('=')[1] ?? 'x', session.csrf as string, 'privateKey']) assert.equal(bundle.text.includes(secretLike), false, 'no secret in the panel\'s bundle');
   const drain = await call(port, 'POST', '/api/drain', { headers: { cookie, 'x-csrf-token': session.csrf, 'content-type': 'application/json', origin }, body: JSON.stringify({ confirm: true }) }); assert.equal(drain.status, 200);
   const code = await exited; assert.equal(code, 0, `the node stopped cleanly after "drain and stop" (${err.slice(0, 200)})`);
+});
+
+test('settings: the panel reports where each value comes from, and says plainly what the environment locks', async t => {
+  const r = await rig(t, { slotsFromEnvironment: true, env: { PRIVANODE_JOB_SLOTS: '1', PRIVANODE_COORDINATOR_URL: 'https://coordinator.example.org', PRIVANODE_PANEL_PORT: '4999' } }); const s = await r.login();
+  const settings = (await r.get(s, '/api/settings')).json();
+  assert.deepEqual([settings.jobSlots.source, settings.jobSlots.locked, settings.coordinator.source, settings.coordinator.host, settings.coordinator.editableHere, settings.panel.source, settings.panel.port, settings.updates.automatic], ['environment', true, 'environment', 'coordinator.example.org', false, 'environment', 4999, false]);
+  assert.equal((await r.post(s, '/api/jobslots', { slots: 5 })).status, 409, 'the panel does not pretend it can change a locked value'); assert.equal((await r.post(s, '/api/jobslots', { slots: 5 })).json().error.code, 'JOB_SLOTS_SET_BY_ENVIRONMENT');
+  assert.equal((await r.get(s, '/api/policy')).json().jobSlots.editable, false);
+  assert.doesNotMatch(JSON.stringify(settings), /token|secret|password/i);
+});
+
+test('a locked policy: shown, not editable from the panel, nothing written, and the saved file is not used', async t => {
+  const r = await rig(t, { policyLocked: true, env: { PRIVANODE_POLICY_LOCKED: 'true' } }); const s = await r.login();
+  assert.equal((await r.get(s, '/api/policy')).json().locked, true);
+  for (const body of [{ preset: 'generous' }, { reset: true }, { policy: (await r.get(s, '/api/policy')).json().policy }]) { const reply = await r.post(s, '/api/policy', body); assert.equal(reply.status, 409, JSON.stringify(body)); assert.equal(reply.json().error.code, 'POLICY_LOCKED_BY_ENVIRONMENT'); }
+  assert.equal((await readdir(r.state)).includes('policy.json'), false, 'nothing was saved');
+  assert.equal((await r.get(s, '/api/settings')).json().policy.locked, true);
+});
+
+test('a damaged local-state.json is reported with a fixed code and a next step, nothing is changed, and the page shows it', async t => {
+  const r = await rig(t); const s = await r.login(); await writeFile(join(r.state, 'local-state.json'), '{broken', { mode: 0o600 });
+  for (const [path, body] of [['/api/name', { name: 'x' }], ['/api/pause', { kind: '1h' }], ['/api/jobslots', { slots: 2 }]] as const) {
+    const reply = await r.post(s, path, body); assert.equal(reply.status, 409, path); assert.equal(reply.json().error.code, 'LOCAL_STATE_UNREADABLE'); assert.match(reply.json().error.hint, /config check/); }
+  assert.equal(await readFile(join(r.state, 'local-state.json'), 'utf8'), '{broken', 'the damaged file was not overwritten');
+  assert.match(renderPage('n'), /error\.hint/);
 });

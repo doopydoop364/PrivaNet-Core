@@ -79,6 +79,8 @@ export interface BundleInput {
   /** The status document (already sanitized at its source) from the running node, if there is one. */
   status?: Record<string, unknown> | undefined; doctor?: DoctorReport | undefined;
   logs?: LogEntry[] | undefined; logText?: string | undefined;
+  /** The effective settings (job slots, policy source and lock, capabilities, Coordinator host, panel): where each value comes from, with no secret in any of it. */
+  settings?: unknown;
 }
 /** The bundle as a JSON-safe object, redacted and checked. Throws `UnsafeBundleError` instead of returning anything that still looks secret. */
 export function buildSupportBundle(input: BundleInput): Record<string, unknown> {
@@ -90,6 +92,7 @@ export function buildSupportBundle(input: BundleInput): Record<string, unknown> 
     configuration: sanitizedConfig(input.env), panel: { defaultPort: DEFAULT_PANEL_PORT, enabled: input.env.PRIVANODE_PANEL !== 'off' },
     policy: sanitizedPolicy(input.policy),
     localChoices: { hasLocalName: input.local.name !== undefined, pause: activePause(input.local.pause, now)?.kind ?? null, disabledCapabilities: input.local.disabledCapabilities, problem: input.localProblem ?? null },
+    effectiveSettings: input.settings ?? null,
     status: input.status ?? null, doctor: input.doctor ?? null,
     recentEvents: (input.logs ?? []).slice(-200).map(entry => ({ at: new Date(entry.at).toISOString(), event: entry.event, ...(entry.code ? { code: entry.code } : {}), ...(entry.reason ? { reason: entry.reason } : {}) })),
     logTail: input.logText === undefined ? null : input.logText.slice(-120000).split('\n').slice(-400),

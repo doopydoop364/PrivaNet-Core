@@ -33,6 +33,25 @@ The part of the link after `#` never goes to the server in the URL: the page pos
 
 Job slots (how many jobs may run at once) are set under Contribute, or with `privanet-node slots show|set N|clear`; the choice is saved in `local-state.json` and applies **the next time the node starts** (the panel says so, and Restart is one click). An explicit `PRIVANODE_JOB_SLOTS` in the service environment takes priority and, while it is set, the panel shows the number read-only. More slots never raise your limits: the same CPU, memory and bandwidth budgets are shared between the jobs. Other things the panel cannot change: `fetch` policy changes take effect after a restart (the panel says so), and `fetch.unsafeLocal` (the SSRF escape hatch) can never be set from the panel, a preset, an import or a saved policy.
 
+## Which setting wins
+
+One rule everywhere: **what an administrator sets explicitly in the environment beats what the owner saved from the panel or the CLI, which beats the default.** The panel (Contribute, "Where each setting comes from") and `privanet-node settings [--json]` report the value in effect, where it came from, and what is locked; a locked value is shown but cannot be changed, and the panel and CLI say so instead of pretending.
+
+| Setting | Order (first wins) | Changed by | Applies |
+| --- | --- | --- | --- |
+| Job slots | `PRIVANODE_JOB_SLOTS` > saved (`slots`, panel) > 1 | panel, `slots` (not while the environment sets it) | next start |
+| Resource policy | `PRIVANODE_POLICY_LOCKED=true` (the policy file alone) > saved `policy.json` (panel, `policy`) > installer's `PRIVANODE_POLICY_FILE` > defaults | panel, `policy` (refused when locked) | at once (fetch limits: next start) |
+| Capabilities | `PRIVANODE_CAPABILITIES` > what the node enrolled with; the owner can only switch some **off** (saved) | panel, `capability` | at once |
+| Coordinator | `PRIVANODE_COORDINATOR_URL` > enrollment record > loopback default | environment or re-enrolling only | next start |
+| Panel on/off and port | `PRIVANODE_PANEL`, `PRIVANODE_PANEL_PORT` > on, 4040 | environment only | next start |
+| Node display name | saved only (a label on this machine) | panel, `name` | at once |
+| Pause | saved only; ends by itself or with Resume | panel, `pause`, `resume` | at once |
+| Updates | never automatic; `update check` runs only when asked | | |
+
+The installer always sets `PRIVANODE_POLICY_FILE`, so that file is the *starting point*: the owner's saved policy wins over it, which is why the table lists the policy lock separately. An administrator who wants the file to be the last word sets `PRIVANODE_POLICY_LOCKED=true`: the saved policy is then ignored (and left alone on disk), and `policy import|preset|reset`, the presets and every edit in the panel are refused with `POLICY_LOCKED_BY_ENVIRONMENT`. `config check` says when an environment setting hides a saved value.
+
+A damaged `local-state.json` (for example a job-slot number outside 1 to 64) is never partly used: the node starts on the defaults, holds itself paused, and says so in `status`, `settings`, the panel and `config check`; every writing command refuses, changes nothing and tells you to run `privanet-node config check` and fix or move the file aside. State files are written atomically (a temporary file, flushed, renamed) and are mode 0600 inside the private state directory on Linux and macOS; on Windows the state directory's access control list is what protects them (not verified on a real machine).
+
 ## Presets
 
 A preset is a set of ordinary resource-policy values, not a second engine. Choosing one changes **only** the listed fields; your schedule, per-capability limits, fetch limits and preemption settings are kept. Changing any one of those fields afterwards shows "Custom". *Balanced* equals the shipped conservative default.
@@ -84,6 +103,7 @@ privanet-node policy show|export FILE|import FILE|reset|preset NAME
 privanet-node name show|clear|set "My laptop"   the local friendly name
 privanet-node capability enable|disable CAP   offer fewer capabilities (can only narrow what was enrolled)
 privanet-node slots show|set N|clear          how many jobs may run at once (applies at the next start)
+privanet-node settings [--json]               the effective value of every setting and where it came from
 privanet-node panel [--url-only]              panel address and sign-in link
 privanet-node support-bundle [FILE] [--no-network]   a secret-free diagnostic bundle
 ```

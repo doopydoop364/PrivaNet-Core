@@ -18,6 +18,7 @@ import { policyFindings } from './config-check.js';
 import { ResourcePolicySchema } from './resource-policy.js';
 import { buildStatus } from './status-document.js';
 import { diagnose } from './doctor.js';
+import { gatherSettings } from './effective-settings.js';
 import { renderPage } from './panel-page.js';
 import { PRIVACY_STATEMENT } from './privacy.js';
 
@@ -82,7 +83,7 @@ export async function startPanel(options: PanelOptions): Promise<PanelHandle> {
   const context = () => ({ node: options.node, engine: options.engine, control: options.control, transfer: options.transfer, coordinatorUrl: options.coordinatorUrl, enrolledCapabilities: options.enrolledCapabilities });
   const policyDocument = () => {
     const view = options.control.view; const policy = view.policy;
-    return { source: view.source ?? null, preset: view.preset, problem: view.policyProblem ?? null, restartRequired: view.restartRequired, policy: policy ?? null,
+    return { locked: view.policyLocked, source: view.source ?? null, preset: view.preset, problem: view.policyProblem ?? null, restartRequired: view.restartRequired, policy: policy ?? null,
       findings: policy ? policyFindings(policy, { jobSlots: options.jobSlots, capabilities: options.enrolledCapabilities }) : [], jobSlots: { value: options.jobSlots, saved: view.jobSlots.saved, source: view.jobSlots.source, editable: view.jobSlots.editable, max: MAX_JOB_SLOTS,
         note: view.jobSlots.editable ? 'How many jobs may run at once. A change applies the next time the node starts.' : 'Set by PRIVANODE_JOB_SLOTS in the service environment, which takes priority; change it there and restart.' },
       presets: PRESET_IDS.map(id => ({ id, label: PRESETS[id].label, summary: PRESETS[id].summary, values: PRESETS[id].values })) };
@@ -124,6 +125,7 @@ export async function startPanel(options: PanelOptions): Promise<PanelHandle> {
         case '/api/session': return json(res, 200, { csrf: session.csrf, version: SERVICE_VERSION, protocolVersion: PROTOCOL_VERSION, features: { supportBundle: options.supportBundle !== undefined, updateCheck: options.updateCheck !== undefined } });
         case '/api/status': return json(res, 200, buildStatus(context(), { fullId: url.searchParams.get('fullId') === '1' }));
         case '/api/policy': return json(res, 200, policyDocument());
+        case '/api/settings': { const gathered = await gatherSettings(options.env, options.stateDir, clock(), options.jobSlots); return json(res, 200, { ...gathered.settings, ...(gathered.localProblem ? { localStateProblem: gathered.localProblem } : {}), ...(gathered.policyProblem ? { policyProblem: gathered.policyProblem } : {}) }); }
         case '/api/jobs': { const snapshot = options.node.snapshot; return json(res, 200, { active: snapshot.activeJobs, counters: snapshot.counters, slots: snapshot.slots, note: 'Job payloads are never shown or stored here.' }); }
         case '/api/history': return json(res, 200, { points: options.history?.points() ?? [], note: 'Permitted budgets and measured host numbers only; not per-job accounting. Kept on this machine for 24 hours.' });
         case '/api/logs': return json(res, 200, { entries: options.logs.recent(100) });
@@ -171,7 +173,9 @@ export async function startPanel(options: PanelOptions): Promise<PanelHandle> {
         default: return fail(res, 404, 'NOT_FOUND');
       }
     } catch (error) {
-      if (error instanceof PolicyError) return fail(res, error.code === 'JOB_SLOTS_SET_BY_ENVIRONMENT' ? 409 : 422, error.code, { issues: error.issues });
+      if (error instanceof PolicyError) return fail(res, error.code === 'JOB_SLOTS_SET_BY_ENVIRONMENT' || error.code === 'POLICY_LOCKED_BY_ENVIRONMENT' ? 409 : 422, error.code, { issues: error.issues });
+      // A damaged local-state.json is the owner's to fix: say so, with a fixed code, instead of an anonymous failure.
+      if (error instanceof Error && /^LOCAL_STATE_/.test(error.message)) return fail(res, 409, 'LOCAL_STATE_UNREADABLE', { hint: 'local-state.json cannot be read; run "privanet-node config check" on this machine, then fix or move that file aside. Nothing was changed.' });
       return fail(res, 500, 'INTERNAL');
     }
   };

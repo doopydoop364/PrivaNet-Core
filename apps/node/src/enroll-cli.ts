@@ -9,7 +9,8 @@ export const EXIT_OK = 0, EXIT_FAILED = 1, EXIT_USAGE = 78;
 const COMMON = `  --coordinator URL        the Coordinator (https; plain http only to loopback with --allow-insecure-loopback). Or PRIVANODE_COORDINATOR_URL
   --capabilities a,b       capabilities to enroll with (default: everything that is granted). Or PRIVANODE_CAPABILITIES
   --state-dir DIR          where the node keeps its identity (default ./var/node). Or PRIVANODE_STATE_DIR
-  --allow-insecure-loopback  allow http to a literal loopback address (development only)`;
+  --allow-insecure-loopback  allow http to a literal loopback address (development only)
+  --json                   print the result as one JSON line (node ID, outcome, capabilities, state directory; never a secret)`;
 const ENROLL_USAGE = `Usage: privanet-node enroll --coordinator https://HOST[:PORT] (--token TOKEN | --invite CODE) [options]
 
 Enrolls this machine with a Coordinator using a one-time token or a short invite code from its owner, then exits.
@@ -33,15 +34,15 @@ ${COMMON}
 export interface Io { out: (text: string) => void; err: (text: string) => void; readStdin: () => string }
 interface Parsed {
   url?: string; token?: string; tokenFile?: string; tokenStdin: boolean; invite?: string; inviteFile?: string; inviteStdin: boolean; capabilities?: string; stateDir?: string;
-  insecure: boolean; help: boolean; name?: string; wait?: string;
+  insecure: boolean; help: boolean; json: boolean; name?: string; wait?: string;
 }
 class UsageError extends Error {}
 const VALUE: Record<string, keyof Parsed> = { '--coordinator': 'url', '--token': 'token', '--token-file': 'tokenFile', '--invite': 'invite', '--invite-file': 'inviteFile', '--capabilities': 'capabilities',
   '--state-dir': 'stateDir', '--name': 'name', '--wait': 'wait' };
-const FLAG: Record<string, keyof Parsed> = { '--token-stdin': 'tokenStdin', '--invite-stdin': 'inviteStdin', '--allow-insecure-loopback': 'insecure', '--help': 'help', '-h': 'help' };
+const FLAG: Record<string, keyof Parsed> = { '--token-stdin': 'tokenStdin', '--invite-stdin': 'inviteStdin', '--allow-insecure-loopback': 'insecure', '--json': 'json', '--help': 'help', '-h': 'help' };
 
 function parse(input: string[], allowed: Set<string>): Parsed {
-  let argv = input; const parsed: Parsed = { tokenStdin: false, inviteStdin: false, insecure: false, help: false };
+  let argv = input; const parsed: Parsed = { tokenStdin: false, inviteStdin: false, insecure: false, help: false, json: false };
   for (let i = 0; i < argv.length; i++) {
     let arg = argv[i] ?? '';
     // `--name=value` is the same as `--name value`.
@@ -55,8 +56,8 @@ function parse(input: string[], allowed: Set<string>): Parsed {
   }
   return parsed;
 }
-const ENROLL_FLAGS = new Set(['--coordinator', '--token', '--token-file', '--token-stdin', '--invite', '--invite-file', '--invite-stdin', '--capabilities', '--state-dir', '--allow-insecure-loopback', '--help', '-h']);
-const JOIN_FLAGS = new Set(['--coordinator', '--capabilities', '--state-dir', '--allow-insecure-loopback', '--name', '--wait', '--help', '-h']);
+const ENROLL_FLAGS = new Set(['--coordinator', '--token', '--token-file', '--token-stdin', '--invite', '--invite-file', '--invite-stdin', '--capabilities', '--state-dir', '--allow-insecure-loopback', '--json', '--help', '-h']);
+const JOIN_FLAGS = new Set(['--coordinator', '--capabilities', '--state-dir', '--allow-insecure-loopback', '--name', '--wait', '--json', '--help', '-h']);
 
 function target(parsed: Parsed, env: NodeJS.ProcessEnv) {
   const url = parsed.url ?? env.PRIVANODE_COORDINATOR_URL;
@@ -76,6 +77,8 @@ const report = (result: EnrollResult, stateDir: string): string => [result.outco
   ...(result.outcome === 'ENROLLED' ? [`  Capabilities:  ${result.capabilities.length ? result.capabilities.join(', ') : '(none)'}`] : []), `  State:         ${stateDir}`, '',
   'Start the node with: privanet-node',
   ...(result.outcome === 'ENROLLED' && result.capabilities.length ? ['It will offer exactly the capabilities above. To offer fewer, set PRIVANODE_CAPABILITIES; the owner policy file still bounds what it does.'] : []), ''].join('\n');
+/** The result as one JSON line (for scripts and the installer): the node ID, the outcome, the capabilities and the state directory, never a token or a code. */
+const reportJson = (result: EnrollResult, stateDir: string): string => JSON.stringify({ ok: true, outcome: result.outcome === 'ENROLLED' ? 'ENROLLED' : 'ALREADY_ENROLLED', nodeId: result.nodeId, displayName: result.displayName ?? null, capabilities: result.outcome === 'ENROLLED' ? result.capabilities : null, stateDir }) + '\n';
 const fail = (error: unknown, io: Io): number => {
   if (error instanceof UsageError) { io.err(`${error.message}\n`); return EXIT_USAGE; }
   io.err(`Enrollment failed: ${(error instanceof EnrollError ? error : classify(error)).message}\n`); return EXIT_FAILED;
@@ -110,7 +113,7 @@ export async function runEnroll(argv: string[], env: NodeJS.ProcessEnv, io: Io):
       if (!token.success) throw new UsageError('the enrollment token is not in the expected form (64 lowercase hexadecimal characters)');
       result = await enrollNode({ ...common, token: token.data });
     }
-    io.out(report(result, stateDir)); return EXIT_OK;
+    io.out(parsed.json ? reportJson(result, stateDir) : report(result, stateDir)); return EXIT_OK;
   } catch (error) { return fail(error, io); }
 }
 
@@ -127,10 +130,10 @@ export async function runJoin(argv: string[], env: NodeJS.ProcessEnv, io: Io, ho
     if (!Number.isFinite(wait) || wait <= 0 || wait > 120) throw new UsageError('--wait is a number of minutes between 1 and 120');
     const result = await joinNode({ url, stateDir, allowInsecureLoopback: insecure, ...(capabilities ? { capabilities } : {}), ...(name?.success ? { deviceName: name.data } : {}), maxWaitMs: wait * 60000,
       ...(hooks.pollMs ? { pollMs: hooks.pollMs } : {}), ...(hooks.sleep ? { sleep: hooks.sleep } : {}),
-      onRequested: info => io.out(['', info.resumed ? 'Resuming your request to join.' : 'Request sent. Waiting for the owner to approve it.', `  Request code:  ${info.code}`, `  Node ID:       ${info.nodeId}`,
+      onRequested: info => (parsed.json ? io.err : io.out)(['', info.resumed ? 'Resuming your request to join.' : 'Request sent. Waiting for the owner to approve it.', `  Request code:  ${info.code}`, `  Node ID:       ${info.nodeId}`,
         `  Expires:       ${new Date(info.expiresAt).toISOString().replace(/\.\d{3}Z$/, 'Z')}`, '',
         'Tell the owner the request code (they approve it with `privanet-admin approve CODE`); the Node ID is what they can compare if they want to be sure it is you.',
         'Nothing is enrolled until they approve. This waits for them; leave it running, or run it again later to resume.', ''].join('\n')) });
-    io.out(report(result, stateDir)); return EXIT_OK;
+    io.out(parsed.json ? reportJson(result, stateDir) : report(result, stateDir)); return EXIT_OK;
   } catch (error) { return fail(error, io); }
 }
