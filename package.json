@@ -26,6 +26,7 @@
     "admin": "node scripts/admin.mjs",
     "backup": "node scripts/backup.mjs",
     "smoke:registry": "node scripts/registry-smoke.mjs",
+    "test:installer": "npm run build && node --test --test-concurrency=1 tests/dist/installer.test.js",
     "test:proxy": "npm run build && node --test --test-concurrency=1 tests/dist/public-proxy.proxy.js"
   },
   "dependencies": {

@@ -201,6 +201,7 @@ fi
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/privanet-install.XXXXXX") || die 6 'could not create a temporary directory'
 chmod 700 "$TMP"
 CHILD=''
+# shellcheck disable=SC2329  # run by the traps below
 cleanup() { SECRET=''; [ -z "$CHILD" ] || kill "$CHILD" 2>/dev/null || true; rm -rf "$TMP"; }
 trap cleanup EXIT; trap 'cleanup; exit 130' INT; trap 'cleanup; exit 143' TERM HUP
 ARCHIVE="privanet-$VERSION-linux.tar.gz"; TOP="privanet-$VERSION-linux"
@@ -251,7 +252,6 @@ if [ "$STAGE" = 0 ]; then
   fi
   SVC_OWNER="$SVC_USER:$SVC_USER"
 else SVC_OWNER=''; fi
-chown_svc() { [ -z "$SVC_OWNER" ] || as_root chown "$@"; }
 if [ "$NO_SERVICE" = 0 ] && [ -e "$UNIT" ]; then as_root systemctl stop privanet-node >/dev/null 2>&1 || true; fi
 as_root install -d -m 755 "$OPT_ROOT" "$ETC" || die 6 "could not create $OPT_ROOT"
 as_root rm -rf "$OPT_ROOT/$VERSION"; as_root cp -R "$SRC" "$OPT_ROOT/$VERSION" || die 6 'could not copy the program files'
@@ -314,9 +314,11 @@ if [ "$NO_SERVICE" = 1 ]; then
 fi
 as_root systemctl daemon-reload; as_root systemctl enable privanet-node >/dev/null 2>&1 || die 6 'could not enable the service'
 if [ "$INSTALL_ONLY" = 1 ]; then say ''; say 'Installed. Enroll it, then start it: sudo systemctl enable --now privanet-node'; exit 0; fi
+# shellcheck disable=SC2016  # the backticks are text for the user, not a command
 as_root systemctl restart privanet-node || die 8 'the service did not start: see `journalctl -u privanet-node -n 50`'
 say 'Waiting for the node to sign in...'; tries=0; ok=0
 while [ "$tries" -lt 30 ]; do
+  # shellcheck disable=SC2086
   if run_as_svc env $ENVIRON "$NODE_CMD" doctor --coordinator "$COORDINATOR" --json 2>/dev/null | grep -q '"id":"registered","label":"At the Coordinator","status":"OK"'; then
     if as_root systemctl is-active --quiet privanet-node; then ok=1; break; fi
   fi

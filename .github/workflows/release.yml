@@ -70,12 +70,21 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
       - uses: actions/download-artifact@v4
         with: { path: assets, pattern: dist-*, merge-multiple: true }
+      # Build provenance for the archives, which `install-node.sh --verify-attestation` / `install-node.ps1 -VerifyAttestation` check with `gh attestation verify`.
+      # The installers themselves are listed in SHA256SUMS.txt, so they are verified the same way as everything else a user downloads.
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            assets/*.tar.gz
+            assets/*.zip
       - name: Checksums and release notes
         run: |
           (cd assets && sha256sum * > SHA256SUMS.txt)

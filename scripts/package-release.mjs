@@ -51,7 +51,7 @@ for (const [target, name, mode] of [['linux', 'install-node.sh', 0o755], ['windo
   if (platform !== target) continue;
   const template = readFileSync(join('deploy', 'install', name), 'utf8');
   // Only the one stamp line is changed (the installer also compares against the placeholder to detect an unstamped copy).
-  const stampLine = /^(\$?VERSION_STAMP\s*=\s*)'@PRIVANET_VERSION@'$/m;
+  const stampLine = /^(\$?VERSION_?STAMP\s*=\s*)'@PRIVANET_VERSION@'$/im;
   if (!stampLine.test(template)) throw new Error(`${name} has no version stamp line`);
   writeFileSync(join(outDir, name), template.replace(stampLine, `$1'${version}'`)); chmodSync(join(outDir, name), mode);
 }

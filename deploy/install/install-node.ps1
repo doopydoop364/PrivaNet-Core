@@ -248,7 +248,7 @@ function Install-PrivaNode {
   $temp = Join-Path ([IO.Path]::GetTempPath()) ('privanet-install-' + [Guid]::NewGuid().ToString('N'))
   [void](New-Item -ItemType Directory -Path $temp)
   try {
-    Protect-AdminOnly $temp
+    if (-not $stage -and -not $DryRun) { Protect-AdminOnly $temp }
     Say "Downloading PrivaNet $Version for Windows..."
     Get-File "$baseUrl/SHA256SUMS.txt" (Join-Path $temp 'SHA256SUMS.txt')
     Get-File "$baseUrl/$archive" (Join-Path $temp $archive)
