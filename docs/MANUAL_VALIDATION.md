@@ -42,6 +42,13 @@ Status key: `NOT DONE` (default), `DONE <date> <who> <notes>`.
 - [ ] `NOT DONE` A revoked node is blocked and cannot return; invites cannot be reused or guessed (rate limits observed).
 - [ ] `NOT DONE` A restore rehearsal of the Coordinator backup on separate hardware.
 
+## 3b. The local chunk store (0.4.0-alpha.1) on real filesystems
+
+- [ ] `NOT DONE` NTFS (a real Windows machine): rename-over-existing, directory and file permissions inside the store, behaviour when antivirus holds a file open, long paths, the Windows safe-by-ACL claim in `docs/security.md`.
+- [ ] `NOT DONE` macOS APFS and a real Linux ext4/xfs: `fsync` behaviour, case sensitivity, a genuine power-cut test (pull the plug during a put, then start the node and run `privanet-node storage status`).
+- [ ] `NOT DONE` A removable or network filesystem as the state directory: confirm the node refuses or degrades safely (it checks permissions and links, not the filesystem type).
+- [ ] `NOT DONE` A full-disk drill: fill the volume to the reserve with another process while a large put runs.
+
 ## 4. Control panel and CLI on real desktops
 
 - [ ] `NOT DONE` Firefox, Chrome/Edge and Safari: sign-in link, every tab, no console errors, keyboard and screen-reader pass (state is shown as words, but this was not tested with assistive technology).

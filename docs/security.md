@@ -146,6 +146,23 @@ Invites, approval requests, the installers and a public hostname add a Internet-
 - **Installers** are part of the trust chain: HTTPS only, pinned to a release, the archive's SHA-256 verified before it is unpacked, an optional out-of-band pin and GitHub attestation, no secret on a command line, in a file or in output. There is no code-signing key, so no GPG or Authenticode signature exists; the checksum list shares a location with the files it describes, which is why the pin and attestation matter.
 - **No new trust in nodes.** A joined node is trusted by its owner, not verified (Phase 10), and can still only run the typed handlers it was enrolled for.
 
+## Local chunk store (Phase 4.0-alpha.1, implemented; local only)
+
+The first Phase 4 code is a store of opaque, immutable, SHA-256-addressed chunks inside the node process ([PHASE4_DESIGN section 15](PHASE4_DESIGN.md#15-40-alpha1-as-built-and-what-changed-from-this-design)). It has **no network surface, no Coordinator interface and no way for an application to reach it**, and it is off by default, so the threats that matter in alpha.1 are local: bad input reaching the filesystem, a damaged or tampered store, and the store exceeding what the owner allowed. The invariants and the test behind each:
+
+| Invariant | Test |
+| --- | --- |
+| A path is built only from a validated `chk_` + 64 lowercase hex identifier; traversal, separators, encodings, lookalikes, case and length tricks are refused before any filesystem call | `store-chunk-id.test.ts` (fixed cases and a seeded fuzz) |
+| Nothing is followed through a symbolic link; a store containing one (as a chunk, a shard directory, in `incoming/`, as `chunks/` or as the root) is refused, and nothing outside the store is read, written or deleted | `store-chunk-store.test.ts` (malicious filesystem state, with a before/after snapshot of everything outside) |
+| The store, its directories and every file are owner-only; widened permissions make a chunk "not a chunk" and a directory refuse to open | permission tests (POSIX; on Windows the state directory's ACL protects the store, not verified on a real machine) |
+| Bytes become visible only after they are complete, counted, SHA-256 verified and fsynced, by one atomic rename; a failed or cancelled put never leaves a committed chunk | failure injected at every step; real SIGKILL crashes at every step then a restart (`store-crash.test.ts`) |
+| Usage never exceeds the owner's quota or the free-space reserve, including against a stale reading | quota and free-space tests (reading changes mid-write and at commit) |
+| A damaged chunk is never served; it is removed and reported once | corrupt-at-rest tests (wrong digest, truncated, extended) |
+| Errors are a fixed vocabulary; no path or system message reaches a caller | injected `ENOSPC`/`EIO`/`EACCES`/`ELOOP` tests |
+| The store is not a network service | a real-node test that the process owns no listening socket with storage on; the policy has no network setting |
+
+Not covered in alpha.1 (later milestones): transfer authorization, replay and theft of grants, endpoint substitution, remote disk-exhaustion by many clients, and possession challenges. A store on a filesystem that lies about fsync can lose the most recent write in a power cut (never half of it). No independent review has been done.
+
 ## Local control panel threats (post-3.5, implemented)
 
 The node's panel ([NODE_CONTROL_PANEL.md](NODE_CONTROL_PANEL.md)) is a local web interface, so it is defended like one: loopback bind only; Host allowlist against DNS rebinding; a 256-bit secret exchanged for an HttpOnly SameSite=Strict cookie required on every API route, reads included; CSRF header, Origin allowlist and JSON content type on writes; nonce CSP and no CORS; bounded strict bodies; a fixed action allowlist with no URL fetch, file access, command, eval, key or environment endpoint. The panel secret is readable by whoever can read the node's state directory (the node's own account and administrators). Support bundles redact every string and fail closed, but are still to be reviewed before sharing. The operator dashboard ([OPERATOR_DASHBOARD.md](OPERATOR_DASHBOARD.md)) is a separate loopback process holding the administrator secret, guarded the same way, that only calls the existing administrator API. Policy changes can only be made by the machine's owner; `fetch.unsafeLocal` is rejected on every path.

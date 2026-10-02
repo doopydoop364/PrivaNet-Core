@@ -168,7 +168,7 @@ Dependencies and guardrails (a milestone is not done without them):
 
 Not a new phase and no renumbering. Local, owner-only tooling so a contributor can configure and understand a node without editing files: a loopback control panel, presets, pause, "why am I idle?", a safe job view, a support bundle, `config check`, policy export/import and installer first-run integration. It changes nothing in the Coordinator, the protocol or the trust model. See [docs/NODE_CONTROL_PANEL.md](docs/NODE_CONTROL_PANEL.md). The operator side is `privanet-admin ui` ([docs/OPERATOR_DASHBOARD.md](docs/OPERATOR_DASHBOARD.md)). Not done: system tray, in-place update and rollback.
 
-## Phase 4 — Generic Storage + Data Plane Foundation — Planned
+## Phase 4 — Generic Storage + Data Plane Foundation — In progress
 
 Goal: provide application-independent object/chunk storage through PrivaNet **and the first generic direct-transfer data plane**, so large payloads never transit the Coordinator ([docs/DATA_PLANE.md](docs/DATA_PLANE.md), ADR 006).
 
@@ -189,7 +189,7 @@ Planned data-plane foundation:
 
 Not part of Phase 4: NAT traversal, public node exposure and relay services (a separate networking problem, [DATA_PLANE.md](docs/DATA_PLANE.md#13-connectivity)); node-to-node transfer (Phase 5).
 
-PrivaNet owns physical resource infrastructure; applications own their own user-visible semantics. Phase 4 implementation does not start while Phase 3 is still being proven. The concrete design, ADR 007 and the milestone plan (4.0-alpha.1 local chunk store, alpha.2 placement and tickets, alpha.3 direct application-to-node transfer) are in [docs/PHASE4_DESIGN.md](docs/PHASE4_DESIGN.md); it is a proposal for review, not a commitment to the wire formats.
+PrivaNet owns physical resource infrastructure; applications own their own user-visible semantics. **Phase 4 is not complete.** Milestone 4.0-alpha.1 (the node-local chunk store: content-addressed, atomic, quota-bound, default off, no network access, no Coordinator change) is implemented in v0.4.0-alpha.1; placement, tickets and transfer (alpha.2, alpha.3) are not. The concrete design, ADR 007 and the milestone plan (4.0-alpha.1 local chunk store, alpha.2 placement and tickets, alpha.3 direct application-to-node transfer) are in [docs/PHASE4_DESIGN.md](docs/PHASE4_DESIGN.md); it is a proposal for review, not a commitment to the wire formats.
 
 ## Phase 5 — Distributed Storage — Planned
 
