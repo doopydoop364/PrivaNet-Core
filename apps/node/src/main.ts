@@ -19,6 +19,9 @@ import { ResourceHistory } from './history.js';
 import { LogRing } from './log-ring.js';
 import { resolvePolicy } from './policy-store.js';
 import { buildStatus } from './status-document.js';
+import { startPanel } from './panel.js';
+import type { PanelHandle } from './panel.js';
+import { DEFAULT_PANEL_PORT } from './panel-token.js';
 import { STATUS_FILE, STATUS_PUBLISH_MS } from './status-file.js';
 import { privateDirectory, replacePrivateFile } from '@privanet/shared';
 /** Exit status for a configuration problem (BSD `EX_CONFIG`): a service manager should not restart-loop on it (`RestartPreventExitStatus=78`). */
@@ -62,7 +65,8 @@ async function main() {
   const handlers = { ...defaultHandlers, 'web.fetch.v1': createFetchHandler({ policy: policy.fetch }) };
   const engine = new ResourceEngine(policy, new OsSampler(config.stateDir), Date.now, transfer);
   const node = new PrivaNode({ ...config, handlers, engine, transfer, checkpoints, log });
-  const control = new LocalControl({ stateDir: config.stateDir, envPolicyFile: process.env.PRIVANODE_POLICY_FILE, node, engine, transfer, history: new ResourceHistory(config.stateDir), log, onChange: () => { void publish(); } });
+  const history = new ResourceHistory(config.stateDir);
+  const control = new LocalControl({ stateDir: config.stateDir, envPolicyFile: process.env.PRIVANODE_POLICY_FILE, node, engine, transfer, history, log, onChange: () => { void publish(); } });
   // The snapshot `privanet-node status` reads: private, replaced atomically, no secrets (see status-document.ts).
   const publish = async () => {
     try { await replacePrivateFile(join(await privateDirectory(config.stateDir), STATUS_FILE), JSON.stringify({ version: 1, publishedAt: Date.now(), status: buildStatus({ node, engine, control, transfer, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities }) })); } catch { /* status is a convenience */ }
@@ -79,7 +83,16 @@ async function main() {
   };
   /** The only privileged actions the local panel may trigger (named operations, never commands). */
   const actions = { drainAndStop: () => stop(), restart: () => { restartRequested = true; stop(); } };
-  void actions;
+  // The local control panel: loopback only, signed in with the token in the state directory (see panel.ts). A port that is taken never stops the node.
+  let panel: PanelHandle | undefined;
+  if (process.env.PRIVANODE_PANEL !== 'off') {
+    const port = Number(process.env.PRIVANODE_PANEL_PORT ?? DEFAULT_PANEL_PORT);
+    try {
+      if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('bad port');
+      panel = await startPanel({ stateDir: config.stateDir, port, node, engine, control, transfer, history, logs, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities, jobSlots: config.jobSlots, env: process.env, actions });
+      log({ event: 'panel.listening', code: String(panel.port) });
+    } catch { log({ event: 'panel.unavailable', code: 'LISTEN_FAILED' }); }
+  }
   // POSIX: SIGTERM/SIGINT. Windows never delivers SIGTERM: Ctrl+C is SIGINT, Ctrl+Break is SIGBREAK, closing the console is SIGHUP.
   for (const signal of ['SIGINT', 'SIGTERM', ...(process.platform === 'win32' ? ['SIGBREAK', 'SIGHUP'] : [])] as const) process.on(signal, stop);
   // Portable request for a service manager or script that cannot send a signal. A stale file from while the node was down is ignored.
@@ -87,7 +100,7 @@ async function main() {
   try { unlinkSync(drainFile); } catch { /* none */ }
   const watcher = setInterval(() => { if (existsSync(drainFile)) { try { unlinkSync(drainFile); } catch { /* removal is best effort */ } stop(); } }, 500);
   watcher.unref();
-  await node.run(abort.signal); clearTimeout(forced); clearInterval(watcher); clearInterval(publisher); control.stop();
+  await node.run(abort.signal); clearTimeout(forced); clearInterval(watcher); clearInterval(publisher); control.stop(); await panel?.close();
   try { unlinkSync(join(config.stateDir, STATUS_FILE)); } catch { /* none */ }
   if (restartRequested) process.exitCode = EXIT_RESTART;
 }

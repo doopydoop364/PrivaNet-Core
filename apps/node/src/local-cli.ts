@@ -16,6 +16,7 @@ import { StatusFileSchema } from './status-file.js';
 import type { StatusFile } from './status-file.js';
 import { STATUS_STALE_MS, STATUS_FILE } from './status-file.js';
 import { join } from 'node:path';
+import { DEFAULT_PANEL_PORT, loadOrCreatePanelToken, panelUrl } from './panel-token.js';
 import { explainIdle } from './status.js';
 
 export interface CliIo { out: (text: string) => void; err: (text: string) => void }
@@ -175,6 +176,17 @@ async function capabilityCommand(argv: string[], env: NodeJS.ProcessEnv, io: Cli
   return 0;
 }
 
+async function panelCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
+  const parsed = parse(argv, { flags: [...COMMON.flags, '--url-only'], values: COMMON.values });
+  const port = Number(env.PRIVANODE_PANEL_PORT ?? DEFAULT_PANEL_PORT); if (!Number.isInteger(port) || port < 0 || port > 65535) throw new UsageError('PRIVANODE_PANEL_PORT is not a port number');
+  const token = await loadOrCreatePanelToken(stateDirOf(parsed, env));
+  if (parsed.flags.has('--url-only')) { io.out(panelUrl(port) + '\n'); return 0; }
+  const link = `${panelUrl(port)}#${token}`;
+  done(io, parsed, { url: panelUrl(port), signInLink: link }, [`Control panel: ${panelUrl(port)}   (this machine only; it never listens on any other address)`,
+    `Sign-in link:  ${link}`, '  The link signs a browser in; the part after # is a secret that never leaves your browser or this terminal. Keep it private.', `  It lives in ${join(stateDirOf(parsed, env), 'panel-token')}; delete that file and restart the node to change it.`, env.PRIVANODE_PANEL === 'off' ? '  NOTE: PRIVANODE_PANEL=off, so the panel is disabled in this environment.' : ''].filter(Boolean).join('\n'));
+  return 0;
+}
+
 const USAGE = `Usage: privanet-node COMMAND [options]
   status [--json]                      what the node is doing, and why it is idle if it is
   pause 15m|1h|tomorrow|reboot|indefinite     stop contributing for a while (resume ends it)
@@ -199,6 +211,7 @@ export async function runLocal(command: string, argv: string[], env: NodeJS.Proc
       case 'policy': return await policyCommand(argv, env, io);
       case 'name': return await nameCommand(argv, env, io);
       case 'capability': return await capabilityCommand(argv, env, io);
+      case 'panel': return await panelCommand(argv, env, io);
       default: io.err(USAGE + '\n'); return EXIT_USAGE;
     }
   } catch (error) {
