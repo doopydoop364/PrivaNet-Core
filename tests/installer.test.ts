@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { createServer as createHttpsServer } from 'node:https';
 import { createServer as createHttpServer } from 'node:http';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync, readdirSync, statSync, lstatSync, readlinkSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, lstatSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -316,6 +316,52 @@ for (const way of ['invite', 'approval'] as const) {
     const third = node.start(); await new Promise(resolve => setTimeout(resolve, 4000)); assert.notEqual(c.core.listNodes()[0]?.status, 'ONLINE', 'a restarted revoked node does not come back'); third.child.kill('SIGTERM'); await third.exited;
   });
 }
+
+// Upgrading a v0.3.5 node. A v0.3.5 install is what the installer lays down without the control panel's files: identity, enrollment, node.env, the policy file, and none of policy.json,
+// local-state.json, panel-token, status.json or history.json. (The persistent formats are unchanged since v0.3.5: see tests/compat-v0.3.5.test.ts.) The administrator's own edits to node.env and the
+// policy file must survive an upgrade byte for byte; the node must come back with the same identity, enrolled, with the administrator's settings winning over anything the owner saves later.
+test('upgrading a v0.3.5-shaped node: identity, enrollment, administrator settings and permissions survive; the new local files appear only when used; the environment keeps winning', { skip, timeout: 240000 }, async t => {
+  const { sb, base, invite, c } = await reserve(t); const first = await installer(sb, base(['--invite-stdin']), {}, `${invite('Upgrade PC').code}\n`).done; assert.equal(first.code, 0, first.err + first.out);
+  const state = join(sb.root, 'var', 'lib', 'privanet-node'); const etc = join(sb.root, 'etc', 'privanet'); const nodeId = nodeIdOf(sb);
+  const newFiles = ['policy.json', 'local-state.json', 'panel-token', 'status.json', 'history.json'];
+  for (const name of newFiles) assert.equal(existsSync(join(state, name)), false, `a v0.3.5 install has no ${name}`);
+  // The administrator's customisations, as they would have made them by hand.
+  const envFile = join(etc, 'node.env'); writeFileSync(envFile, `${readFileSync(envFile, 'utf8').trimEnd()}\nPRIVANODE_JOB_SLOTS=3\n`); const policyFile = join(etc, 'node-policy.json'); writeFileSync(policyFile, JSON.stringify({ maxCpuPercent: 33 }));
+  const watched = [join(state, 'identity.json'), join(state, 'enrollment.json'), envFile, policyFile];
+  const before = watched.map(file => ({ file, hash: sha(readFileSync(file)), mode: statSync(file).mode & 0o777 })); const stateMode = statSync(state).mode & 0o777;
+  // Reinstall the same version over it (the upgrade path), twice: nothing the administrator or the node owns is touched.
+  for (const flag of ['--upgrade', '--upgrade']) { const run = await installer(sb, base([flag])).done; assert.equal(run.code, 0, run.err + run.out); assert.match(run.out, /keeping this machine's identity/); }
+  for (const item of before) { assert.equal(sha(readFileSync(item.file)), item.hash, `${item.file} is unchanged`); assert.equal(statSync(item.file).mode & 0o777, item.mode, `${item.file} keeps its mode`); }
+  assert.equal(statSync(state).mode & 0o777, stateMode); assert.equal(stateMode, 0o700); assert.equal(nodeIdOf(sb), nodeId); assert.equal(c.core.listNodes().length, 1, 'no second node was enrolled');
+  for (const name of newFiles) assert.equal(existsSync(join(state, name)), false, `the upgrade itself does not create ${name}`);
+  assert.deepEqual(sb.leftovers(), []);
+  // The upgraded node starts from the old state and comes online with the same identity; the administrator's settings are what it reports.
+  const installed = join(sb.root, 'opt', 'privanet-node', 'current', 'bin', 'privanet-node');
+  const env: NodeJS.ProcessEnv = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: sb.root, PRIVANODE_STATE_DIR: state, NODE_EXTRA_CA_CERTS: join(workDir, 'good.crt'), PRIVANODE_POLICY_FILE: policyFile, PRIVANODE_PANEL_PORT: '0', PRIVANODE_HEARTBEAT_MS: '200', PRIVANODE_POLL_MS: '100', PRIVANODE_JOB_SLOTS: '3' };
+  const startNode = (extra: NodeJS.ProcessEnv = {}, drop: string[] = []) => { const e = { ...env, ...extra }; for (const key of drop) delete e[key]; const child = spawn('/bin/sh', [installed], { env: e, stdio: ['ignore', 'pipe', 'pipe'] }); let log = ''; child.stdout.on('data', (x: Buffer) => { log += x.toString(); }); child.stderr.on('data', (x: Buffer) => { log += x.toString(); }); const exited = new Promise<number>(resolve => child.once('close', code => resolve(code ?? -1))); t.after(() => { child.kill('SIGKILL'); }); return { child, exited, log: () => log }; };
+  const cli = async (args: string[], extra: NodeJS.ProcessEnv = {}, drop: string[] = []) => { const e = { ...env, ...extra }; for (const key of drop) delete e[key]; return exec('/bin/sh', [installed, ...args], { env: e }).then(r => ({ code: 0, out: r.stdout }), (error: { code?: number; stdout?: string }) => ({ code: error.code ?? -1, out: error.stdout ?? '' })); };
+  const one = startNode(); await until('the upgraded node to be ONLINE', () => c.core.listNodes()[0]?.status === 'ONLINE'); assert.match(one.log(), /node\.authenticated/); assert.equal(c.core.listNodes()[0]?.nodeId, nodeId, 'the same identity');
+  const settings = JSON.parse((await cli(['settings', '--json'])).out) as { jobSlots: { value: number; source: string; locked: boolean }; policy: { source: string }; name: { value: string | null } };
+  assert.deepEqual([settings.jobSlots.value, settings.jobSlots.source, settings.jobSlots.locked, settings.policy.source, settings.name.value], [3, 'environment', true, 'installer-file', null]);
+  assert.equal((JSON.parse((await cli(['policy', 'show', '--json'])).out) as { policy: { maxCpuPercent: number } }).policy.maxCpuPercent, 33, "the administrator's policy file is what is in force");
+  // The owner saves a convenience setting: the environment still wins and the CLI says so; nothing the administrator wrote changes.
+  assert.match((await cli(['slots', 'set', '5'])).out, /NOTE: PRIVANODE_JOB_SLOTS is set/); assert.equal((JSON.parse((await cli(['settings', '--json'])).out) as { jobSlots: { value: number } }).jobSlots.value, 3);
+  assert.equal(sha(readFileSync(envFile)), before[2]?.hash); assert.equal(sha(readFileSync(policyFile)), before[3]?.hash);
+  assert.equal(statSync(join(state, 'local-state.json')).mode & 0o777, 0o600); assert.equal(sha(readFileSync(join(state, 'identity.json'))), before[0]?.hash);
+  // Restart after the upgrade, with the administrator's variable removed: the saved choice now applies, still the same node.
+  one.child.kill('SIGTERM'); await one.exited;
+  const two = startNode({}, ['PRIVANODE_JOB_SLOTS']); await until('the restarted node to be ONLINE', () => /node\.authenticated/.test(two.log())); await until('ONLINE', () => c.core.listNodes()[0]?.status === 'ONLINE');
+  assert.equal((JSON.parse((await cli(['settings', '--json'], {}, ['PRIVANODE_JOB_SLOTS'])).out) as { jobSlots: { value: number; source: string } }).jobSlots.value, 5);
+  two.child.kill('SIGTERM'); await two.exited;
+  // A damaged local-state.json (or a missing one) never costs the node its identity: it holds itself paused and the installer's next upgrade leaves the file alone.
+  writeFileSync(join(state, 'local-state.json'), '{damaged'); const upgradedAgain = await installer(sb, base(['--upgrade'])).done; assert.equal(upgradedAgain.code, 0, upgradedAgain.err); assert.equal(readFileSync(join(state, 'local-state.json'), 'utf8'), '{damaged');
+  const three = startNode({}, ['PRIVANODE_JOB_SLOTS']); await until('a node with damaged local state to sign in', () => /node\.authenticated/.test(three.log())); assert.match(three.log(), /node\.local_state_invalid/); assert.equal(c.core.listNodes()[0]?.nodeId, nodeId);
+  const check = await cli(['config', 'check', '--json'], { PRIVANODE_COORDINATOR_URL: c.url }); assert.match(check.out, /LOCAL_STATE_INVALID/);
+  three.child.kill('SIGTERM'); await three.exited; rmSync(join(state, 'local-state.json'));
+  const four = startNode({}, ['PRIVANODE_JOB_SLOTS']); await until('a node with no local state to sign in', () => /node\.authenticated/.test(four.log())); assert.doesNotMatch(four.log(), /node\.local_state_invalid/); four.child.kill('SIGTERM'); await four.exited;
+  // Uninstall keeps the identity and the owner's files unless purged.
+  const removed = await installer(sb, ['--root', sb.root, '--uninstall']).done; assert.equal(removed.code, 0); assert.ok(existsSync(join(state, 'identity.json'))); assert.equal(existsSync(join(sb.root, 'opt', 'privanet-node')), false);
+});
 
 // The real thing, without --root: a service account, real ownership and modes. It changes the machine it runs on (creates the privanet-node user and /opt/privanet-node, /etc/privanet,
 // /var/lib/privanet-node), so it only runs where that is expected: as root, with PRIVANET_INSTALLER_SYSTEM=1 (CI sets it, and then a skip is a failure).

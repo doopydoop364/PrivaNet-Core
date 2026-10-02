@@ -10,6 +10,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history and tags: tests/compat-v0.3.5.test.ts compares the persistent state formats and the wire schemas with the previous release's tag.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
@@ -21,6 +24,7 @@ jobs:
       - run: npm test
         env:
           PRIVANET_REQUIRE_WINDOWS_INSTALLER: ${{ matrix.os == 'windows-latest' && '1' || '' }}
+          PRIVANET_REQUIRE_COMPAT_TAG: '1'
       - run: npm run build
   multinode:
     # Real Coordinator and PrivaNode processes that are killed, paused and restarted (docs/MULTI_NODE_VALIDATION.md). POSIX only; not part of the per-OS default suite.
