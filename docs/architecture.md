@@ -156,6 +156,10 @@ Status: **accepted.**
 
 **Problem:** applications (PrivaSearch, PrivaDrive, Privaproxy) are separate repositories, but every job type today is compiled into Core's registry; where should first-party job definitions live without coupling Core to each application? **Decision:** dependency direction is applications to SDK to Core, never the reverse; Core keeps a closed, reviewed, first-party capability registry of **generic, function-named** capabilities (`web.fetch.v1`), and all application policy stays in the application repository. Application-specific pure compute may later use a sandboxed, manifest-declared, node-owner-installed extension mechanism (research); I/O-performing handlers never load from application packages. **Alternatives:** (A) application-owned schema and handler loaded by Core (third-party code in the Coordinator and on nodes; rejected for I/O handlers), (B) a contract package published from the application repo (reverses the dependency, or is A in disguise; rejected as a registration mechanism), (C) Core registry (chosen, with the generic-capability test). **Security:** keeps every node-side handler in one reviewed supply chain; the price is a Core change per new capability. **Consequences:** function-named ids, an application client identity (E1) and other generic extension points, and a documented integration contract; full evaluation in [APPLICATION_BOUNDARY.md](APPLICATION_BOUNDARY.md).
 
+### ADR 007 (proposed): chunk store and ticketed direct transfer
+
+Proposed in [PHASE4_DESIGN.md](PHASE4_DESIGN.md#12-adr-007-proposed-chunk-store-and-ticketed-direct-transfer): immutable, application-namespaced, SHA-256-addressed chunks on opt-in nodes, authorized per transfer by a Coordinator-signed, holder-bound, single-use, short-lived ticket and moved directly over TLS; metadata stays in SQLite; the service is off by default and owner-limited. Not implemented and not yet accepted.
+
 ### ADR 006: control plane and data plane are separate
 
 Status: **accepted as direction; design only, nothing implemented.**

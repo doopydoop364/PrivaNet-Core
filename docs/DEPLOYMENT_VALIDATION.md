@@ -1,6 +1,6 @@
 # Deployment validation: server Coordinator, separate desktop worker
 
-Status: v0.3.5. Scope: **trusted** machines you control, on a LAN or private network. The step-by-step procedure is [FIRST_DEPLOYMENT.md](FIRST_DEPLOYMENT.md); this document is the evidence, the security review, what is still unverified, and the verdict.
+Status: current through v0.3.6, but the validation itself was run at 0.3.0-alpha.5 and has not been repeated on later releases (what remains unproven is listed in [MANUAL_VALIDATION](MANUAL_VALIDATION.md)); CI re-runs the LAN rig on every push. Scope: **trusted** machines you control, on a LAN or private network. The step-by-step procedure is [FIRST_DEPLOYMENT.md](FIRST_DEPLOYMENT.md); this document is the evidence, the security review, what is still unverified, and the verdict.
 
 ## Verdict
 

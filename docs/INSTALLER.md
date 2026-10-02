@@ -1,6 +1,6 @@
 # Installing a PrivaNode (Linux and Windows)
 
-Status: implemented (`0.3.5`); part of [Phase 3.5](../ROADMAP.md#phase-35--remote-node-onboarding--contributor-experience--implemented). The Linux installer is covered by automated tests, including a real service account; the Windows installer is covered by static checks and by staged-install tests that run on Windows in CI, but **its service registration and access-control steps have not been run by the project on a real machine yet** (see [What is verified, and what is not](#what-is-verified-and-what-is-not)).
+Status: implemented (`0.3.6`); part of [Phase 3.5](../ROADMAP.md#phase-35--remote-node-onboarding--contributor-experience--implemented). The Linux installer is covered by automated tests, including a real service account; the Windows installer is covered by static checks and by staged-install tests that run on Windows in CI, but **its service registration and access-control steps have not been run by the project on a real machine yet** (see [What is verified, and what is not](#what-is-verified-and-what-is-not)).
 
 The installer is the contributor's half of onboarding. The owner's half is one command (`privanet-admin invite create`, see [ONBOARDING.md](ONBOARDING.md)); the contributor needs the Coordinator's address and the short code. It installs a PrivaNode that runs as a service, enrolls it, and checks that it signed in. It installs nothing else: the node runs only the typed, registered handlers it always did, under the owner's resource policy. There is no remote shell, no script supplied by the Coordinator, no container, no tunnel.
 
@@ -11,7 +11,7 @@ Requirements: x86-64 or arm64, systemd, `curl`, `tar`, `sudo` (or run as root), 
 The installer is a small file published next to each release and **pinned to that release**. Do not pipe it to a shell: download it, check it, then run it.
 
 ```sh
-V=0.3.5      # the release the owner told you to install
+V=0.3.6      # the release the owner told you to install
 BASE=https://github.com/doopydoop364/PrivaNet-Core/releases/download/v$V
 curl -fsSLO $BASE/install-node.sh
 curl -fsSLO $BASE/SHA256SUMS.txt
@@ -32,7 +32,7 @@ sh install-node.sh --coordinator https://node.example.com --join --name "Anna's 
 Success looks like:
 
 ```
-Downloading PrivaNet 0.3.5 for Linux...
+Downloading PrivaNet 0.3.6 for Linux...
   verified: SHA-256 3b1f...
 Installing...
 Enrolled.
@@ -90,7 +90,7 @@ An existing installation is **never silently replaced**: without one of the opti
 Supported: Windows 10 and Windows Server 2019 or newer, x64 or ARM64, Windows PowerShell 5.1 or PowerShell 7, **Node.js 24.4 or newer installed for all users** (the MSI from nodejs.org; a per-user Node.js under a profile directory cannot be run by the service account, and the installer refuses it). Run from an **elevated** PowerShell (Run as administrator).
 
 ```powershell
-$V = '0.3.5'
+$V = '0.3.6'
 $Base = "https://github.com/doopydoop364/PrivaNet-Core/releases/download/v$V"
 Invoke-WebRequest "$Base/install-node.ps1" -OutFile install-node.ps1
 Invoke-WebRequest "$Base/SHA256SUMS.txt" -OutFile SHA256SUMS.txt

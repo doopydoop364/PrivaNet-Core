@@ -29,7 +29,7 @@ Linux with systemd (Debian, Ubuntu, or a Proxmox LXC or VM). If this is your Pro
 PrivaNet needs **Node.js 24.4 or newer**, which Debian 12 and Ubuntu 22.04 do not package. Download the Linux tarball of Node 24 from <https://nodejs.org/en/download>, extract it to `/opt/node`, and check `/opt/node/bin/node --version`.
 
 ```sh
-VERSION=0.3.5     # the release you are installing
+VERSION=0.3.6     # the release you are installing
 cd /tmp
 curl -fsSLO https://github.com/doopydoop364/PrivaNet-Core/releases/download/v$VERSION/privanet-$VERSION-linux.tar.gz
 curl -fsSLO https://github.com/doopydoop364/PrivaNet-Core/releases/download/v$VERSION/SHA256SUMS.txt
@@ -90,7 +90,7 @@ Check health from any machine that has the root certificate (the protocol header
 
 ```sh
 curl --cacert root.crt -H 'X-PrivaNet-Protocol: 1' https://10.0.0.68/v1/health
-# {"protocolVersion":1,"serviceVersion":"0.3.5","coordinatorId":"...","status":"ok"}
+# {"protocolVersion":1,"serviceVersion":"0.3.6","coordinatorId":"...","status":"ok"}
 ```
 
 If the Coordinator exits with status 78, the log names the invalid setting (never its value) and systemd will not restart-loop it.
@@ -131,7 +131,7 @@ The server node connects through the proxy like any other node. It is scheduled 
 
 ```sh
 sudo privanet-admin nodes
-# {"nodes":[{"nodeId":"...","status":"ONLINE","currentJobs":0,"jobSlots":1,"daemonVersion":"0.3.5","lastHeartbeatAt":...}]}
+# {"nodes":[{"nodeId":"...","status":"ONLINE","currentJobs":0,"jobSlots":1,"daemonVersion":"0.3.6","lastHeartbeatAt":...}]}
 ```
 
 Statuses: `ONLINE`, `STALE` (heartbeat late), `OFFLINE`, `DRAINING`, `OFFLINE_EXPECTED` (said goodbye), and revoked nodes are refused. Service logs are structured event names and codes only (no job data, no addresses, no secrets): `journalctl -u privanet-coordinator`, `journalctl -u privanet-node`.
