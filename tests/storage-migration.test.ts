@@ -76,8 +76,8 @@ test('downgrade is refused honestly: an older Coordinator will not open a versio
   assert.equal(hash(migrations[0]?.sql ?? '').length, 64); assert.equal(migrations.length, 2);
   new SqliteStore(path).close(); // the right list still opens it
 });
-test('version 1 migration text is byte-identical to the previous release (its checksum is what an upgraded database holds)', () => {
-  let base: string; try { base = execFileSync('git', ['show', 'v0.3.6:apps/coordinator/src/migrations.ts'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { if (process.env.PRIVANET_REQUIRE_COMPAT_TAG === '1') throw new Error('the v0.3.6 tag is required'); return; }
+test('version 1 migration text is byte-identical to the previous release (its checksum is what an upgraded database holds)', t => {
+  let base: string; try { base = execFileSync('git', ['show', 'v0.3.6:apps/coordinator/src/migrations.ts'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { if (process.env.PRIVANET_REQUIRE_COMPAT_TAG === '1') throw new Error('the v0.3.6 tag is required'); t.skip('the v0.3.6 tag is not in this clone (git fetch --tags)'); return; }
   const sql = /version: 1, sql: `([\s\S]*?)` \}/.exec(base)?.[1]; assert(sql); assert.equal(hash(sql), hash(migrations[0]?.sql ?? ''));
 });
 test('the schema enforces its own invariants: states, sizes, foreign keys and single-row keys', async t => {

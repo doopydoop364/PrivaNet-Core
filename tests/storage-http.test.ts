@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { ApiError, generateHolderKey, verifyTicket } from '@privanet/shared';
 import { STORAGE_MAX_CHUNK_BYTES, TransferKeysSchema } from '@privanet/protocol';
-import { chunkIdOf, GIB, advert } from './storage-rig.js';
-import { httpRig } from './storage-http.js';
+import { chunkIdOf, advert } from './storage-rig.js';
+import { httpRig, until } from './storage-http.js';
+import { identity } from './helpers.js';
 
 const failure = async (promise: Promise<unknown>): Promise<{ status: number; code: string }> => { try { await promise; } catch (error) { if (error instanceof ApiError) return { status: error.status, code: error.code }; throw error; } throw new Error('expected a refusal'); };
 const newChunk = (size = 2048) => { const bytes = randomBytes(size); return { id: chunkIdOf(bytes), size }; };
@@ -12,7 +13,7 @@ const newChunk = (size = 2048) => { const bytes = randomBytes(size); return { id
 test('over real HTTP: a real node offers storage, receives the Coordinator\'s public keys, and a placement yields a ticket that node can verify offline', async t => {
   const rig = await httpRig(t); const privaNode = await rig.node(); const nodeId = privaNode.status.nodeId; assert(nodeId);
   const service = rig.store.getNodeService(nodeId, 'storage.chunk.v1'); assert.equal(service?.freeBytes, advert().freeBytes); assert.equal(service?.maxChunkBytes, STORAGE_MAX_CHUNK_BYTES);
-  await new Promise(resolve => setTimeout(resolve, 100)); const keys = privaNode.transferKeys; assert(keys); assert.deepEqual(keys, rig.keyring?.verificationKeys()); // fetched best-effort after the first offering heartbeat, held in memory
+  await until(() => privaNode.transferKeys !== null, 'the key fetch'); const keys = privaNode.transferKeys; assert(keys); assert.deepEqual(keys, rig.keyring?.verificationKeys()); // fetched best-effort after the first offering heartbeat, held in memory
   const app = await rig.admin.app({ name: 'drive', allowedJobTypes: [], allowedServices: ['storage.chunk.v1'] }); const api = rig.apiFor(app.token); const holder = generateHolderKey(); const chunk = newChunk();
   const placed = await api.place({ chunkId: chunk.id, size: chunk.size, class: 'drive-chunk', holderKey: holder.publicKey }); assert(placed.grant); assert.equal(placed.state, 'PENDING');
   const verdict = verifyTicket(placed.grant.ticket, { keys, now: Date.now(), expect: { nodeId, operation: 'put', chunkId: chunk.id, applicationId: app.applicationId, size: chunk.size } }); assert.equal(verdict.ok, true);
@@ -46,11 +47,16 @@ test('authentication and authorization on every storage route: no token, wrong k
   assert.equal(await call('/v1/node/transfer-keys', storage.token, 'GET'), 401); assert.equal(await call('/v1/admin/storage', storage.token, 'GET'), 401); assert.equal(await call('/v1/admin/storage/keys/rotate', storage.token, 'POST', '{}'), 401);
   assert.equal(await call('/v1/node/transfer-keys', undefined, 'GET'), 401); assert.equal(await call('/v1/admin/storage', undefined, 'GET'), 401);
 });
-test('the node key route needs a node session and only ever returns public keys', async t => {
-  const rig = await httpRig(t); const privaNode = await rig.node(); void privaNode;
-  const stateDirSession = await rig.transport.request('POST', '/v1/auth/challenge', rig.z.object({ challengeId: rig.z.string() }).loose(), { nodeId: 'node_x', protocolVersion: 1 }).catch(() => undefined); void stateDirSession;
-  const keys = await (await rig.raw('/v1/node/transfer-keys', { headers: { authorization: `Bearer ${'0'.repeat(64)}` } })).status; assert.equal(keys, 401);
-  const parsed = TransferKeysSchema.parse({ coordinatorId: rig.core.store.coordinatorId, keys: rig.keyring?.verificationKeys() }); const text = JSON.stringify(parsed); assert.equal(text.includes('privateKey'), false);
+test('the node key route needs a node session, answers it with public keys only, and refuses every other kind of credential', async t => {
+  const rig = await httpRig(t); const key = identity(); const grant = rig.core.createEnrollment({ expiresInMs: 60000, capabilities: ['system.echo.v1'] });
+  rig.core.prove(key.proof(rig.core.beginEnrollment({ token: grant.token, publicKey: key.publicKey, protocolVersion: 1, daemonVersion: '0.4.0', capabilities: ['system.echo.v1'] })), 'enroll');
+  const post = async (path: string, body: unknown) => { const response = await rig.raw(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); return await response.json() as { challengeId: string; token: string }; };
+  const { canonicalPublicKey } = await import('@privanet/shared'); const challenge = await post('/v1/auth/challenge', { nodeId: canonicalPublicKey(key.publicKey).nodeId, protocolVersion: 1 }); const session = await post('/v1/auth/proof', key.proof(challenge as unknown as Parameters<typeof key.proof>[0]));
+  const answer = await rig.raw('/v1/node/transfer-keys', { headers: { authorization: `Bearer ${session.token}` } }); assert.equal(answer.status, 200); const parsed = TransferKeysSchema.parse(await answer.json());
+  assert.equal(parsed.coordinatorId, rig.core.store.coordinatorId); assert.deepEqual(parsed.keys, rig.keyring?.verificationKeys()); assert.equal(JSON.stringify(parsed).includes('privateKey'), false);
+  const privateKey = JSON.parse(await (await import('node:fs/promises')).readFile(`${rig.dir}/transfer-keys.json`, 'utf8')).keys[0].privateKey as string; assert.equal(JSON.stringify(parsed).includes(privateKey), false);
+  assert.equal((await rig.raw('/v1/node/transfer-keys', { headers: { authorization: `Bearer ${'0'.repeat(64)}` } })).status, 401); assert.equal((await rig.raw('/v1/node/transfer-keys')).status, 401);
+  assert.equal((await rig.raw('/v1/node/transfer-keys', { headers: { authorization: `Bearer ${rig.adminSecret}` } })).status, 401);
 });
 test('placement races over HTTP: forty simultaneous requests against a small node reserve no more than it reported', async t => {
   const rig = await httpRig(t, { limits: { maxOpenPutsPerNode: 1000, maxOpenTransfersPerNode: 1000, maxOpenTransfersPerApplication: 1000, ticketsPerMinute: 1_000_000 } });
@@ -115,4 +121,3 @@ test('nothing storage-related is logged with a ticket, a key, a token or a holde
   for (const secret of [placed.grant.ticket, holder.publicKey, app.token, rig.adminSecret, privateKey, placed.grant.transferId]) assert.equal(text.includes(secret), false);
   assert(text.includes('storage.placed')); assert(text.includes('storage.key_rotated'));
 });
-void GIB;

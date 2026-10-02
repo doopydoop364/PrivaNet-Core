@@ -8,7 +8,7 @@ import { generateHolderKey } from '@privanet/shared';
 import { ALPHA1, oldProtocol } from './old-protocol.js';
 import type { OldProtocol } from './old-protocol.js';
 import { advert, chunkIdOf } from './storage-rig.js';
-import { httpRig, listen } from './storage-http.js';
+import { httpRig, listen, until } from './storage-http.js';
 import { identity } from './helpers.js';
 
 /**
@@ -16,7 +16,6 @@ import { identity } from './helpers.js';
  * node, tool or SDK unable to talk to a newer Coordinator (their schemas are strict), and a newer node must keep working, minus storage, against an older Coordinator.
  */
 let old: OldProtocol | undefined;
-const required = process.env.PRIVANET_REQUIRE_COMPAT_TAG === '1';
 async function base(t: { skip: (reason?: string) => void }): Promise<OldProtocol | undefined> { old ??= await oldProtocol(ALPHA1); if (!old) t.skip('the 0.4.0-alpha.1 revision is not in this clone (git fetch --unshallow --tags)'); return old; }
 const schema = (schemas: OldProtocol, name: string) => { const found = schemas[name]; assert(found, `${name} is missing from the previous release's protocol`); return found; };
 
@@ -24,7 +23,6 @@ test('the previous release\'s protocol file loads, and the new protocol differs 
   const schemas = await base(t); if (!schemas) return;
   for (const name of ['SessionSchema', 'HealthSchema', 'NodeSelfSchema', 'NodeViewSchema', 'NodesSchema', 'CapabilitiesResponseSchema', 'LeaseResponseSchema', 'AckSchema', 'AppCredentialSchema', 'EnrollmentTokenSchema', 'ChallengeSchema', 'HeartbeatSchema', 'AppCreateSchema']) schema(schemas, name);
   assert.equal(Object.hasOwn(schemas, 'SERVICES'), false); assert.equal(Object.hasOwn(schemas, 'PlacementRequestSchema'), false); // storage did not exist there
-  assert.equal(required || true, true);
 });
 test('a new Coordinator\'s answers parse under the old strict schemas: health, sessions, node self, node list (with a storage node), capabilities, credentials and leases', async t => {
   const schemas = await base(t); if (!schemas) return;
@@ -96,7 +94,7 @@ test('a new node against an OLDER Coordinator keeps working: it drops the servic
   assert.equal(privaNode.snapshot.lastFailure, null);
 });
 test('a new node whose Coordinator answers the key route with 404 or an error treats storage as unavailable and nothing else changes', async t => {
-  const rig = await httpRig(t, { keyring: false }); const privaNode = await rig.node(); await new Promise(resolve => setTimeout(resolve, 100));
+  const rig = await httpRig(t, { keyring: false }); const privaNode = await rig.node(); await until(() => rig.logs.length > 0 && rig.store.getNodeService(privaNode.status.nodeId ?? '', 'storage.chunk.v1') !== undefined, 'the first offering heartbeat'); await new Promise(resolve => setTimeout(resolve, 100)); // the (failing) key request has been made by now
   assert.equal(privaNode.transferKeys, null); assert.equal(privaNode.snapshot.connected, true); assert(rig.store.getNodeService(privaNode.status.nodeId ?? '', 'storage.chunk.v1')); // it still offers; the Coordinator simply cannot issue tickets (503 on placement)
 });
 test('keys from a different Coordinator are never accepted: the answer must name the Coordinator the node is bound to', async t => {
@@ -108,7 +106,7 @@ test('keys from a different Coordinator are never accepted: the answer must name
     if (req.url === '/v1/node/transfer-keys') { res.writeHead(200, { 'content-type': 'application/json', 'x-privanet-protocol': '1' }); res.end(JSON.stringify(other.core.storage.transferKeys(other.core.store.coordinatorId))); return; }
     const upstream = await fetch(target + (req.url ?? ''), { method: req.method ?? 'GET', headers, ...(req.method === 'POST' ? { body: Buffer.concat(chunks) } : {}) }); res.writeHead(upstream.status, { 'content-type': 'application/json', 'x-privanet-protocol': '1' }); res.end(Buffer.from(await upstream.arrayBuffer())); })().catch(() => { res.writeHead(502); res.end(); }); }); });
   const url = await listen(forward); t.after(async () => { await new Promise<void>(resolve => { forward.close(() => resolve()); forward.closeAllConnections(); }); });
-  const privaNode = await rig.node(() => ({ 'storage.chunk.v1': advert() }), {}, url); await new Promise(resolve => setTimeout(resolve, 150));
+  const privaNode = await rig.node(() => ({ 'storage.chunk.v1': advert() }), {}, url); await until(() => rig.logs.some(entry => (entry as { event?: string }).event === 'node.transfer_keys_rejected'), 'the rejected keys to be logged');
   assert.notEqual(rig.core.store.coordinatorId, other.core.store.coordinatorId); assert.equal(privaNode.transferKeys, null);
   assert.equal(rig.logs.some(entry => (entry as { event?: string; code?: string }).event === 'node.transfer_keys_rejected'), true);
 });

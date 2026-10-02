@@ -69,8 +69,8 @@ export class PrivaNode {
   private heartbeating: Promise<void> | undefined;
   /** Cleared when the Coordinator rejects the `waitMs` field (an older Coordinator): the node then polls plainly. */
   private leaseWaitSupported = true;
-  /** Cleared when the Coordinator rejects the `services` member (an older Coordinator): the node then offers nothing and says so once. */
-  private servicesSupported = true;
+  /** Set when the Coordinator rejects the `services` member (an older Coordinator): the node then offers nothing and says so once, and tries again after an hour (the Coordinator may have been upgraded) without needing a restart. */
+  private servicesBlockedUntil = 0;
   /** The Coordinator's public ticket-verification keys for this session (memory only: refetched at every connect; nothing uses them until the transfer listener exists). Null when the Coordinator has none to give. */
   private ticketKeys: TransferKeys['keys'] | null = null;
   private ticketKeysTried = false;
@@ -168,7 +168,7 @@ export class PrivaNode {
     // A change of contribution or pressure is reported at once so the Coordinator never schedules against a stale budget.
     const report = this.options.engine?.report;
     // Whether storage is offered is part of the state that triggers an immediate heartbeat, so a withdrawn offer (a store that went unhealthy, an owner pause) reaches the Coordinator at once; the amounts are only hints and ride the ordinary heartbeats.
-    const offered = this.servicesSupported ? this.options.services?.() : undefined; const services = offered && Object.keys(offered).length > 0 ? offered : undefined;
+    const offered = Date.now() >= this.servicesBlockedUntil ? this.options.services?.() : undefined; const services = offered && Object.keys(offered).length > 0 ? offered : undefined;
     const state = `${this.draining}/${report?.contribution}/${report?.pressure}/${this.capabilities.join(',')}/${services?.['storage.chunk.v1'] ? 'storage' : ''}`;
     if (!this.session || (!force && state === this.lastState && Date.now() - this.lastHeartbeat < this.heartbeatMs)) return;
     this.lastState = state;
@@ -182,7 +182,7 @@ export class PrivaNode {
     } catch (error) {
       // An older Coordinator rejects the `services` member (its heartbeat schema is strict). Tried first, before the slots fallback below: a node that merely offers storage must neither stop nor lose its slots.
       if (services && error instanceof ApiError && error.status === 400) {
-        this.servicesSupported = false; this.log({ event: 'node.services_unsupported' }); this.lastState = ''; return this.sendHeartbeat(true);
+        this.servicesBlockedUntil = Date.now() + 3600000; this.log({ event: 'node.services_unsupported' }); this.lastState = ''; return this.sendHeartbeat(true);
       }
       // An older Coordinator accepts exactly one slot and rejects the heartbeat: fall back to one slot and say so once.
       if (this.effectiveSlots > 1 && error instanceof ApiError && error.status === 400) {

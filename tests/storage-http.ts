@@ -54,4 +54,9 @@ export async function httpRig(t: TestContext, options: { limits?: Partial<Storag
   return { dir, url, adminSecret, logs, store, core, keyring, transport, admin, apiFor, node, raw: (path: string, init: RequestInit = {}) => fetch(url + path, { ...init, headers: { 'X-PrivaNet-Protocol': '1', ...(init.headers ?? {}) } }), z };
 }
 export type HttpRig = Awaited<ReturnType<typeof httpRig>>;
+/** Polls until the condition holds (every 50 ms, up to 5 s): the node's key fetch is deliberately fire-and-forget, and slower runners must not turn that into a flaky fixed sleep. */
+export async function until(condition: () => boolean, what = 'condition'): Promise<void> {
+  for (const deadline = Date.now() + 5000; Date.now() < deadline; await new Promise(resolve => setTimeout(resolve, 50))) if (condition()) return;
+  throw new Error(`timed out waiting for ${what}`);
+}
 export { TransferKeysSchema };
