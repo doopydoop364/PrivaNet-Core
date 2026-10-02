@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { AckSchema, JOB_TYPES, RenewResponseSchema, CapabilitiesSchema, ChallengeSchema, HealthSchema, LeaseResponseSchema, NodeSelfSchema, PROTOCOL_VERSION, SERVICE_VERSION, SessionSchema, MAX_JOB_SLOTS } from '@privanet/protocol';
-import type { JobType, Session } from '@privanet/protocol';
+import { AckSchema, JOB_TYPES, RenewResponseSchema, CapabilitiesSchema, ChallengeSchema, HealthSchema, LeaseResponseSchema, NodeSelfSchema, PROTOCOL_VERSION, SERVICE_VERSION, SessionSchema, MAX_JOB_SLOTS, TransferKeysSchema } from '@privanet/protocol';
+import type { JobType, ServicesAdvertisement, Session, TransferKeys } from '@privanet/protocol';
 import { ApiError, Transport } from '@privanet/shared';
 import type { TransportOptions } from '@privanet/shared';
 import { BindingChangedError, bindCoordinator, loadIdentity, signProof } from './identity.js';
@@ -23,6 +23,11 @@ export interface NodeOptions extends TransportOptions {
   /** Enforce the owner's bandwidth limit and monthly allowance for handlers, and account control-plane bytes. */
   transfer?: TransferMeter;
   /** Node-local resume state for checkpointable job types. */
+  /**
+   * The services this node offers right now (today only `storage.chunk.v1`), asked for at every heartbeat. Undefined or an empty answer means none, and nothing is sent. It is a function, not a
+   * list, so a store that turns unhealthy or an owner who pauses the node withdraws the offer on the very next heartbeat.
+   */
+  services?: () => ServicesAdvertisement | undefined;
   checkpoints?: CheckpointStore; drainTimeoutMs?: number; preemptCheckMs?: number; log?: (entry: { event: string; code?: string; reason?: string }) => void;
 }
 /** A job this node is running right now, as the owner may see it: the type and what its definition declares, never the payload. */
@@ -64,6 +69,11 @@ export class PrivaNode {
   private heartbeating: Promise<void> | undefined;
   /** Cleared when the Coordinator rejects the `waitMs` field (an older Coordinator): the node then polls plainly. */
   private leaseWaitSupported = true;
+  /** Cleared when the Coordinator rejects the `services` member (an older Coordinator): the node then offers nothing and says so once. */
+  private servicesSupported = true;
+  /** The Coordinator's public ticket-verification keys for this session (memory only: refetched at every connect; nothing uses them until the transfer listener exists). Null when the Coordinator has none to give. */
+  private ticketKeys: TransferKeys['keys'] | null = null;
+  private ticketKeysTried = false;
   private readonly wakeIdle = new AbortController();
   private readonly log: NonNullable<NodeOptions['log']>;
   private identity: Identity | undefined;
@@ -111,7 +121,7 @@ export class PrivaNode {
     const identity = this.identity;
     const health = await this.transport.request('GET', '/v1/health', HealthSchema);
     await bindCoordinator(this.options.stateDir, this.transport.origin, health.coordinatorId);
-    this.coordinatorInfo = { serviceVersion: health.serviceVersion, protocolVersion: health.protocolVersion };
+    this.coordinatorInfo = { serviceVersion: health.serviceVersion, protocolVersion: health.protocolVersion }; this.coordinatorId = health.coordinatorId;
     let purpose: 'auth' | 'enroll' = 'auth';
     let challenge;
     try {
@@ -127,13 +137,27 @@ export class PrivaNode {
     const session = await this.transport.request('POST', purpose === 'enroll' ? '/v1/enrollment/proof' : '/v1/auth/proof', SessionSchema,
       signProof(identity, challenge, health.coordinatorId, purpose));
     if (session.nodeId !== identity.nodeId || session.coordinatorId !== health.coordinatorId) throw new Error('Invalid node session binding');
-    this.session = session; this.enrollmentToken = undefined; this.lastHeartbeat = 0; this.contacted(); void this.refreshLabel(session.token);
+    this.session = session; this.enrollmentToken = undefined; this.lastHeartbeat = 0; this.contacted(); void this.refreshLabel(session.token); this.ticketKeys = null; this.ticketKeysTried = false;
     this.log({ event: purpose === 'enroll' ? 'node.enrolled' : 'node.authenticated' });
   }
   /** Best effort: the owner-side label of this node (an existing authenticated read of its own record). A failure just leaves it unknown. */
   private async refreshLabel(token: string): Promise<void> {
     try { this.coordinatorLabel = (await this.transport.request('GET', '/v1/node/self', NodeSelfSchema, undefined, token)).displayName ?? null; } catch { /* an older Coordinator, or a hiccup: leave it unknown */ }
   }
+  /** The verification keys the Coordinator published to this node, or null (an older Coordinator, storage off at the Coordinator, or none fetched yet). */
+  get transferKeys(): TransferKeys['keys'] | null { return this.ticketKeys ? [...this.ticketKeys] : null; }
+  /**
+   * Best effort, and only for a node that offers a service: the public keys that verify tickets, from an authenticated route of its own Coordinator. A different Coordinator's keys are never
+   * kept (the answer must name the Coordinator this node is bound to), an older Coordinator's 404 just means "no storage control plane here", and nothing here can fail the node.
+   */
+  private async refreshTransferKeys(token: string, coordinatorId: string): Promise<void> {
+    try {
+      const keys = await this.transport.request('GET', '/v1/node/transfer-keys', TransferKeysSchema, undefined, token);
+      if (keys.coordinatorId !== coordinatorId) { this.ticketKeys = null; this.log({ event: 'node.transfer_keys_rejected', code: 'COORDINATOR_MISMATCH' }); return; }
+      this.ticketKeys = keys.keys;
+    } catch { this.ticketKeys = null; }
+  }
+  private coordinatorId: string | undefined;
   private lastState = '';
   private heartbeat(force = false): Promise<void> {
     // Concurrent lanes and the per-job renewers all ask for heartbeats: share one in-flight request.
@@ -142,16 +166,24 @@ export class PrivaNode {
   }
   private async sendHeartbeat(force = false): Promise<void> {
     // A change of contribution or pressure is reported at once so the Coordinator never schedules against a stale budget.
-    const report = this.options.engine?.report; const state = `${this.draining}/${report?.contribution}/${report?.pressure}/${this.capabilities.join(',')}`;
+    const report = this.options.engine?.report;
+    // Whether storage is offered is part of the state that triggers an immediate heartbeat, so a withdrawn offer (a store that went unhealthy, an owner pause) reaches the Coordinator at once; the amounts are only hints and ride the ordinary heartbeats.
+    const offered = this.servicesSupported ? this.options.services?.() : undefined; const services = offered && Object.keys(offered).length > 0 ? offered : undefined;
+    const state = `${this.draining}/${report?.contribution}/${report?.pressure}/${this.capabilities.join(',')}/${services?.['storage.chunk.v1'] ? 'storage' : ''}`;
     if (!this.session || (!force && state === this.lastState && Date.now() - this.lastHeartbeat < this.heartbeatMs)) return;
     this.lastState = state;
     try {
       await this.transport.request('POST', '/v1/node/heartbeat', AckSchema, {
         protocolVersion: PROTOCOL_VERSION, daemonVersion: SERVICE_VERSION, capabilities: this.capabilities,
         jobSlots: this.effectiveSlots, currentJobs: Math.min(this.currentJobs, this.effectiveSlots), lifecycle: this.draining ? 'DRAINING' : 'ACTIVE',
-        ...(this.options.engine ? { resources: this.options.engine.report } : {}),
+        ...(this.options.engine ? { resources: this.options.engine.report } : {}), ...(services ? { services } : {}),
       }, this.session.token);
+      if (services && !this.ticketKeysTried && this.coordinatorId) { this.ticketKeysTried = true; void this.refreshTransferKeys(this.session.token, this.coordinatorId); }
     } catch (error) {
+      // An older Coordinator rejects the `services` member (its heartbeat schema is strict). Tried first, before the slots fallback below: a node that merely offers storage must neither stop nor lose its slots.
+      if (services && error instanceof ApiError && error.status === 400) {
+        this.servicesSupported = false; this.log({ event: 'node.services_unsupported' }); this.lastState = ''; return this.sendHeartbeat(true);
+      }
       // An older Coordinator accepts exactly one slot and rejects the heartbeat: fall back to one slot and say so once.
       if (this.effectiveSlots > 1 && error instanceof ApiError && error.status === 400) {
         this.effectiveSlots = 1; this.log({ event: 'node.job_slots_unsupported' }); this.lastState = ''; return this.sendHeartbeat(true);

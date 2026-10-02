@@ -10,6 +10,7 @@ import { defaultHandlers } from './handlers.js';
 import { createFetchHandler } from './fetch/handler.js';
 import { BindingChangedError } from './identity.js';
 import { ZodError } from 'zod';
+import type { ServicesAdvertisement } from '@privanet/protocol';
 import { readFileSync } from 'node:fs';
 import { runEnroll, runJoin } from './enroll-cli.js';
 import { runDoctor } from './doctor.js';
@@ -73,10 +74,13 @@ async function main() {
   // Job slots: an explicit PRIVANODE_JOB_SLOTS wins; otherwise the owner's saved choice (panel or `privanet-node slots`); they apply at start, so this is read before the node is built.
   const earlyLocal = await readLocalState(config.stateDir);
   const slots = jobSlotsChoice(config.jobSlots, process.env.PRIVANODE_JOB_SLOTS !== undefined, earlyLocal.kind === 'error' ? undefined : earlyLocal.state.jobSlots);
-  const node = new PrivaNode({ ...config, jobSlots: slots.value, handlers, engine, transfer, checkpoints, log });
+  // The storage offer is read at every heartbeat from the store itself (declared before `storage` so the node can ask it; it is only called once the node runs).
+  const offer: { current: () => ServicesAdvertisement | undefined } = { current: () => undefined };
+  const node = new PrivaNode({ ...config, jobSlots: slots.value, handlers, engine, transfer, checkpoints, log, services: () => offer.current() });
   const history = new ResourceHistory(config.stateDir);
   // The local chunk store (off unless the owner enables it): a library inside this process, with no network or Coordinator interface in this version.
   const storage = new StorageService({ stateDir: config.stateDir, policy: () => control.view.policy ?? resolved.policy, inputs: { draining: () => node.snapshot.draining, engine }, log });
+  offer.current = () => { const advertisement = storage.advertisement(); return advertisement ? { 'storage.chunk.v1': advertisement } : undefined; };
   const control = new LocalControl({ stateDir: config.stateDir, envPolicyFile: process.env.PRIVANODE_POLICY_FILE, node, engine, transfer, history, log, jobSlots: { running: slots.value, fromEnvironment: slots.source === 'environment' }, policyLocked: process.env.PRIVANODE_POLICY_LOCKED === 'true', onPolicy: policy => { void storage.apply(policy); }, onChange: () => { void publish(); } });
   // The snapshot `privanet-node status` reads: private, replaced atomically, no secrets (see status-document.ts).
   const publish = async () => {

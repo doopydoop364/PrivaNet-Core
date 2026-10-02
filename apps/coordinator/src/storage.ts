@@ -150,7 +150,7 @@ export class StorageControl {
   }
   /** Places a chunk (or confirms it already is) and authorizes the first attempt. A reservation, not a guarantee: the node enforces its own quota again when the bytes arrive. */
   place(app: ApplicationRecord, input: unknown): PlacementResponse {
-    const request = PlacementRequestSchema.parse(input); const keyring = this.authorize(app); this.holder(request.holderKey);
+    const keyring = this.authorize(app); const request = PlacementRequestSchema.parse(input); this.holder(request.holderKey); // authorization first: an application without the service learns nothing, not even what a valid request looks like
     return this.store.transaction(() => {
       this.expireOverdue();
       const existing = this.store.getChunk(app.id, request.chunkId);
@@ -191,7 +191,7 @@ export class StorageControl {
   /** A chunk that does not exist and one that belongs to another application are the same answer, byte for byte. */
   private ownChunk(app: ApplicationRecord, chunkId: string): ChunkRecord { return this.store.getChunk(app.id, chunkId) ?? reject(404, 'NOT_FOUND'); }
   ticket(app: ApplicationRecord, input: unknown): TicketResponse {
-    const request = TicketRequestSchema.parse(input); const keyring = this.authorize(app); this.holder(request.holderKey);
+    const keyring = this.authorize(app); const request = TicketRequestSchema.parse(input); this.holder(request.holderKey);
     return this.store.transaction((): TicketResponse => {
       this.expireOverdue();
       const chunk = this.ownChunk(app, request.chunkId);

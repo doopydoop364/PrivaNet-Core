@@ -1,3 +1,4 @@
+import type { StorageAdvertisement } from '@privanet/protocol';
 import { defaultResourcePolicy } from '../resource-policy.js';
 import type { ResourcePolicy } from '../resource-policy.js';
 import { ChunkStore } from './chunk-store.js';
@@ -5,6 +6,7 @@ import type { StoreOptions } from './chunk-store.js';
 import { storageGate } from './gate.js';
 import type { GateInputs } from './gate.js';
 import { StoreError } from './errors.js';
+import { MAX_CHUNK_BYTES } from './limits.js';
 import { emptyStorageStatus, storeRoot } from './status.js';
 import type { StorageStatus } from './status.js';
 
@@ -29,6 +31,23 @@ export class StorageService {
   /** The open store, for in-process callers (none yet); undefined while storage is disabled or the store could not be opened. */
   get chunkStore(): ChunkStore | undefined { return this.store; }
 
+  /**
+   * What this node offers the Coordinator right now (the heartbeat's `services['storage.chunk.v1']`), or undefined, which means "not offered". It is computed from the real store and the real
+   * policy, not copied from a switch: a node advertises only while the owner has enabled storage, the store opened safely, the node's own state would accept a write this instant (the same gate
+   * as `put`: not draining, not paused by the owner or by pressure, inside its schedule, no battery or disk-busy rule) and the store is healthy enough to take one (free space is known, nothing
+   * unsafe). Capacity is what the owner allows, free space is what a put would be allowed right now (quota and reserve already subtracted), and both are hints that the node re-checks at every
+   * transfer. The moment any condition fails the next heartbeat omits the service and the Coordinator stops placing on this node.
+   */
+  advertisement(): StorageAdvertisement | undefined {
+    const policy = this.options.policy().storage; const status = this.cached;
+    if (!policy.enabled || !this.store || status.state === 'ERROR' || status.health === 'UNSAFE') return undefined;
+    const { engine } = this.options.inputs;
+    if (engine.report.contribution === 'PAUSED') return undefined;
+    if (!storageGate({ ...this.options.inputs, enabled: () => policy.enabled })().allowed) return undefined;
+    if (status.flags.includes('FREE_SPACE_UNKNOWN') || status.flags.includes('UNREADABLE') || status.flags.includes('CLOSED') || status.freeBytes === null) return undefined;
+    const freeBytes = Math.min(status.allowedBytes, policy.maxBytes); if (!(freeBytes >= 1)) return undefined;
+    return { capacityBytes: Math.min(policy.maxBytes, 2 ** 50), freeBytes: Math.min(Math.floor(freeBytes), 2 ** 50), maxChunkBytes: MAX_CHUNK_BYTES };
+  }
   private serialized(fn: () => Promise<void>): Promise<void> { const run = this.busy.then(fn, fn); this.busy = run.then(() => undefined, () => undefined); return run; }
   /** Applies the owner's current policy: opens, closes or re-limits the store. Safe to call on every policy change. */
   apply(policy: ResourcePolicy): Promise<void> {
