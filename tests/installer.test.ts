@@ -243,6 +243,37 @@ test('--install-only installs without enrolling, and an interrupted run leaves n
   run.child.kill('SIGTERM'); await run.done; await new Promise(resolve => setTimeout(resolve, 200)); assert.deepEqual(sb2.leftovers(), [], 'the temporary directory is removed even when the installer is killed');
 });
 
+test('--preset: an unknown preset is refused, a known one is saved as the node\'s own policy before it starts, and the first steps name the panel without any secret', { skip }, async t => {
+  const bad = await sandbox(t); const refused = await installer(bad, withRoot(bad, [...common('https://127.0.0.1:1'), '--coordinator', 'https://127.0.0.1:1', '--preset', 'bogus', '--install-only'])).done; assert.equal(refused.code, 2); assert.match(refused.err, /--preset is one of/);
+  const { sb, base, invite } = await reserve(t); const code = invite().code;
+  const run = await installer(sb, base(['--invite-stdin', '--preset', 'generous']), {}, `${code}\n`).done; assert.equal(run.code, 0, run.err + run.out);
+  const state = join(sb.root, 'var', 'lib', 'privanet-node'); const saved = JSON.parse(readFileSync(join(state, 'policy.json'), 'utf8')) as { version: number; preset?: string; policy: { fetch?: { unsafeLocal?: unknown } } };
+  assert.equal(saved.version, 1); assert.equal(saved.preset, 'generous'); assert.equal(statSync(join(state, 'policy.json')).mode & 0o777, 0o600); assert.equal(saved.policy.fetch?.unsafeLocal, undefined);
+  assert.match(run.out, /open its control panel \(this machine only\) with: .*privanet-node panel/);
+  for (const text of [run.out, run.err]) { assert.doesNotMatch(text, /panel-token|#token=/); assert.equal(text.includes(code), false); }
+});
+
+test('the privanet-panel helper opens the panel without the sign-in secret ever being an argument, through a private redirect file', { skip }, async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'privanet-panel-helper-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  const secret = 'S3CRET-sign-in-value-0123456789abcdef'; const argvLog = join(dir, 'argv.log'); const copy = join(dir, 'opened.html'); const runtime = join(dir, 'run'); await mkdir(runtime, { mode: 0o700 });
+  const fakeNode = join(dir, 'privanet-node'); await writeFile(fakeNode, `#!/bin/sh\necho "$@" >> '${argvLog}'\nif [ "$1" = panel ]; then echo "Control panel: http://127.0.0.1:4040/ (this machine only)"; case "$*" in *--url-only*) ;; *) echo "Sign-in link: http://127.0.0.1:4040/#token=${secret}" ;; esac; fi\n`, { mode: 0o755 });
+  const bin = join(dir, 'bin'); await mkdir(bin); const fakeOpen = join(bin, 'xdg-open'); await writeFile(fakeOpen, `#!/bin/sh\necho "$@" >> '${argvLog}'\ncp "$1" '${copy}'\nstat -c %a "$1" > '${copy}.mode'\n`, { mode: 0o755 });
+  const me = (await exec('id', ['-un'])).stdout.trim(); const helper = join(root, 'deploy', 'bin', 'privanet-panel');
+  const env = { PATH: `${bin}:${process.env.PATH ?? '/usr/bin:/bin'}`, PRIVANET_NODE_CMD: fakeNode, PRIVANET_SVC_USER: me, XDG_RUNTIME_DIR: runtime, HOME: dir };
+  const opened = await exec('/bin/sh', [helper, '--open'], { env }); assert.match(opened.stdout, /Control panel: http:\/\/127\.0\.0\.1:4040\//); assert.equal(opened.stdout.includes(secret), false, 'the secret is not printed when a browser was started');
+  const until = Date.now() + 5000; while (!existsSync(`${copy}.mode`) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(readFileSync(`${copy}.mode`, 'utf8').trim(), '600'); assert.ok(readFileSync(copy, 'utf8').includes(secret)); assert.equal(readFileSync(argvLog, 'utf8').includes(secret), false, 'no command line carries the secret');
+  const plain = await exec('/bin/sh', [helper, '--url-only'], { env }); assert.equal(plain.stdout.includes(secret), false);
+  const noDesktop = await exec('/bin/sh', [helper], { env: { ...env, XDG_RUNTIME_DIR: '' } }); assert.ok(noDesktop.stdout.includes(secret), 'without --open the link is printed for the person who asked');
+  await assert.rejects(exec('/bin/sh', [helper, '--bogus'], { env }), (error: { code?: number }) => error.code === 2);
+});
+
+test('the desktop entry and the installers wire up the control panel (Linux entry, Start Menu shortcut), all of it loopback-only', { skip }, () => {
+  const entry = readFileSync(join(root, 'deploy', 'desktop', 'privanet-panel.desktop'), 'utf8'); assert.match(entry, /^\[Desktop Entry\]$/m); assert.match(entry, /^Exec=\/opt\/privanet-node\/current\/deploy\/bin\/privanet-panel --open$/m); assert.match(entry, /^Type=Application$/m);
+  const sh = readFileSync(join(root, 'deploy', 'install', 'install-node.sh'), 'utf8'); const ps = readFileSync(join(root, 'deploy', 'install', 'install-node.ps1'), 'utf8');
+  assert.match(sh, /privanet-panel\.desktop/); assert.match(ps, /\[string\]\$Preset/); assert.match(ps, /http:\/\/127\.0\.0\.1:4040\//); assert.doesNotMatch(ps, /http:\/\/0\.0\.0\.0|http:\/\/\[::\]/);
+});
+
 // The whole life of a contributor's node, for both ways in: install, enroll, run the INSTALLED node (the service is not systemd in a test, but it is the same program with the same
 // files and the installed state), see it ONLINE, stop and start it again with no invite, show the original invite cannot be used again, revoke it and watch it stop.
 const nodeProcess = (sb: { root: string }, c: { url: string }) => {

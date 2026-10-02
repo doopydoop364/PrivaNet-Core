@@ -12,6 +12,8 @@ Every job, including on one machine, follows:
 No search engine, distributed storage, credits, generic compute or remote shell
 is implemented. No application/local execution bypass exists.
 
+**Control panel.** A running node serves a local-only control panel at `http://127.0.0.1:4040/` (presets, pause, schedule, "why am I idle?", diagnostics, support bundle) and an equivalent CLI (`privanet-node status|pause|resume|policy|config check|support-bundle`). See [docs/NODE_CONTROL_PANEL.md](docs/NODE_CONTROL_PANEL.md).
+
 ## Status and limits
 
 Version **0.3.5**: Phase 1 (Core Foundation) and Phase 2 (Adaptive Resource Engine) are complete, and Phase 3's Core side (`web.fetch.v1`, multi-slot nodes, waiting leases) is implemented and measured, and Phase 3.5 (remote node onboarding: invite codes, approval, installers for Linux and Windows, `doctor`, a public-hostname deployment) is implemented with the Windows service steps still to be verified on a real machine; see the [roadmap](ROADMAP.md). Trusted multi-node operation and a separate-host LAN deployment are validated ([multi-node](docs/MULTI_NODE_VALIDATION.md), [deployment](docs/DEPLOYMENT_VALIDATION.md)); first-deployment steps: [FIRST_DEPLOYMENT.md](docs/FIRST_DEPLOYMENT.md). This is a small, operator-run control plane, **not** a production-ready or community-ready network.

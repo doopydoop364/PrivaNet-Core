@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=PrivaNode Control Panel
+GenericName=Contribution settings
+Comment=Choose how much of this computer to contribute, and see what the node is doing
+Exec=/opt/privanet-node/current/deploy/bin/privanet-panel --open
+Terminal=true
+Icon=utilities-system-monitor
+Categories=Network;System;
+Keywords=privanet;contribute;node;

@@ -7,6 +7,17 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 
 ## [Unreleased]
 
+### Added
+- **Node control panel and local controls (a post-3.5 contributor-experience milestone, not a new phase)** ([docs/NODE_CONTROL_PANEL.md](docs/NODE_CONTROL_PANEL.md)).
+  - **Panel** on `http://127.0.0.1:4040/` (loopback only, `PRIVANODE_PANEL=off` to disable, `PRIVANODE_PANEL_PORT`): status, "why am I idle?", contribution level, presets, resource settings, weekly schedule, capability toggles, pause/resume, drain-and-stop, restart, diagnostics (`doctor`), support bundle, aggregate job counts, bounded local history, privacy page. Sign-in by a 256-bit secret in the state directory, HttpOnly SameSite=Strict cookie, Host/Origin/CSRF checks, nonce CSP, no CORS, 32 KB strict bodies, a fixed action allowlist.
+  - **Presets** Minimal / Balanced (the default) / Generous / Maximum while idle, as ordinary policy values; any single change shows "Custom".
+  - **Pause** for 15 minutes, 1 hour, until tomorrow, until reboot or indefinitely, persisted across restarts and distinct from revocation.
+  - **CLI:** `status`, `pause`, `resume`, `config check`, `policy show|export|import|reset|preset`, `name`, `capability`, `panel`, `support-bundle`; all work offline and share validation with the panel. `--json` everywhere.
+  - **Saved policy** `<state>/policy.json` (versioned, atomic, `.bak`, migrated from the bare file; newer or invalid files are reported and never overwritten). `fetch.unsafeLocal` can never be set through any of these paths.
+  - **Support bundle** with allowlisted facts, redaction of every string and a fail-closed final scan, tested with planted secrets.
+  - **Installers:** `--preset` / `-Preset`, a `privanet-panel` helper and desktop entry on Linux, a Start Menu shortcut on Windows, and first-steps output.
+- Coordinator, protocol and `/v1/admin/*` are unchanged; a 0.3.5 node upgrades in place (see the upgrade notes in the control panel document).
+
 ## [0.3.5] - 2026-10-02
 
 ### Added

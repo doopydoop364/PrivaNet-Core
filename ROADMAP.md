@@ -163,6 +163,11 @@ Dependencies and guardrails (a milestone is not done without them):
 
 **Honest limits:** (a) the **Windows installer's service registration, access-control and reboot behaviour have not been run on a real Windows machine** by the project (its static checks and staged-install tests run on `windows-latest` in CI; the first run found and led to fixes for two PowerShell parse errors, and a green run after those fixes had not been seen when this was written); the manual check in [docs/INSTALLER.md](docs/INSTALLER.md#what-is-verified-and-what-is-not) is the verification that remains; (b) the Linux unit was verified as generated text and with a real service account, but not started under a real systemd in an automated test; (c) the release attestation step has not run yet (no release has been cut with it). None of these needs new design; they need a first run on real systems, and none changes who may join or what a node may do. Phase 10 (hostile nodes, public enrollment, reputation) is unchanged and is not started.
 
+
+### Post-3.5 contributor experience: node control panel (implemented, unreleased)
+
+Not a new phase and no renumbering. Local, owner-only tooling so a contributor can configure and understand a node without editing files: a loopback control panel, presets, pause, "why am I idle?", a safe job view, a support bundle, `config check`, policy export/import and installer first-run integration. It changes nothing in the Coordinator, the protocol or the trust model. See [docs/NODE_CONTROL_PANEL.md](docs/NODE_CONTROL_PANEL.md). Not done: system tray, in-place update and rollback, operator dashboard (see the document's status notes).
+
 ## Phase 4 — Generic Storage + Data Plane Foundation — Planned
 
 Goal: provide application-independent object/chunk storage through PrivaNet **and the first generic direct-transfer data plane**, so large payloads never transit the Coordinator ([docs/DATA_PLANE.md](docs/DATA_PLANE.md), ADR 006).

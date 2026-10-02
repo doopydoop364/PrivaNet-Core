@@ -59,6 +59,10 @@ Done. This node is installed, enrolled and signed in.
 
 Exit statuses: `0` done; `2` usage; `3` verification failed (nothing installed); `4` unsupported platform or missing prerequisite; `5` download failed; `6` install failed; `7` enrollment failed (the installation is kept, and running the installer again with a good invite finishes it); `8` installed, but the node could not be confirmed online.
 
+### First run
+
+Pass `--preset minimal|balanced|generous|maximum-idle` to choose how much of the computer to contribute (the default is the shipped conservative policy); it is saved by the node itself before the service starts. The installer links `privanet-panel`, installs a "PrivaNode Control Panel" desktop entry and prints the first steps; the panel is at `http://127.0.0.1:4040/` (see [NODE_CONTROL_PANEL.md](NODE_CONTROL_PANEL.md)). On Windows the equivalent is `-Preset` and a Start Menu shortcut (not yet verified on a real Windows machine; the installer's static checks run in CI).
+
 ### Options
 
 | Option | Meaning |

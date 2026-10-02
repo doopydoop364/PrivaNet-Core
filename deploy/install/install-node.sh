@@ -42,6 +42,7 @@ Options:
   --verify-attestation   also verify GitHub's build provenance for the archive (needs the `gh` command)
   --release-base-url URL download from this https location instead of GitHub (it must serve privanet-VERSION-linux.tar.gz and SHA256SUMS.txt)
   --capabilities a,b     enroll with fewer capabilities than the invite grants     --name NAME   a name hint shown to the owner with --join
+  --preset NAME          how much of this computer to contribute: minimal, balanced (the default), generous or maximum-idle (change it later in the control panel)
   --slots N              concurrent jobs (default 1)
   --no-service           do not install or start a systemd service
   --upgrade | --reinstall | --repair   replace the program files of an existing installation (its identity and enrollment are kept)
@@ -54,7 +55,7 @@ USAGE
 
 # ---- arguments ----------------------------------------------------------------------------------------------------------------------------------------------------
 VERSION=''; COORDINATOR=''; INVITE_FILE=''; INVITE_STDIN=0; JOIN=0; TOKEN_FILE=''; TOKEN_STDIN=0; INSTALL_ONLY=0; CA_FILE=''; PIN_SHA=''; ATTEST=0; BASE_URL=''
-CAPS=''; NAME_HINT=''; SLOTS='1'; NO_SERVICE=0; REINSTALL=0; NEW_IDENTITY=0; YES=0; UNINSTALL=0; PURGE=0; DRY=0; ROOT=''
+CAPS=''; NAME_HINT=''; SLOTS='1'; NO_SERVICE=0; REINSTALL=0; NEW_IDENTITY=0; YES=0; UNINSTALL=0; PURGE=0; DRY=0; ROOT=''; PRESET=''
 while [ $# -gt 0 ]; do
   case $1 in
     --version) [ $# -ge 2 ] || die 2 '--version needs a value'; VERSION=$2; shift 2 ;;
@@ -72,6 +73,7 @@ while [ $# -gt 0 ]; do
     --capabilities) [ $# -ge 2 ] || die 2 '--capabilities needs a value'; CAPS=$2; shift 2 ;;
     --name) [ $# -ge 2 ] || die 2 '--name needs a value'; NAME_HINT=$2; shift 2 ;;
     --slots) [ $# -ge 2 ] || die 2 '--slots needs a value'; SLOTS=$2; shift 2 ;;
+    --preset) [ $# -ge 2 ] || die 2 '--preset needs a value'; PRESET=$2; shift 2 ;;
     --no-service) NO_SERVICE=1; shift ;;
     --upgrade|--reinstall|--repair) REINSTALL=1; shift ;;
     --new-identity) NEW_IDENTITY=1; shift ;;
@@ -116,7 +118,7 @@ case $ARCH in x86_64|amd64) ARCH_NAME=x64 ;; aarch64|arm64) ARCH_NAME=arm64 ;; *
 if [ "$UNINSTALL" = 1 ]; then
   say 'Removing the PrivaNet node service and program files...'
   if [ "$NO_SERVICE" = 0 ] && have systemctl; then as_root systemctl disable --now privanet-node >/dev/null 2>&1 || true; fi
-  as_root rm -f "$UNIT"; [ "$NO_SERVICE" = 0 ] && have systemctl && as_root systemctl daemon-reload >/dev/null 2>&1 || true
+  as_root rm -f "$UNIT" "$R/usr/local/bin/privanet-panel" "$R/usr/share/applications/privanet-panel.desktop"; [ "$NO_SERVICE" = 0 ] && have systemctl && as_root systemctl daemon-reload >/dev/null 2>&1 || true
   as_root rm -rf "$OPT_ROOT"; as_root rm -f "$ETC/node.env" "$ETC/node-policy.json"; as_root rmdir "$ETC" 2>/dev/null || true
   if [ "$PURGE" = 1 ]; then
     as_root rm -rf "$STATE"
@@ -148,6 +150,7 @@ WANT_ENROLL=0; if [ "$modes" -gt 0 ] || [ -n "${PRIVANET_INVITE_CODE:-}" ] || [ 
 [ -z "$INVITE_FILE" ] || [ -r "$INVITE_FILE" ] || die 2 'cannot read the invite file'
 [ -z "$TOKEN_FILE" ] || [ -r "$TOKEN_FILE" ] || die 2 'cannot read the token file'
 [ -z "$CA_FILE" ] || [ -r "$CA_FILE" ] || die 2 'cannot read the CA file'
+case $PRESET in ''|minimal|balanced|generous|maximum-idle) ;; *) die 2 '--preset is one of: minimal, balanced, generous, maximum-idle' ;; esac
 [ -z "${PRIVANET_DOWNLOAD_CA:-}" ] || [ -r "${PRIVANET_DOWNLOAD_CA}" ] || die 2 'cannot read PRIVANET_DOWNLOAD_CA'
 if [ "$NEW_IDENTITY" = 1 ] && [ "$YES" = 0 ]; then die 2 '--new-identity discards this machine'\''s identity (the old state is kept aside); add --yes to confirm'; fi
 
@@ -258,6 +261,12 @@ as_root rm -rf "$OPT_ROOT/$VERSION"; as_root cp -R "$SRC" "$OPT_ROOT/$VERSION" |
 as_root chmod -R go-w "$OPT_ROOT/$VERSION"; as_root chmod -R a+rX "$OPT_ROOT/$VERSION"
 as_root ln -sfn "$VERSION" "$OPT_ROOT/current" || die 6 'could not select the new version'
 as_root chmod 755 "$OPT_ROOT/$VERSION/bin/privanet-node"
+# The control-panel helper and its desktop entry (both optional conveniences: a missing directory is not an error).
+if [ -f "$SRC/deploy/bin/privanet-panel" ]; then
+  as_root chmod 755 "$OPT_ROOT/$VERSION/deploy/bin/privanet-panel" 2>/dev/null || true
+  as_root install -d -m 755 "$R/usr/local/bin" 2>/dev/null && as_root ln -sfn "$REAL_OPT/current/deploy/bin/privanet-panel" "$R/usr/local/bin/privanet-panel" 2>/dev/null || true
+fi
+if [ -f "$SRC/deploy/desktop/privanet-panel.desktop" ]; then as_root install -d -m 755 "$R/usr/share/applications" 2>/dev/null && as_root install -m 644 "$SRC/deploy/desktop/privanet-panel.desktop" "$R/usr/share/applications/privanet-panel.desktop" 2>/dev/null || true; fi
 
 # The state directory and its owner. A new identity sets the old state aside (never deletes it) so the owner can still see and revoke what it was.
 if [ "$NEW_IDENTITY" = 1 ] && [ -e "$STATE" ]; then
@@ -306,10 +315,16 @@ else
   printf '%s\n' "$SECRET" | run_as_svc env $ENVIRON "$NODE_CMD" enroll --coordinator "$COORDINATOR" $FLAG $CAP_ARGS || die 7 'enrollment failed (see the message above). The invite or token is not stored anywhere.'
 fi
 SECRET=''
+# A contribution preset is an ordinary resource-policy change saved by the node itself (as the service account), on top of the default desktop policy. It is applied before the service starts, so the first start already uses it.
+if [ -n "$PRESET" ] && [ "$INSTALL_ONLY" = 0 ] && [ "$KEEP_IDENTITY" = 0 ]; then
+  # shellcheck disable=SC2086
+  run_as_svc env $ENVIRON "PRIVANODE_POLICY_FILE=$ETC/node-policy.json" "$NODE_CMD" policy preset "$PRESET" >/dev/null || say "  (could not apply the $PRESET preset: choose one in the control panel later)"
+fi
 
 # ---- start and confirm ---------------------------------------------------------------------------------------------------------------------------------------------
 if [ "$NO_SERVICE" = 1 ]; then
   say ''; say "Installed in $OPT_ROOT. No service was installed (--no-service/--root). Start the node with: $NODE_CMD"
+  say "Then open its control panel (this machine only) with: $NODE_CMD panel"
   exit 0
 fi
 as_root systemctl daemon-reload; as_root systemctl enable privanet-node >/dev/null 2>&1 || die 6 'could not enable the service'
@@ -326,6 +341,11 @@ while [ "$tries" -lt 30 ]; do
 done
 if [ "$ok" = 1 ]; then
   say ''; say 'Done. This node is installed, enrolled and signed in.'
+  say ''; say 'First steps:'
+  say '  control panel:  http://127.0.0.1:4040/ (this machine only). Open it with:  privanet-panel --open'
+  say '                  There you choose how much of this computer to contribute (presets: minimal, balanced, generous, maximum-idle), set a schedule, pause, and see what the node is doing.'
+  say "  from a shell:   sudo -u $SVC_USER env PRIVANODE_STATE_DIR=$REAL_STATE $REAL_OPT/current/bin/privanet-node status        (also: pause 1h, resume, policy preset balanced, config check)"
+  say ''
   say '  status:     systemctl status privanet-node          logs: journalctl -u privanet-node -n 50'
   say "  diagnose:   sudo -u $SVC_USER env PRIVANODE_STATE_DIR=$REAL_STATE $REAL_OPT/current/bin/privanet-node doctor"
   say '  uninstall:  sh install-node.sh --uninstall [--purge]'

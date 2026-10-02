@@ -50,6 +50,10 @@ Examples:
 
 The Coordinator must never override operator-defined hard limits.
 
+## Choosing limits without editing files
+
+The node's local control panel and CLI (`privanet-node policy preset|show|export|import`, [NODE_CONTROL_PANEL.md](NODE_CONTROL_PANEL.md)) change this same policy: four presets (Minimal, Balanced = the defaults, Generous, Maximum while idle) set the CPU, memory, disk, bandwidth, battery and level fields only, and any other edit is shown as "Custom". Changes apply live except `fetch` limits (restart) and job slots (environment). The panel can pause contribution for a while; a pause is the owner's own decision and is not revocation.
+
 ## Adaptive contribution
 
 Static resource limits are useful but insufficient. A machine's spare capacity changes constantly.
