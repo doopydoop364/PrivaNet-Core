@@ -150,7 +150,7 @@ Dependencies and guardrails (a milestone is not done without them):
 - **The installer is part of the trust chain.** Serve it over HTTPS from the official release, pin it to a release version and checksum, and never place a credential on a command line or in a log.
 - **No new trust in the node.** Scheduling, resource limits and the SSRF guard behave exactly as for any node; a joined contributor's node is still a trusted-by-the-owner machine, not a verified one.
 
-**Status: implemented (`0.3.5`), with one verification still owed.** Every goal above has working, tested code and documentation:
+**Status: implemented (`0.3.5`, carried forward by `0.3.6`), with real-machine verification still owed (see [docs/MANUAL_VALIDATION.md](docs/MANUAL_VALIDATION.md); every item there stays NOT DONE until a person performs it).** Every goal above has working, tested code and documentation:
 
 1. **Public hostname and publicly trusted TLS** (goal 1): `deploy/caddy/Caddyfile.public` and `public-routes.caddy` (an allowlist of exactly the routes a node needs; `/v1/admin/*` and the application API never reach the Coordinator; size and timeout limits; HSTS), run against a real Caddy in CI (`npm run test:proxy`), and `tools/check-exposure.mjs`, a verified-TLS checker to run from another machine. The private-CA LAN setup is unchanged. Buying a domain, DNS, port forwarding and NAT are operator actions, not software ([docs/PUBLIC_NODE.md](docs/PUBLIC_NODE.md)); a certificate from a real certificate authority has not been obtained in a test.
 2. **Installers** (goals 2 and 3): `install-node.sh` for Linux and `install-node.ps1` for Windows, published next to each release and pinned to it, with checksum verification before anything is unpacked, an optional hash pin and GitHub attestation, a dedicated service account, a default policy, secrets only on standard input, a service, and a sign-in check ([docs/INSTALLER.md](docs/INSTALLER.md)). `curl | sh` is deliberately not offered. There is no code-signing key, so there are no GPG or Authenticode signatures; that is stated in the docs rather than hidden.
@@ -162,6 +162,11 @@ Dependencies and guardrails (a milestone is not done without them):
 8. **Exposure review** (guardrail): [docs/EXPOSURE_REVIEW.md](docs/EXPOSURE_REVIEW.md), the project's own review with a test per finding. It is not an independent audit.
 
 **Honest limits:** (a) the **Windows installer's service registration, access-control and reboot behaviour have not been run on a real Windows machine** by the project (its static checks and staged-install tests run on `windows-latest` in CI; the first run found and led to fixes for two PowerShell parse errors, and a green run after those fixes had not been seen when this was written); the manual check in [docs/INSTALLER.md](docs/INSTALLER.md#what-is-verified-and-what-is-not) is the verification that remains; (b) the Linux unit was verified as generated text and with a real service account, but not started under a real systemd in an automated test; (c) the release attestation step has not run yet (no release has been cut with it). None of these needs new design; they need a first run on real systems, and none changes who may join or what a node may do. Phase 10 (hostile nodes, public enrollment, reputation) is unchanged and is not started.
+
+
+### Post-3.5 contributor experience: node control panel (implemented, unreleased)
+
+Not a new phase and no renumbering. Local, owner-only tooling so a contributor can configure and understand a node without editing files: a loopback control panel, presets, pause, "why am I idle?", a safe job view, a support bundle, `config check`, policy export/import and installer first-run integration. It changes nothing in the Coordinator, the protocol or the trust model. See [docs/NODE_CONTROL_PANEL.md](docs/NODE_CONTROL_PANEL.md). The operator side is `privanet-admin ui` ([docs/OPERATOR_DASHBOARD.md](docs/OPERATOR_DASHBOARD.md)). Not done: system tray, in-place update and rollback.
 
 ## Phase 4 — Generic Storage + Data Plane Foundation — Planned
 
@@ -184,7 +189,7 @@ Planned data-plane foundation:
 
 Not part of Phase 4: NAT traversal, public node exposure and relay services (a separate networking problem, [DATA_PLANE.md](docs/DATA_PLANE.md#13-connectivity)); node-to-node transfer (Phase 5).
 
-PrivaNet owns physical resource infrastructure; applications own their own user-visible semantics. Phase 4 implementation does not start while Phase 3 is still being proven.
+PrivaNet owns physical resource infrastructure; applications own their own user-visible semantics. Phase 4 implementation does not start while Phase 3 is still being proven. The concrete design, ADR 007 and the milestone plan (4.0-alpha.1 local chunk store, alpha.2 placement and tickets, alpha.3 direct application-to-node transfer) are in [docs/PHASE4_DESIGN.md](docs/PHASE4_DESIGN.md); it is a proposal for review, not a commitment to the wire formats.
 
 ## Phase 5 — Distributed Storage — Planned
 

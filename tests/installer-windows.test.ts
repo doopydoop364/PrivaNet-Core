@@ -118,3 +118,18 @@ test('windows: an invite installs and enrolls a node with no secret left anywher
   const again = await installer(dir, ['-Root', dir, '-DownloadCa', join(workDir, 'good.crt'), '-ReleaseBaseUrl', base, '-Coordinator', c.url, '-NoService']); assert.equal(again.code, 6, 'an existing installation is not silently replaced');
   const gone = await installer(dir, ['-Root', dir, '-Uninstall', '-Purge']); assert.equal(gone.code, 0, gone.err); assert.equal(existsSync(join(dir, 'ProgramData', 'PrivaNet')), false);
 });
+
+test('windows (staged): upgrading keeps the identity, the enrollment and the administrator\'s files byte for byte, adds nothing the owner did not ask for, and uninstall keeps the identity unless purged', { skip }, async t => {
+  const dir = await staged(t); const base = await releaseServer(t); const c = await realCoordinator(t);
+  const made = c.core.createInvite({ expiresInMs: 600000, capabilities: ['system.echo.v1'], label: 'Upgrade PC' }); const inviteFile = join(dir, 'invite.txt'); await writeFile(inviteFile, `${made.code}\r\n`);
+  const common = ['-Root', dir, '-DownloadCa', join(workDir, 'good.crt'), '-ReleaseBaseUrl', base, '-Coordinator', c.url, '-CaFile', join(workDir, 'good.crt'), '-NoService'];
+  const first = await installer(dir, [...common, '-InviteFile', inviteFile]); assert.equal(first.code, 0, first.err + first.out);
+  const state = join(dir, 'ProgramData', 'PrivaNet', 'node', 'state'); const hash = (file: string) => createHash('sha256').update(readFileSync(file)).digest('hex');
+  const watched = ['identity.json', 'enrollment.json'].map(name => join(state, name)); const before = watched.map(hash);
+  for (const name of ['policy.json', 'local-state.json', 'panel-token', 'status.json']) assert.equal(existsSync(join(state, name)), false, `a v0.3.5 install has no ${name}`);
+  for (let i = 0; i < 2; i++) { const upgraded = await installer(dir, [...common, '-Upgrade']); assert.equal(upgraded.code, 0, upgraded.err + upgraded.out); }
+  assert.deepEqual(watched.map(hash), before, 'identity and enrollment are untouched'); assert.equal(c.core.listNodes().length, 1);
+  for (const name of ['policy.json', 'local-state.json', 'panel-token']) assert.equal(existsSync(join(state, name)), false, `the upgrade does not create ${name}`);
+  const kept = await installer(dir, ['-Root', dir, '-Uninstall']); assert.equal(kept.code, 0, kept.err); assert.ok(existsSync(join(state, 'identity.json')), 'uninstall keeps the identity');
+  const purged = await installer(dir, ['-Root', dir, '-Uninstall', '-Purge']); assert.equal(purged.code, 0, purged.err); assert.equal(existsSync(join(dir, 'ProgramData', 'PrivaNet')), false);
+});

@@ -17,6 +17,7 @@ param(
   [string]$InviteFile = '',
   [string]$TokenFile = '',
   [switch]$Join,
+  [string]$Preset = '',
   [switch]$InstallOnly,
   [string]$Version = '',
   [string]$CaFile = '',
@@ -69,6 +70,7 @@ How to enroll (one of; none of them is ever placed on a command line or written 
   (or set PRIVANET_INVITE_CODE, or answer the hidden prompt if you give none of these)
   -Join               ask to join and wait for the owner to approve (shows a request code; no secret involved)
   -TokenFile FILE     the long one-time enrollment token instead (or PRIVANET_ENROLLMENT_TOKEN)
+  -Preset NAME        how much of this computer to contribute: minimal, balanced (the default), generous or maximum-idle (change it later in the control panel)
   -InstallOnly        install the node without enrolling it (enroll later with `privanet-node enroll` or `join`)
 
 Options:
@@ -205,6 +207,7 @@ function Install-PrivaNode {
   }
   if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$') { Fail 2 'the version is not a release version like 0.3.5 or 0.3.5-rc.1' }
   if ($Sha256 -and $Sha256 -notmatch '^[0-9a-fA-F]{64}$') { Fail 2 '-Sha256 must be 64 hexadecimal characters' }
+  if ($Preset -and $Preset -notin @('minimal', 'balanced', 'generous', 'maximum-idle')) { Fail 2 '-Preset is one of: minimal, balanced, generous, maximum-idle' }
   if ($Slots -lt 1 -or $Slots -gt 64) { Fail 2 '-Slots must be a number from 1 to 64' }
   if ($Capabilities -and $Capabilities -notmatch '^[a-z0-9._,-]+$') { Fail 2 '-Capabilities is a comma-separated list of capability names' }
   if ($Name -and $Name -notmatch "^[A-Za-z0-9][A-Za-z0-9 ._'-]{0,62}$") { Fail 2 '-Name may contain letters, digits, spaces and . _ - only' }
@@ -376,13 +379,22 @@ function Install-PrivaNode {
       if ($code -ne 0) { Fail 7 'enrollment failed (see the message above). The invite or token is not stored anywhere.' }
     }
     $secret = ''
+    # A contribution preset is an ordinary policy change saved by the node itself, on top of the default desktop policy; it is applied before the node starts.
+    if ($Preset -and -not $InstallOnly -and -not $keepIdentity) {
+      $presetCode = Invoke-Node $nodeCmd @('policy', 'preset', $Preset)
+      if ($presetCode -ne 0) { Say "  (could not apply the $Preset preset: choose one in the control panel later)" }
+    }
     if (-not $stage -and (Test-Path -LiteralPath $stateDir)) { Protect-Directory $stateDir }   # the identity the enrollment just created gets the same restricted access
 
     # ---- the service: a scheduled task that runs at boot as LOCAL SERVICE and restarts if the node stops ----
+    $panelShortcutDir = Join-Path $programData 'Microsoft\Windows\Start Menu\Programs\PrivaNet'
     if ($NoService -or $stage) {
       Say ''; Say "Installed in $optRoot. No service was registered (-NoService/-Root). Start the node with: $nodeCmd"
+      Say "Then open its control panel (this machine only) with: $nodeCmd panel"
       return
     }
+    # A Start Menu entry that opens the panel's address (no secret in it; signing in needs the link from `privanet-node panel`, run as an administrator).
+    try { [void](New-Item -ItemType Directory -Force -Path $panelShortcutDir); [IO.File]::WriteAllText((Join-Path $panelShortcutDir 'PrivaNode Control Panel.url'), "[InternetShortcut]`r`nURL=http://127.0.0.1:4040/`r`n", (New-Object System.Text.ASCIIEncoding)) } catch { Say '  (could not create the Start Menu entry for the control panel)' }
     $action = New-ScheduledTaskAction -Execute $launcher
     $trigger = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\LOCAL SERVICE' -LogonType ServiceAccount -RunLevel Limited
@@ -401,6 +413,11 @@ function Install-PrivaNode {
     }
     if ($ok) {
       Say ''; Say 'Done. This node is installed, enrolled and signed in.'
+      Say ''; Say 'First steps:'
+      Say '  control panel:  http://127.0.0.1:4040/ (this machine only; also in the Start Menu under PrivaNet).'
+      Say "                  To sign in, run this in an administrator PowerShell and open the link it prints:  & `"$nodeCmd`" panel"
+      Say '                  There you choose how much of this computer to contribute (presets: minimal, balanced, generous, maximum-idle), set a schedule, pause, and see what the node is doing.'
+      Say "  from a shell:   & `"$nodeCmd`" status        (also: pause 1h, resume, policy preset balanced, config check)"
       Say "  status:     Get-ScheduledTask -TaskName '$TaskName'"
       Say "  diagnose:   `"$nodeCmd`" doctor --coordinator $Coordinator"
       Say '  uninstall:  powershell -ExecutionPolicy Bypass -File install-node.ps1 -Uninstall [-Purge]'
@@ -430,6 +447,8 @@ function Uninstall-PrivaNode([string]$OptRoot, [string]$DataRoot, [string]$State
   if (Test-Path -LiteralPath $current) { (Get-Item -LiteralPath $current).Delete() }
   if (Test-Path -LiteralPath $OptRoot) { Remove-Item -LiteralPath $OptRoot -Recurse -Force; Say "  removed $OptRoot" }
   Remove-EmptyDirectory (Split-Path -Parent $OptRoot)
+  $shortcut = Join-Path (Split-Path -Parent (Split-Path -Parent $DataRoot)) 'Microsoft\Windows\Start Menu\Programs\PrivaNet'
+  if (Test-Path -LiteralPath $shortcut) { Remove-Item -LiteralPath $shortcut -Recurse -Force -ErrorAction SilentlyContinue }
   if ($Purge) {
     if (Test-Path -LiteralPath $DataRoot) { Remove-Item -LiteralPath $DataRoot -Recurse -Force; Say '  deleted the node''s identity, state and configuration' }
     Remove-EmptyDirectory (Split-Path -Parent $DataRoot)

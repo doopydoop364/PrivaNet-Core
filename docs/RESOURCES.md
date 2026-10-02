@@ -50,6 +50,10 @@ Examples:
 
 The Coordinator must never override operator-defined hard limits.
 
+## Choosing limits without editing files
+
+The node's local control panel and CLI (`privanet-node policy preset|show|export|import`, [NODE_CONTROL_PANEL.md](NODE_CONTROL_PANEL.md)) change this same policy: four presets (Minimal, Balanced = the defaults, Generous, Maximum while idle) set the CPU, memory, disk, bandwidth, battery and level fields only, and any other edit is shown as "Custom". Changes apply live except `fetch` limits (restart) and job slots (environment). The panel can pause contribution for a while; a pause is the owner's own decision and is not revocation.
+
 ## Adaptive contribution
 
 Static resource limits are useful but insufficient. A machine's spare capacity changes constantly.
@@ -152,7 +156,7 @@ node currently has sufficient permitted spare resources
 
 ## Job slots
 
-`PRIVANODE_JOB_SLOTS` (1 to 64, default 1) lets one node run several jobs at once. More slots do not raise the owner's limits: the Coordinator reserves the declared estimate of every job a node is already running against the budget it reported (memory, CPU class, disk, network) before placing another, so the node's permitted budget is a hard ceiling on concurrent work. A node with no resource engine reports no budget and is held to the small legacy budget. Slots suit I/O-bound work such as `web.fetch.v1`, where a job is mostly waiting for the network; a CPU-bound workload gains nothing from more slots than cores. How many jobs actually run at once is the smaller of the slots and what the reported budget allows: each job reserves at least its CPU class minimum (5% for `low`, which `web.fetch.v1` declares), so an owner who caps contribution at 25% CPU (the default) runs about five fetches at once however many slots are set. In a measurement with the ceiling raised to 100% one process reached about 16 concurrent fetches before the CPU reservation, not the slot count, was the limit. Each slot is a lane in the same process, so it costs far less than another node process (about 80 MiB each in measurements) and shares one identity and one set of owner limits.
+`PRIVANODE_JOB_SLOTS` (1 to 64, default 1) lets one node run several jobs at once; the owner can also save a number with the control panel or `privanet-node slots set N` (it applies at the next start, and an explicit `PRIVANODE_JOB_SLOTS` takes priority). More slots do not raise the owner's limits: the Coordinator reserves the declared estimate of every job a node is already running against the budget it reported (memory, CPU class, disk, network) before placing another, so the node's permitted budget is a hard ceiling on concurrent work. A node with no resource engine reports no budget and is held to the small legacy budget. Slots suit I/O-bound work such as `web.fetch.v1`, where a job is mostly waiting for the network; a CPU-bound workload gains nothing from more slots than cores. How many jobs actually run at once is the smaller of the slots and what the reported budget allows: each job reserves at least its CPU class minimum (5% for `low`, which `web.fetch.v1` declares), so an owner who caps contribution at 25% CPU (the default) runs about five fetches at once however many slots are set. In a measurement with the ceiling raised to 100% one process reached about 16 concurrent fetches before the CPU reservation, not the slot count, was the limit. Each slot is a lane in the same process, so it costs far less than another node process (about 80 MiB each in measurements) and shares one identity and one set of owner limits.
 
 ## Preemption
 

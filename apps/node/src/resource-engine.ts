@@ -1,7 +1,7 @@
 import type { JobType, ResourceReport } from '@privanet/protocol';
 import { levelAt, nextOffMs } from './resource-schedule.js';
 import type { TransferAllowance } from './transfer-meter.js';
-import type { ResourcePolicy } from './resource-policy.js';
+import type { Level, ResourcePolicy } from './resource-policy.js';
 import type { HostSampler } from './resource-sampler.js';
 
 // Time constants: fall fast when the owner needs resources back, recover slowly to avoid churn.
@@ -16,6 +16,18 @@ const smooth = (previous: number, sample: number, dtMs: number, fallingIsBad: bo
   const worse = fallingIsBad ? sample < previous : sample > previous;
   return previous + (sample - previous) * (1 - Math.exp(-dtMs / (worse ? TAU_DOWN_MS : TAU_UP_MS)));
 };
+
+/** Why contribution is stopped outright. Each is derived from the same numbers the budget is computed from; none is guessed. */
+export type Blocker = 'PAUSED_BY_OWNER' | 'SCHEDULE_OFF' | 'ON_BATTERY' | 'MEMORY_PRESSURE' | 'CPU_PRESSURE' | 'POLICY_ZERO_LIMIT';
+/** Why some work (not all) cannot be offered right now. */
+export type Constraint = 'DISK_BUDGET_EXHAUSTED' | 'TRANSFER_ALLOWANCE_EXHAUSTED' | 'MEMORY_BUDGET_ZERO' | 'CPU_BUDGET_ZERO' | 'BATTERY_REDUCED' | 'PRESSURE_ELEVATED';
+export interface EngineState {
+  /** What the schedule alone says right now (before battery rules and an owner pause). */
+  scheduleLevel: Level; blockers: Blocker[]; constraints: Constraint[]; pressure: ResourceReport['pressure'];
+  /** Whole bytes of memory left after the owner's reserve and safety margin (can be negative). */
+  memoryHeadroomBytes: number; ownerCpuPercent: number;
+}
+export interface OwnerPause { kind: 'timed' | 'reboot' | 'indefinite'; until?: number }
 
 /**
  * Turns operator policy plus host samples into the budget PrivaNet may use *right now*.
@@ -33,8 +45,15 @@ export class ResourceEngine {
   private pressure: ResourceReport['pressure'] = 'NORMAL';
   private highSince: number | undefined;
   private current: ResourceReport = { contribution: 'PAUSED', pressure: 'NORMAL', power: 'UNKNOWN', memoryBudgetBytes: 0, cpuBudgetPercent: 0 };
-  constructor(private readonly policy: ResourcePolicy, private readonly sampler: HostSampler, private readonly clock: () => number = Date.now, private readonly transfer?: TransferAllowance) {}
+  private ownerPause: OwnerPause | undefined;
+  private explained: EngineState = { scheduleLevel: 'ADAPTIVE', blockers: [], constraints: [], pressure: 'NORMAL', memoryHeadroomBytes: 0, ownerCpuPercent: 0 };
+  constructor(private policy: ResourcePolicy, private readonly sampler: HostSampler, private readonly clock: () => number = Date.now, private readonly transfer?: TransferAllowance) {}
 
+  /** Replaces the owner's policy (a saved change from the panel or CLI). Takes effect at the next update; nothing else about the engine changes. */
+  setPolicy(policy: ResourcePolicy): void { this.policy = policy; this.offCache = undefined; }
+  /** The owner's pause: while set, contribution is OFF whatever the schedule says. Not a revocation: the node stays enrolled and connected. */
+  setOwnerPause(pause: OwnerPause | undefined): void { this.ownerPause = pause; }
+  get state(): EngineState { return this.explained; }
   /** Takes a sample and recomputes the budget. Call once per node tick. */
   update(): ResourceReport {
     const now = this.clock(); const sample = this.sampler.sample(); const p = this.policy;
@@ -46,14 +65,17 @@ export class ResourceEngine {
     this.disk = first ? diskBusy : smooth(this.disk, diskBusy, dt, false);
     this.network = first ? networkLoad : smooth(this.network, networkLoad, dt, false);
 
+    const margin = p.safetyMarginBytes;
     const headroom = this.memory - p.reserveMemoryBytes - p.safetyMarginBytes; // memory left after the owner's reserve
     this.pressure = this.nextPressure(headroom);
     if (this.pressure === 'HIGH') this.highSince ??= now; else this.highSince = undefined;
 
-    let level = levelAt(p.schedule, p.defaultLevel, new Date(now));
+    const scheduleLevel = levelAt(p.schedule, p.defaultLevel, new Date(now));
+    let level = scheduleLevel; let batteryReduced = false;
     if (sample.power === 'BATTERY') {
-      if (p.onBattery === 'disable') level = 'OFF'; else if (p.onBattery === 'reduce' && level !== 'OFF') level = 'MINIMAL';
+      if (p.onBattery === 'disable') level = 'OFF'; else if (p.onBattery === 'reduce' && level !== 'OFF') { level = 'MINIMAL'; batteryReduced = true; }
     }
+    if (this.ownerPause) level = 'OFF';
     const paused = level === 'OFF' || this.pressure === 'HIGH' || p.maxMemoryBytes === 0 || p.maxCpuPercent === 0;
     // FULL uses the configured CPU ceiling as-is; ADAPTIVE/MINIMAL also give way to what the owner is using.
     const cpuFree = level === 'FULL' ? 100 - p.reserveCpuPercent : 100 - this.cpu - p.reserveCpuPercent;
@@ -73,6 +95,21 @@ export class ResourceEngine {
     const minute = Math.floor(now / 60000);
     if (this.offCache?.minute !== minute) this.offCache = { minute, at: now, value: nextOffMs(p.schedule, p.defaultLevel, new Date(now)) };
     const untilOff = this.offCache.value === undefined ? undefined : Math.max(0, this.offCache.value - (now - this.offCache.at));
+    const blockers: Blocker[] = []; const constraints: Constraint[] = []; const stopped = paused || level === 'OFF';
+    if (this.ownerPause) blockers.push('PAUSED_BY_OWNER');
+    if (scheduleLevel === 'OFF') blockers.push('SCHEDULE_OFF');
+    if (sample.power === 'BATTERY' && p.onBattery === 'disable') blockers.push('ON_BATTERY');
+    if (p.maxMemoryBytes === 0 || p.maxCpuPercent === 0) blockers.push('POLICY_ZERO_LIMIT');
+    if (this.pressure === 'HIGH') blockers.push(headroom < margin ? 'MEMORY_PRESSURE' : 'CPU_PRESSURE');
+    if (!stopped) {
+      if (diskFields.diskBudgetBytes === 0) constraints.push('DISK_BUDGET_EXHAUSTED');
+      if (this.transfer && networkFields.networkBudgetBytes === 0) constraints.push('TRANSFER_ALLOWANCE_EXHAUSTED');
+      if (general.memoryBudgetBytes === 0) constraints.push('MEMORY_BUDGET_ZERO');
+      if (general.cpuBudgetPercent === 0) constraints.push('CPU_BUDGET_ZERO');
+      if (batteryReduced) constraints.push('BATTERY_REDUCED');
+      if (this.pressure === 'ELEVATED') constraints.push('PRESSURE_ELEVATED');
+    }
+    this.explained = { scheduleLevel, blockers, constraints, pressure: this.pressure, memoryHeadroomBytes: Math.round(headroom), ownerCpuPercent: Math.round(this.cpu) };
     this.current = { contribution: paused || level === 'OFF' ? 'PAUSED' : level,
       pressure: this.pressure, power: sample.power, ...general, ...diskFields, ...networkFields,
       ...(untilOff === undefined ? {} : { availableForMs: untilOff }),

@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { createServer as createHttpsServer } from 'node:https';
 import { createServer as createHttpServer } from 'node:http';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync, readdirSync, statSync, lstatSync, readlinkSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, lstatSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -243,6 +243,37 @@ test('--install-only installs without enrolling, and an interrupted run leaves n
   run.child.kill('SIGTERM'); await run.done; await new Promise(resolve => setTimeout(resolve, 200)); assert.deepEqual(sb2.leftovers(), [], 'the temporary directory is removed even when the installer is killed');
 });
 
+test('--preset: an unknown preset is refused, a known one is saved as the node\'s own policy before it starts, and the first steps name the panel without any secret', { skip }, async t => {
+  const bad = await sandbox(t); const refused = await installer(bad, withRoot(bad, [...common('https://127.0.0.1:1'), '--coordinator', 'https://127.0.0.1:1', '--preset', 'bogus', '--install-only'])).done; assert.equal(refused.code, 2); assert.match(refused.err, /--preset is one of/);
+  const { sb, base, invite } = await reserve(t); const code = invite().code;
+  const run = await installer(sb, base(['--invite-stdin', '--preset', 'generous']), {}, `${code}\n`).done; assert.equal(run.code, 0, run.err + run.out);
+  const state = join(sb.root, 'var', 'lib', 'privanet-node'); const saved = JSON.parse(readFileSync(join(state, 'policy.json'), 'utf8')) as { version: number; preset?: string; policy: { fetch?: { unsafeLocal?: unknown } } };
+  assert.equal(saved.version, 1); assert.equal(saved.preset, 'generous'); assert.equal(statSync(join(state, 'policy.json')).mode & 0o777, 0o600); assert.equal(saved.policy.fetch?.unsafeLocal, undefined);
+  assert.match(run.out, /open its control panel \(this machine only\) with: .*privanet-node panel/);
+  for (const text of [run.out, run.err]) { assert.doesNotMatch(text, /panel-token|#token=/); assert.equal(text.includes(code), false); }
+});
+
+test('the privanet-panel helper opens the panel without the sign-in secret ever being an argument, through a private redirect file', { skip }, async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'privanet-panel-helper-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  const secret = 'S3CRET-sign-in-value-0123456789abcdef'; const argvLog = join(dir, 'argv.log'); const copy = join(dir, 'opened.html'); const runtime = join(dir, 'run'); await mkdir(runtime, { mode: 0o700 });
+  const fakeNode = join(dir, 'privanet-node'); await writeFile(fakeNode, `#!/bin/sh\necho "$@" >> '${argvLog}'\nif [ "$1" = panel ]; then echo "Control panel: http://127.0.0.1:4040/ (this machine only)"; case "$*" in *--url-only*) ;; *) echo "Sign-in link: http://127.0.0.1:4040/#token=${secret}" ;; esac; fi\n`, { mode: 0o755 });
+  const bin = join(dir, 'bin'); await mkdir(bin); const fakeOpen = join(bin, 'xdg-open'); await writeFile(fakeOpen, `#!/bin/sh\necho "$@" >> '${argvLog}'\ncp "$1" '${copy}'\nstat -c %a "$1" > '${copy}.mode'\n`, { mode: 0o755 });
+  const me = (await exec('id', ['-un'])).stdout.trim(); const helper = join(root, 'deploy', 'bin', 'privanet-panel');
+  const env = { PATH: `${bin}:${process.env.PATH ?? '/usr/bin:/bin'}`, PRIVANET_NODE_CMD: fakeNode, PRIVANET_SVC_USER: me, XDG_RUNTIME_DIR: runtime, HOME: dir };
+  const opened = await exec('/bin/sh', [helper, '--open'], { env }); assert.match(opened.stdout, /Control panel: http:\/\/127\.0\.0\.1:4040\//); assert.equal(opened.stdout.includes(secret), false, 'the secret is not printed when a browser was started');
+  const until = Date.now() + 5000; while (!existsSync(`${copy}.mode`) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(readFileSync(`${copy}.mode`, 'utf8').trim(), '600'); assert.ok(readFileSync(copy, 'utf8').includes(secret)); assert.equal(readFileSync(argvLog, 'utf8').includes(secret), false, 'no command line carries the secret');
+  const plain = await exec('/bin/sh', [helper, '--url-only'], { env }); assert.equal(plain.stdout.includes(secret), false);
+  const noDesktop = await exec('/bin/sh', [helper], { env: { ...env, XDG_RUNTIME_DIR: '' } }); assert.ok(noDesktop.stdout.includes(secret), 'without --open the link is printed for the person who asked');
+  await assert.rejects(exec('/bin/sh', [helper, '--bogus'], { env }), (error: { code?: number }) => error.code === 2);
+});
+
+test('the desktop entry and the installers wire up the control panel (Linux entry, Start Menu shortcut), all of it loopback-only', { skip }, () => {
+  const entry = readFileSync(join(root, 'deploy', 'desktop', 'privanet-panel.desktop'), 'utf8'); assert.match(entry, /^\[Desktop Entry\]$/m); assert.match(entry, /^Exec=\/opt\/privanet-node\/current\/deploy\/bin\/privanet-panel --open$/m); assert.match(entry, /^Type=Application$/m);
+  const sh = readFileSync(join(root, 'deploy', 'install', 'install-node.sh'), 'utf8'); const ps = readFileSync(join(root, 'deploy', 'install', 'install-node.ps1'), 'utf8');
+  assert.match(sh, /privanet-panel\.desktop/); assert.match(ps, /\[string\]\$Preset/); assert.match(ps, /http:\/\/127\.0\.0\.1:4040\//); assert.doesNotMatch(ps, /http:\/\/0\.0\.0\.0|http:\/\/\[::\]/);
+});
+
 // The whole life of a contributor's node, for both ways in: install, enroll, run the INSTALLED node (the service is not systemd in a test, but it is the same program with the same
 // files and the installed state), see it ONLINE, stop and start it again with no invite, show the original invite cannot be used again, revoke it and watch it stop.
 const nodeProcess = (sb: { root: string }, c: { url: string }) => {
@@ -285,6 +316,52 @@ for (const way of ['invite', 'approval'] as const) {
     const third = node.start(); await new Promise(resolve => setTimeout(resolve, 4000)); assert.notEqual(c.core.listNodes()[0]?.status, 'ONLINE', 'a restarted revoked node does not come back'); third.child.kill('SIGTERM'); await third.exited;
   });
 }
+
+// Upgrading a v0.3.5 node. A v0.3.5 install is what the installer lays down without the control panel's files: identity, enrollment, node.env, the policy file, and none of policy.json,
+// local-state.json, panel-token, status.json or history.json. (The persistent formats are unchanged since v0.3.5: see tests/compat-v0.3.5.test.ts.) The administrator's own edits to node.env and the
+// policy file must survive an upgrade byte for byte; the node must come back with the same identity, enrolled, with the administrator's settings winning over anything the owner saves later.
+test('upgrading a v0.3.5-shaped node: identity, enrollment, administrator settings and permissions survive; the new local files appear only when used; the environment keeps winning', { skip, timeout: 240000 }, async t => {
+  const { sb, base, invite, c } = await reserve(t); const first = await installer(sb, base(['--invite-stdin']), {}, `${invite('Upgrade PC').code}\n`).done; assert.equal(first.code, 0, first.err + first.out);
+  const state = join(sb.root, 'var', 'lib', 'privanet-node'); const etc = join(sb.root, 'etc', 'privanet'); const nodeId = nodeIdOf(sb);
+  const newFiles = ['policy.json', 'local-state.json', 'panel-token', 'status.json', 'history.json'];
+  for (const name of newFiles) assert.equal(existsSync(join(state, name)), false, `a v0.3.5 install has no ${name}`);
+  // The administrator's customisations, as they would have made them by hand.
+  const envFile = join(etc, 'node.env'); writeFileSync(envFile, `${readFileSync(envFile, 'utf8').trimEnd()}\nPRIVANODE_JOB_SLOTS=3\n`); const policyFile = join(etc, 'node-policy.json'); writeFileSync(policyFile, JSON.stringify({ maxCpuPercent: 33 }));
+  const watched = [join(state, 'identity.json'), join(state, 'enrollment.json'), envFile, policyFile];
+  const before = watched.map(file => ({ file, hash: sha(readFileSync(file)), mode: statSync(file).mode & 0o777 })); const stateMode = statSync(state).mode & 0o777;
+  // Reinstall the same version over it (the upgrade path), twice: nothing the administrator or the node owns is touched.
+  for (const flag of ['--upgrade', '--upgrade']) { const run = await installer(sb, base([flag])).done; assert.equal(run.code, 0, run.err + run.out); assert.match(run.out, /keeping this machine's identity/); }
+  for (const item of before) { assert.equal(sha(readFileSync(item.file)), item.hash, `${item.file} is unchanged`); assert.equal(statSync(item.file).mode & 0o777, item.mode, `${item.file} keeps its mode`); }
+  assert.equal(statSync(state).mode & 0o777, stateMode); assert.equal(stateMode, 0o700); assert.equal(nodeIdOf(sb), nodeId); assert.equal(c.core.listNodes().length, 1, 'no second node was enrolled');
+  for (const name of newFiles) assert.equal(existsSync(join(state, name)), false, `the upgrade itself does not create ${name}`);
+  assert.deepEqual(sb.leftovers(), []);
+  // The upgraded node starts from the old state and comes online with the same identity; the administrator's settings are what it reports.
+  const installed = join(sb.root, 'opt', 'privanet-node', 'current', 'bin', 'privanet-node');
+  const env: NodeJS.ProcessEnv = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: sb.root, PRIVANODE_STATE_DIR: state, NODE_EXTRA_CA_CERTS: join(workDir, 'good.crt'), PRIVANODE_POLICY_FILE: policyFile, PRIVANODE_PANEL_PORT: '0', PRIVANODE_HEARTBEAT_MS: '200', PRIVANODE_POLL_MS: '100', PRIVANODE_JOB_SLOTS: '3' };
+  const startNode = (extra: NodeJS.ProcessEnv = {}, drop: string[] = []) => { const e = { ...env, ...extra }; for (const key of drop) delete e[key]; const child = spawn('/bin/sh', [installed], { env: e, stdio: ['ignore', 'pipe', 'pipe'] }); let log = ''; child.stdout.on('data', (x: Buffer) => { log += x.toString(); }); child.stderr.on('data', (x: Buffer) => { log += x.toString(); }); const exited = new Promise<number>(resolve => child.once('close', code => resolve(code ?? -1))); t.after(() => { child.kill('SIGKILL'); }); return { child, exited, log: () => log }; };
+  const cli = async (args: string[], extra: NodeJS.ProcessEnv = {}, drop: string[] = []) => { const e = { ...env, ...extra }; for (const key of drop) delete e[key]; return exec('/bin/sh', [installed, ...args], { env: e }).then(r => ({ code: 0, out: r.stdout }), (error: { code?: number; stdout?: string }) => ({ code: error.code ?? -1, out: error.stdout ?? '' })); };
+  const one = startNode(); await until('the upgraded node to be ONLINE', () => c.core.listNodes()[0]?.status === 'ONLINE'); assert.match(one.log(), /node\.authenticated/); assert.equal(c.core.listNodes()[0]?.nodeId, nodeId, 'the same identity');
+  const settings = JSON.parse((await cli(['settings', '--json'])).out) as { jobSlots: { value: number; source: string; locked: boolean }; policy: { source: string }; name: { value: string | null } };
+  assert.deepEqual([settings.jobSlots.value, settings.jobSlots.source, settings.jobSlots.locked, settings.policy.source, settings.name.value], [3, 'environment', true, 'installer-file', null]);
+  assert.equal((JSON.parse((await cli(['policy', 'show', '--json'])).out) as { policy: { maxCpuPercent: number } }).policy.maxCpuPercent, 33, "the administrator's policy file is what is in force");
+  // The owner saves a convenience setting: the environment still wins and the CLI says so; nothing the administrator wrote changes.
+  assert.match((await cli(['slots', 'set', '5'])).out, /NOTE: PRIVANODE_JOB_SLOTS is set/); assert.equal((JSON.parse((await cli(['settings', '--json'])).out) as { jobSlots: { value: number } }).jobSlots.value, 3);
+  assert.equal(sha(readFileSync(envFile)), before[2]?.hash); assert.equal(sha(readFileSync(policyFile)), before[3]?.hash);
+  assert.equal(statSync(join(state, 'local-state.json')).mode & 0o777, 0o600); assert.equal(sha(readFileSync(join(state, 'identity.json'))), before[0]?.hash);
+  // Restart after the upgrade, with the administrator's variable removed: the saved choice now applies, still the same node.
+  one.child.kill('SIGTERM'); await one.exited;
+  const two = startNode({}, ['PRIVANODE_JOB_SLOTS']); await until('the restarted node to be ONLINE', () => /node\.authenticated/.test(two.log())); await until('ONLINE', () => c.core.listNodes()[0]?.status === 'ONLINE');
+  assert.equal((JSON.parse((await cli(['settings', '--json'], {}, ['PRIVANODE_JOB_SLOTS'])).out) as { jobSlots: { value: number; source: string } }).jobSlots.value, 5);
+  two.child.kill('SIGTERM'); await two.exited;
+  // A damaged local-state.json (or a missing one) never costs the node its identity: it holds itself paused and the installer's next upgrade leaves the file alone.
+  writeFileSync(join(state, 'local-state.json'), '{damaged'); const upgradedAgain = await installer(sb, base(['--upgrade'])).done; assert.equal(upgradedAgain.code, 0, upgradedAgain.err); assert.equal(readFileSync(join(state, 'local-state.json'), 'utf8'), '{damaged');
+  const three = startNode({}, ['PRIVANODE_JOB_SLOTS']); await until('a node with damaged local state to sign in', () => /node\.authenticated/.test(three.log())); assert.match(three.log(), /node\.local_state_invalid/); assert.equal(c.core.listNodes()[0]?.nodeId, nodeId);
+  const check = await cli(['config', 'check', '--json'], { PRIVANODE_COORDINATOR_URL: c.url }); assert.match(check.out, /LOCAL_STATE_INVALID/);
+  three.child.kill('SIGTERM'); await three.exited; rmSync(join(state, 'local-state.json'));
+  const four = startNode({}, ['PRIVANODE_JOB_SLOTS']); await until('a node with no local state to sign in', () => /node\.authenticated/.test(four.log())); assert.doesNotMatch(four.log(), /node\.local_state_invalid/); four.child.kill('SIGTERM'); await four.exited;
+  // Uninstall keeps the identity and the owner's files unless purged.
+  const removed = await installer(sb, ['--root', sb.root, '--uninstall']).done; assert.equal(removed.code, 0); assert.ok(existsSync(join(state, 'identity.json'))); assert.equal(existsSync(join(sb.root, 'opt', 'privanet-node')), false);
+});
 
 // The real thing, without --root: a service account, real ownership and modes. It changes the machine it runs on (creates the privanet-node user and /opt/privanet-node, /etc/privanet,
 // /var/lib/privanet-node), so it only runs where that is expected: as root, with PRIVANET_INSTALLER_SYSTEM=1 (CI sets it, and then a skip is a failure).

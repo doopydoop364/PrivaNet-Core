@@ -1,0 +1,49 @@
+#!/bin/sh
+# Opens the local control panel of the PrivaNode installed by install-node.sh (docs/NODE_CONTROL_PANEL.md).
+#   privanet-panel                 print the panel address and the sign-in link
+#   privanet-panel --open          also open it in your browser
+#   privanet-panel --url-only      print only the address (no secret)
+# The sign-in link carries a secret that lives in the node's private state directory, readable only by the node's service account: this script runs `privanet-node panel` as that
+# account (asking for your sudo password if you are not root). The secret is never put on a command line: `--open` hands the browser a short-lived private file that redirects to the
+# panel, so it does not show up in the process list.
+set -eu
+umask 077
+SVC_USER=${PRIVANET_SVC_USER:-privanet-node}
+STATE=${PRIVANODE_STATE_DIR:-/var/lib/privanet-node}
+HERE=$(CDPATH='' cd -- "$(dirname -- "$(readlink -f -- "$0" 2>/dev/null || echo "$0")")" && pwd)
+NODE_BIN=${PRIVANET_NODE_CMD:-$HERE/../../bin/privanet-node}
+[ -x "$NODE_BIN" ] || { echo "privanet-panel: cannot find the privanet-node command ($NODE_BIN)" >&2; exit 2; }
+OPEN=0; URL_ONLY=0
+for arg in "$@"; do
+  case $arg in
+    --open) OPEN=1 ;;
+    --url-only) URL_ONLY=1 ;;
+    --help|-h) sed -n '2,9p' "$0"; exit 0 ;;
+    *) echo "privanet-panel: unknown option (see --help)" >&2; exit 2 ;;
+  esac
+done
+as_service() {
+  if [ "$(id -un)" = "$SVC_USER" ]; then "$@"
+  elif [ "$(id -u)" = 0 ]; then runuser -u "$SVC_USER" -- "$@"
+  else sudo -u "$SVC_USER" -- "$@"; fi
+}
+if [ "$URL_ONLY" = 1 ]; then as_service env "PRIVANODE_STATE_DIR=$STATE" "$NODE_BIN" panel --url-only --state-dir "$STATE"; exit 0; fi
+OUT=$(as_service env "PRIVANODE_STATE_DIR=$STATE" "$NODE_BIN" panel --state-dir "$STATE") || { echo "privanet-panel: could not read the panel details (is the node installed, and are you allowed to use sudo?)" >&2; exit 1; }
+LINK=$(printf '%s\n' "$OUT" | sed -n 's/^Sign-in link: *//p')
+URL=$(printf '%s\n' "$OUT" | sed -n 's/^Control panel: *\([^ ]*\).*/\1/p')
+[ -n "$LINK" ] && [ -n "$URL" ] || { echo "privanet-panel: unexpected output from privanet-node panel" >&2; exit 1; }
+printf 'Control panel: %s   (this machine only)\n' "$URL"
+if [ "$OPEN" = 1 ]; then
+  DIR=${XDG_RUNTIME_DIR:-}
+  if [ -n "$DIR" ] && [ -d "$DIR" ] && command -v xdg-open >/dev/null 2>&1; then
+    FILE="$DIR/privanet-panel-$$.html"
+    printf '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=%s"><title>PrivaNode</title>Opening the control panel...\n' "$LINK" >"$FILE"
+    # Remove the redirect file once the browser has had time to read it.
+    ( sleep 20; rm -f "$FILE" ) >/dev/null 2>&1 &
+    xdg-open "$FILE" >/dev/null 2>&1 || { rm -f "$FILE"; echo "privanet-panel: could not start a browser; open the address above and sign in with the link below." >&2; printf 'Sign-in link: %s\n' "$LINK"; }
+    exit 0
+  fi
+  echo "privanet-panel: no desktop session or xdg-open here; open the address above and sign in with this link:" >&2
+fi
+printf 'Sign-in link: %s\n' "$LINK"
+printf '  (the part after # is a secret: keep it private)\n'

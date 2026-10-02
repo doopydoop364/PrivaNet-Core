@@ -1,5 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { AckSchema, JOB_TYPES, RenewResponseSchema, CapabilitiesSchema, ChallengeSchema, HealthSchema, LeaseResponseSchema, PROTOCOL_VERSION, SERVICE_VERSION, SessionSchema, MAX_JOB_SLOTS } from '@privanet/protocol';
+import { AckSchema, JOB_TYPES, RenewResponseSchema, CapabilitiesSchema, ChallengeSchema, HealthSchema, LeaseResponseSchema, NodeSelfSchema, PROTOCOL_VERSION, SERVICE_VERSION, SessionSchema, MAX_JOB_SLOTS } from '@privanet/protocol';
 import type { JobType, Session } from '@privanet/protocol';
 import { ApiError, Transport } from '@privanet/shared';
 import type { TransportOptions } from '@privanet/shared';
@@ -25,8 +25,34 @@ export interface NodeOptions extends TransportOptions {
   /** Node-local resume state for checkpointable job types. */
   checkpoints?: CheckpointStore; drainTimeoutMs?: number; preemptCheckMs?: number; log?: (entry: { event: string; code?: string; reason?: string }) => void;
 }
+/** A job this node is running right now, as the owner may see it: the type and what its definition declares, never the payload. */
+export interface ActiveJob { jobId: string; type: JobType; startedAt: number; preemptible: boolean; checkpointable: boolean; expectedDurationMs: number | null; state: 'running'; estimate: { cpu: string; memoryBytes: number; diskBytes: number; networkBytes: number } }
+export interface NodeCounters { completed: number; failed: number; preempted: number; handedBackOnShutdown: number; leaseLost: number }
+export interface NodeSnapshot {
+  startedAt: number; nodeId: string | null; connected: boolean; draining: boolean; lastContactAt: number | null;
+  /** What the last lease request returned, or null before the first one. */
+  lastLease: { at: number; result: 'job' | 'empty' } | null;
+  /** The most recent failure to reach or sign in to the Coordinator, cleared by the next success. Codes only: no message, address or credential. */
+  lastFailure: { at: number; code: string; reason?: string; status?: number } | null;
+  coordinator: { serviceVersion: string; protocolVersion: number } | null;
+  /** The label the Coordinator's owner gave this node (the Coordinator-side name); null until known. Distinct from the local display name and from the node ID. */
+  coordinatorLabel: string | null;
+  counters: NodeCounters; activeJobs: ActiveJob[]; slots: { configured: number; effective: number };
+  enrolledCapabilities: JobType[]; advertisedCapabilities: JobType[];
+}
 export class PrivaNode {
-  readonly capabilities: JobType[];
+  private readonly enrolledCapabilities: JobType[];
+  private disabledCapabilities = new Set<JobType>();
+  private readonly startedAt = Date.now();
+  private lastContactAt: number | null = null;
+  private lastLease: NodeSnapshot['lastLease'] = null;
+  private lastFailure: NodeSnapshot['lastFailure'] = null;
+  private coordinatorInfo: NodeSnapshot['coordinator'] = null;
+  private coordinatorLabel: string | null = null;
+  private readonly counters: NodeCounters = { completed: 0, failed: 0, preempted: 0, handedBackOnShutdown: 0, leaseLost: 0 };
+  private readonly active = new Map<string, ActiveJob>();
+  /** The capabilities this node advertises: what it enrolled with, minus anything the owner has switched off. */
+  get capabilities(): JobType[] { return this.enrolledCapabilities.filter(capability => !this.disabledCapabilities.has(capability)); }
   private readonly transport: Transport;
   private readonly heartbeatMs: number;
   private readonly pollMs: number;
@@ -51,7 +77,7 @@ export class PrivaNode {
   private draining = false;
   private readonly hardStop = new AbortController();
   constructor(private readonly options: NodeOptions) {
-    this.transport = new Transport(options); this.capabilities = CapabilitiesSchema.parse(options.capabilities);
+    this.transport = new Transport(options); this.enrolledCapabilities = CapabilitiesSchema.parse(options.capabilities);
     this.heartbeatMs = options.heartbeatMs ?? 5000; this.pollMs = options.pollMs ?? 1000;
     this.jobSlots = options.jobSlots ?? 1; this.effectiveSlots = this.jobSlots;
     if (!Number.isSafeInteger(this.jobSlots) || this.jobSlots < 1 || this.jobSlots > MAX_JOB_SLOTS) throw new Error('Invalid job slots');
@@ -60,12 +86,32 @@ export class PrivaNode {
     for (const value of [this.heartbeatMs, this.pollMs]) if (!Number.isSafeInteger(value) || value < 1 || value > 60000) throw new Error('Invalid daemon interval');
     this.log = options.log ?? (() => {}); this.enrollmentToken = options.enrollmentToken;
   }
+  /** Switches capabilities off (or back on) without a restart: the next heartbeat advertises the smaller set, so the Coordinator stops leasing the others. Only enrolled capabilities can be affected. */
+  setDisabledCapabilities(disabled: readonly JobType[]): void {
+    this.disabledCapabilities = new Set(disabled.filter(capability => this.enrolledCapabilities.includes(capability)));
+    this.lastHeartbeat = 0;
+  }
+  /** Read-only view for the local panel and `status`: counters and state the node already tracks, with no payloads, keys or credentials. */
+  get snapshot(): NodeSnapshot {
+    return { startedAt: this.startedAt, nodeId: this.identity?.nodeId ?? null, connected: this.session !== undefined && this.session.expiresAt > Date.now(), draining: this.draining,
+      lastContactAt: this.lastContactAt, lastLease: this.lastLease, lastFailure: this.lastFailure, coordinator: this.coordinatorInfo, coordinatorLabel: this.coordinatorLabel, counters: { ...this.counters },
+      activeJobs: [...this.active.values()], slots: { configured: this.jobSlots, effective: this.effectiveSlots },
+      enrolledCapabilities: [...this.enrolledCapabilities], advertisedCapabilities: this.capabilities };
+  }
+  /** Remembers (and logs) a failure to reach or sign in to the Coordinator: a fixed code and reason, never a message, an address or a credential. */
+  private noteFailure(error: unknown): void {
+    const failure = connectionFailure(error);
+    this.lastFailure = { at: Date.now(), code: failure.code, ...(failure.reason ? { reason: failure.reason } : {}), ...(error instanceof ApiError ? { status: error.status } : {}) };
+    this.log({ event: 'node.connection_failed', ...failure });
+  }
+  private contacted(): void { this.lastContactAt = Date.now(); this.lastFailure = null; }
   get status() { return { nodeId: this.identity?.nodeId ?? null, connected: this.session !== undefined && this.session.expiresAt > Date.now(), capabilities: [...this.capabilities], currentJobs: this.currentJobs }; }
   async connect(): Promise<void> {
     this.identity ??= await loadIdentity(this.options.stateDir);
     const identity = this.identity;
     const health = await this.transport.request('GET', '/v1/health', HealthSchema);
     await bindCoordinator(this.options.stateDir, this.transport.origin, health.coordinatorId);
+    this.coordinatorInfo = { serviceVersion: health.serviceVersion, protocolVersion: health.protocolVersion };
     let purpose: 'auth' | 'enroll' = 'auth';
     let challenge;
     try {
@@ -81,8 +127,12 @@ export class PrivaNode {
     const session = await this.transport.request('POST', purpose === 'enroll' ? '/v1/enrollment/proof' : '/v1/auth/proof', SessionSchema,
       signProof(identity, challenge, health.coordinatorId, purpose));
     if (session.nodeId !== identity.nodeId || session.coordinatorId !== health.coordinatorId) throw new Error('Invalid node session binding');
-    this.session = session; this.enrollmentToken = undefined; this.lastHeartbeat = 0;
+    this.session = session; this.enrollmentToken = undefined; this.lastHeartbeat = 0; this.contacted(); void this.refreshLabel(session.token);
     this.log({ event: purpose === 'enroll' ? 'node.enrolled' : 'node.authenticated' });
+  }
+  /** Best effort: the owner-side label of this node (an existing authenticated read of its own record). A failure just leaves it unknown. */
+  private async refreshLabel(token: string): Promise<void> {
+    try { this.coordinatorLabel = (await this.transport.request('GET', '/v1/node/self', NodeSelfSchema, undefined, token)).displayName ?? null; } catch { /* an older Coordinator, or a hiccup: leave it unknown */ }
   }
   private lastState = '';
   private heartbeat(force = false): Promise<void> {
@@ -92,7 +142,7 @@ export class PrivaNode {
   }
   private async sendHeartbeat(force = false): Promise<void> {
     // A change of contribution or pressure is reported at once so the Coordinator never schedules against a stale budget.
-    const report = this.options.engine?.report; const state = `${this.draining}/${report?.contribution}/${report?.pressure}`;
+    const report = this.options.engine?.report; const state = `${this.draining}/${report?.contribution}/${report?.pressure}/${this.capabilities.join(',')}`;
     if (!this.session || (!force && state === this.lastState && Date.now() - this.lastHeartbeat < this.heartbeatMs)) return;
     this.lastState = state;
     try {
@@ -108,7 +158,7 @@ export class PrivaNode {
       }
       throw error;
     }
-    this.lastHeartbeat = Date.now();
+    this.lastHeartbeat = Date.now(); this.contacted();
   }
   /** Stop asking for work; the next heartbeat tells the Coordinator this node is draining. */
   drain(): void { this.draining = true; this.lastHeartbeat = 0; this.wakeIdle.abort(); }
@@ -129,7 +179,7 @@ export class PrivaNode {
   }
   /** Returns true when it finished a job (completed or handler-failed), so the caller may poll again at once. */
   private async cycle(): Promise<boolean> {
-    let counted = false;
+    let counted = false; let activeId: string | undefined;
     try {
       await this.ensureSession();
       this.options.engine?.update();
@@ -139,9 +189,15 @@ export class PrivaNode {
       // Owner priority: no new work while draining or while the owner's policy/pressure pauses contribution.
       if (this.draining || this.options.engine?.report.contribution === 'PAUSED') return false;
       const lease = await this.requestLease(session.token);
+      this.lastLease = { at: Date.now(), result: lease ? 'job' : 'empty' }; this.contacted();
       if (!lease) return false;
       if (lease.expiresAt <= Date.now()) { this.log({ event: 'job.lease_expired' }); return false; }
       this.currentJobs++; counted = true;
+      const definition = JOB_TYPES[lease.type];
+      activeId = lease.jobId;
+      this.active.set(lease.jobId, { jobId: lease.jobId, type: lease.type, startedAt: Date.now(), preemptible: definition.resources.preemptible, checkpointable: definition.resources.checkpointable,
+        expectedDurationMs: definition.resources.expectedDurationMs, state: 'running',
+        estimate: { cpu: definition.resources.cpu, memoryBytes: definition.resources.memoryBytes, diskBytes: definition.resources.diskBytes, networkBytes: definition.resources.networkBytes } });
       const meter = this.options.transfer; const checkpoints = this.options.checkpoints;
       meter?.record(JSON.stringify(lease.input).length);
       checkpoints?.prune();
@@ -171,21 +227,22 @@ export class PrivaNode {
             ...(checkpoints ? { checkpoint: checkpoints.forJob(lease.jobId, lease.type) } : {}), ...(meter ? { transfer: (bytes: number) => meter.consume(bytes, stop) } : {}) });
         }
         catch {
-          if (leaseLost) { this.log({ event: 'job.lease_lost' }); return false; }
+          if (leaseLost) { this.counters.leaseLost++; this.log({ event: 'job.lease_lost' }); return false; }
           if (stop.aborted) {
             await this.transport.request('POST', `/v1/node/jobs/${lease.jobId}/release`, AckSchema,
               { leaseId: lease.leaseId, reason: this.hardStop.signal.aborted ? 'SHUTDOWN' : 'PREEMPTED' }, session.token);
+            if (this.hardStop.signal.aborted) this.counters.handedBackOnShutdown++; else this.counters.preempted++;
             this.log({ event: 'job.released' }); return false; // the checkpoint is kept so this node can resume the job if it is handed back
           }
           checkpoints?.clear(lease.jobId);
           await this.transport.request('POST', `/v1/node/jobs/${lease.jobId}/fail`, AckSchema,
             { leaseId: lease.leaseId, error: { code: this.capabilities.includes(lease.type) ? 'HANDLER_FAILED' : 'CAPABILITY_DISABLED' } }, session.token);
-          this.log({ event: 'job.handler_failed' }); return true;
+          this.counters.failed++; this.log({ event: 'job.handler_failed' }); return true;
         } finally { if (watcher) clearInterval(watcher); }
         meter?.record(JSON.stringify(result).length);
         // The renewer keeps running until the result is delivered: during a brief Coordinator outage it extends the lease again as soon as the Coordinator is back.
         await this.deliver(lease.jobId, { leaseId: lease.leaseId, result }, session.token, () => leaseUntil);
-        checkpoints?.clear(lease.jobId); this.log({ event: 'job.completed' });
+        checkpoints?.clear(lease.jobId); this.counters.completed++; this.log({ event: 'job.completed' });
         return true;
       } finally { clearInterval(renewer); }
     } catch (error) {
@@ -193,6 +250,7 @@ export class PrivaNode {
       throw error;
     } finally {
       if (counted) this.currentJobs--;
+      if (activeId !== undefined) this.active.delete(activeId);
       // The renewal timer also heartbeats while a job runs; otherwise availability is refreshed on the next cycle.
     }
   }
@@ -237,7 +295,7 @@ export class PrivaNode {
       try { await this.tick(); failures = 0; }
       catch (error) {
         if (error instanceof BindingChangedError || (error instanceof ApiError && [400, 403, 426].includes(error.status))) throw error;
-        failures++; this.log({ event: 'node.connection_failed', ...connectionFailure(error) });
+        failures++; this.noteFailure(error);
       }
       // After a finished job there is probably more queued: poll again immediately instead of idling for a full interval.
       // Sleeping only when a poll finds nothing (or fails) keeps an idle node quiet without capping a busy node at one job per interval.
@@ -258,7 +316,7 @@ export class PrivaNode {
         try { finished = await this.cycle(); failures = 0; }
         catch (error) {
           if (error instanceof BindingChangedError || (error instanceof ApiError && [400, 403, 426].includes(error.status))) throw error;
-          failures++; this.log({ event: 'node.connection_failed', ...connectionFailure(error) });
+          failures++; this.noteFailure(error);
         }
         if (finished && !failures) { await new Promise<void>(resolve => setImmediate(resolve)); continue; }
         const backoff = failures ? Math.min(30000, this.pollMs * 2 ** Math.min(failures, 8)) : this.pollMs;

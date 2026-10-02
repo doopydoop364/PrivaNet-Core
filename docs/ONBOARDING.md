@@ -48,6 +48,8 @@ The enrollment token is written on the node nowhere at all.
 
 ## Administrator workflow
 
+Prefer a browser? `privanet-admin ui` shows nodes, join requests and invites and can create, approve, deny, rename and revoke ([OPERATOR_DASHBOARD.md](OPERATOR_DASHBOARD.md)); everything below also works from the CLI.
+
 On the Coordinator host (the admin API is reachable only on loopback; on a standard install `privanet-admin` reads the secret from the Coordinator's environment file, so it never appears on a command line).
 
 ```sh
@@ -141,6 +143,10 @@ sudo privanet-admin deny J4M7-K2Q9
 ```
 
 The machine makes its own key first and the request is **bound to that key**; the request code is only a label for the owner to read out, and knowing it grants nothing (the node polls with a separate 122-bit request ID). The owner compares the Node ID the machine printed, approves with a capability ceiling and a name, and the machine finishes enrolling with the same signed proof as any other way in. A request expires (10 minutes by default), can be denied or cancelled, is answered once, and survives a restart of `join` (it resumes from `join-request.json` in the state directory). At most 50 requests are pending (5 per address), polling is bounded, and `requests list` never shows a secret because there is none. The admin API stays loopback-only.
+
+## After joining: the control panel
+
+Once enrolled, the node owner manages contribution locally (presets, schedule, pause, why a node is idle, diagnostics, a secret-free support bundle) from `http://127.0.0.1:4040/` or `privanet-node status`. See [NODE_CONTROL_PANEL.md](NODE_CONTROL_PANEL.md). None of this gives the Coordinator or its operator any new control over the node.
 
 ## Diagnosing a node: `privanet-node doctor`
 

@@ -146,6 +146,10 @@ Invites, approval requests, the installers and a public hostname add a Internet-
 - **Installers** are part of the trust chain: HTTPS only, pinned to a release, the archive's SHA-256 verified before it is unpacked, an optional out-of-band pin and GitHub attestation, no secret on a command line, in a file or in output. There is no code-signing key, so no GPG or Authenticode signature exists; the checksum list shares a location with the files it describes, which is why the pin and attestation matter.
 - **No new trust in nodes.** A joined node is trusted by its owner, not verified (Phase 10), and can still only run the typed handlers it was enrolled for.
 
+## Local control panel threats (post-3.5, implemented)
+
+The node's panel ([NODE_CONTROL_PANEL.md](NODE_CONTROL_PANEL.md)) is a local web interface, so it is defended like one: loopback bind only; Host allowlist against DNS rebinding; a 256-bit secret exchanged for an HttpOnly SameSite=Strict cookie required on every API route, reads included; CSRF header, Origin allowlist and JSON content type on writes; nonce CSP and no CORS; bounded strict bodies; a fixed action allowlist with no URL fetch, file access, command, eval, key or environment endpoint. The panel secret is readable by whoever can read the node's state directory (the node's own account and administrators). Support bundles redact every string and fail closed, but are still to be reviewed before sharing. The operator dashboard ([OPERATOR_DASHBOARD.md](OPERATOR_DASHBOARD.md)) is a separate loopback process holding the administrator secret, guarded the same way, that only calls the existing administrator API. Policy changes can only be made by the machine's owner; `fetch.unsafeLocal` is rejected on every path.
+
 ## Limits and threats left open
 
 A stolen grant can enroll the thief before the owner; restrict grant capability,

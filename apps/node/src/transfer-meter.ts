@@ -27,7 +27,7 @@ export class TransferMeter implements TransferAllowance {
   private readonly sleep: NonNullable<TransferMeterOptions['sleep']>;
   private used = 0; private month: string;
   private tokens: number; private refilledAt: number;
-  constructor(private readonly options: TransferMeterOptions) {
+  constructor(private options: TransferMeterOptions) {
     this.file = join(options.stateDir, 'transfer.json'); this.clock = options.clock ?? Date.now;
     this.sleep = options.sleep ?? (async (ms, signal) => { await delay(ms, undefined, signal ? { signal } : {}); });
     this.month = period(this.clock()); this.refilledAt = this.clock(); this.tokens = options.ratePerSec ?? 0;
@@ -45,6 +45,13 @@ export class TransferMeter implements TransferAllowance {
     try { const tmp = `${this.file}.tmp`; writeFileSync(tmp, JSON.stringify({ period: this.month, bytes: this.used }), { mode: 0o600 }); renameSync(tmp, this.file); }
     catch { /* accounting stays correct in memory; persistence is best effort */ }
   }
+  /** Applies new owner limits without a restart (the saved policy changed). The month's usage so far is kept. */
+  setLimits(limits: { ratePerSec: number | null; monthlyBytes: number | null }): void {
+    this.options = { ...this.options, ratePerSec: limits.ratePerSec, monthlyBytes: limits.monthlyBytes };
+    this.tokens = limits.ratePerSec ?? 0; this.refilledAt = this.clock();
+  }
+  /** Metered bytes this calendar month (UTC), and the month they belong to. */
+  usage(): { month: string; usedBytes: number; monthlyBytes: number | null } { this.roll(); return { month: this.month, usedBytes: this.used, monthlyBytes: this.options.monthlyBytes }; }
   remainingBytes(): number {
     this.roll();
     return this.options.monthlyBytes === null ? 2 ** 40 : Math.max(0, this.options.monthlyBytes - this.used);

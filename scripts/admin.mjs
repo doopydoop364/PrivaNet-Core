@@ -1,4 +1,4 @@
-import { ApiError, Transport } from '@privanet/shared';
+import { ApiError, SHELLS, Transport, completionScript } from '@privanet/shared';
 import {
   AckSchema, AppCredentialSchema, CapabilitiesSchema, DisplayNameSchema, EnrollmentTokenIdSchema, EnrollmentTokenSchema, EnrollmentTokensSchema, IdSchema, InviteCreatedSchema, InviteIdSchema,
   InvitesSchema, JoinRequestsSchema, NodeIdSchema, NodesSchema, TypedCodeSchema, formatCode, normalizeCode,
@@ -19,11 +19,13 @@ const USAGE = `Usage:
   privanet-admin nodes revoke NODE
   privanet-admin nodes rename NODE NAME... | nodes rename NODE --clear
   privanet-admin application [NAME] | revoke-application ID | rotate-application ID
+  privanet-admin completions bash|zsh|fish|powershell      a shell completion script (command and option names only)
+  privanet-admin ui [--port 4041]                          the operator dashboard in your browser (this machine only; see docs/OPERATOR_DASHBOARD.md)
 Older forms still work and print JSON: enrollment | nodes | revoke-node ID | application NAME
 Durations: 30s, 10m, 2h, 1d (1 second to 24 hours; an invite at most 1 hour).`;
 
 class UsageError extends Error {}
-const VALUE_FLAGS = new Set(['--expires', '--capabilities', '--label']);
+const VALUE_FLAGS = new Set(['--expires', '--capabilities', '--label', '--port']);
 const BOOLEAN_FLAGS = new Set(['--json', '--all', '--clear']);
 function parseArgs(argv) {
   const flags = {}; const positional = [];
@@ -63,7 +65,19 @@ function requestCode(parts) {
   return formatCode(normalized);
 }
 
+/** Completion words for this tool: sub-commands and option names only (no secret is ever suggested or read). */
+const COMPLETION_TREE = {
+  enrollment: { subs: ['create', 'list', 'revoke'], options: ['--expires', '--capabilities', '--label', '--all', '--json'] }, invite: { subs: ['create', 'list', 'revoke'], options: ['--expires', '--capabilities', '--label', '--all', '--json'] },
+  requests: { subs: ['list'], options: ['--all', '--json'] }, approve: { options: ['--capabilities', '--label', '--json'] }, deny: { options: ['--json'] },
+  nodes: { subs: ['list', 'show', 'revoke', 'rename'], options: ['--json', '--clear'] }, application: {}, 'revoke-application': {}, 'rotate-application': {}, ui: { options: ['--port'] }, completions: { subs: [...SHELLS] },
+};
 async function main() {
+  // Completions need neither the Coordinator nor the administrator credential.
+  if (process.argv[2] === 'completions') {
+    const shell = process.argv[3];
+    if (!SHELLS.includes(shell) || process.argv.length !== 4) throw new UsageError(`usage: privanet-admin completions ${SHELLS.join('|')}`);
+    process.stdout.write(completionScript(shell, 'privanet-admin', COMPLETION_TREE)); return;
+  }
   const transport = new Transport({ url: process.env.PRIVANET_COORDINATOR_URL ?? 'http://127.0.0.1:4010', allowInsecureLoopback: process.env.PRIVANODE_ALLOW_INSECURE_LOOPBACK === 'true' });
   const token = process.env.PRIVANET_ADMIN_SECRET;
   if (!token || !/^[a-f0-9]{64}$/.test(token)) throw new Error('Admin credential required');
@@ -84,6 +98,16 @@ async function main() {
     return matches[0];
   };
 
+  if (operation === 'ui') {
+    // A separate loopback process that holds the administrator secret; the browser only ever gets a one-run sign-in token (see apps/coordinator/src/admin-ui.ts).
+    const port = flags.port === undefined ? 4041 : Number(flags.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new UsageError('--port is a port number');
+    const { startAdminUi } = await import('@privanet/coordinator/admin-ui');
+    const ui = await startAdminUi({ coordinatorUrl: process.env.PRIVANET_COORDINATOR_URL ?? 'http://127.0.0.1:4010', adminSecret: token, allowInsecureLoopback: process.env.PRIVANODE_ALLOW_INSECURE_LOOPBACK === 'true', port, ...(process.env.PRIVANET_PUBLIC_URL ? { publicUrl: process.env.PRIVANET_PUBLIC_URL } : {}) });
+    console.log([`Operator dashboard: http://127.0.0.1:${ui.port}/   (this machine only)`, `Sign-in link:       http://127.0.0.1:${ui.port}/#${ui.token}`, '  The part after # is a secret for this run only; keep it private. Press Ctrl+C to stop.'].join('\n'));
+    await new Promise(resolve => { process.once('SIGINT', resolve); process.once('SIGTERM', resolve); });
+    await ui.close(); return;
+  }
   if (operation === 'enrollment' && subcommand === 'create') {
     const expiresInMs = flags.expires ? parseDuration(flags.expires) : Number(process.env.PRIVANET_ENROLLMENT_TTL_MS ?? 600000);
     const capabilities = flags.capabilities ? CapabilitiesSchema.parse(flags.capabilities.split(',')) : envTypes;
