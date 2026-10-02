@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { uptime } from 'node:os';
 import { statSync } from 'node:fs';
 import { z } from 'zod';
-import { DisplayNameSchema, JobTypeSchema } from '@privanet/protocol';
+import { DisplayNameSchema, JobTypeSchema, MAX_JOB_SLOTS } from '@privanet/protocol';
 import { isMissing, privateDirectory, readPrivateFileUpTo, replacePrivateFile } from '@privanet/shared';
 
 /**
@@ -26,8 +26,15 @@ export const LocalStateSchema = z.strictObject({
   pause: PauseSchema.optional(),
   /** Capabilities the owner has switched off (the node then does not advertise them); only ever a subset of what the node enrolled with. */
   disabledCapabilities: z.array(JobTypeSchema).max(32).default([]),
+  /** How many jobs this node may run at once, chosen in the panel or with `privanet-node slots`; applies at the next start, and PRIVANODE_JOB_SLOTS (when set) wins over it. */
+  jobSlots: z.number().int().min(1).max(MAX_JOB_SLOTS).optional(),
 });
 export type LocalState = z.infer<typeof LocalStateSchema>;
+/** Which number of job slots applies at start: an explicit PRIVANODE_JOB_SLOTS, else the owner's saved choice, else the configured default. */
+export function jobSlotsChoice(configured: number, fromEnvironment: boolean, saved: number | undefined): { value: number; source: 'environment' | 'saved' | 'default' } {
+  if (fromEnvironment) return { value: configured, source: 'environment' };
+  return saved === undefined ? { value: configured, source: 'default' } : { value: saved, source: 'saved' };
+}
 export const emptyLocalState = (): LocalState => ({ version: LOCAL_STATE_VERSION, disabledCapabilities: [] });
 export const localStatePath = (stateDir: string): string => join(stateDir, LOCAL_STATE_FILE);
 

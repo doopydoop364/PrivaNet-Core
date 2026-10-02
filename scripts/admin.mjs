@@ -1,4 +1,4 @@
-import { ApiError, Transport } from '@privanet/shared';
+import { ApiError, SHELLS, Transport, completionScript } from '@privanet/shared';
 import {
   AckSchema, AppCredentialSchema, CapabilitiesSchema, DisplayNameSchema, EnrollmentTokenIdSchema, EnrollmentTokenSchema, EnrollmentTokensSchema, IdSchema, InviteCreatedSchema, InviteIdSchema,
   InvitesSchema, JoinRequestsSchema, NodeIdSchema, NodesSchema, TypedCodeSchema, formatCode, normalizeCode,
@@ -19,6 +19,7 @@ const USAGE = `Usage:
   privanet-admin nodes revoke NODE
   privanet-admin nodes rename NODE NAME... | nodes rename NODE --clear
   privanet-admin application [NAME] | revoke-application ID | rotate-application ID
+  privanet-admin completions bash|zsh|fish|powershell      a shell completion script (command and option names only)
   privanet-admin ui [--port 4041]                          the operator dashboard in your browser (this machine only; see docs/OPERATOR_DASHBOARD.md)
 Older forms still work and print JSON: enrollment | nodes | revoke-node ID | application NAME
 Durations: 30s, 10m, 2h, 1d (1 second to 24 hours; an invite at most 1 hour).`;
@@ -64,7 +65,19 @@ function requestCode(parts) {
   return formatCode(normalized);
 }
 
+/** Completion words for this tool: sub-commands and option names only (no secret is ever suggested or read). */
+const COMPLETION_TREE = {
+  enrollment: { subs: ['create', 'list', 'revoke'], options: ['--expires', '--capabilities', '--label', '--all', '--json'] }, invite: { subs: ['create', 'list', 'revoke'], options: ['--expires', '--capabilities', '--label', '--all', '--json'] },
+  requests: { subs: ['list'], options: ['--all', '--json'] }, approve: { options: ['--capabilities', '--label', '--json'] }, deny: { options: ['--json'] },
+  nodes: { subs: ['list', 'show', 'revoke', 'rename'], options: ['--json', '--clear'] }, application: {}, 'revoke-application': {}, 'rotate-application': {}, ui: { options: ['--port'] }, completions: { subs: [...SHELLS] },
+};
 async function main() {
+  // Completions need neither the Coordinator nor the administrator credential.
+  if (process.argv[2] === 'completions') {
+    const shell = process.argv[3];
+    if (!SHELLS.includes(shell) || process.argv.length !== 4) throw new UsageError(`usage: privanet-admin completions ${SHELLS.join('|')}`);
+    process.stdout.write(completionScript(shell, 'privanet-admin', COMPLETION_TREE)); return;
+  }
   const transport = new Transport({ url: process.env.PRIVANET_COORDINATOR_URL ?? 'http://127.0.0.1:4010', allowInsecureLoopback: process.env.PRIVANODE_ALLOW_INSECURE_LOOPBACK === 'true' });
   const token = process.env.PRIVANET_ADMIN_SECRET;
   if (!token || !/^[a-f0-9]{64}$/.test(token)) throw new Error('Admin credential required');

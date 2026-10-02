@@ -1,4 +1,5 @@
 import { statSync } from 'node:fs';
+import { MAX_JOB_SLOTS } from '@privanet/protocol';
 import type { JobType } from '@privanet/protocol';
 import type { PrivaNode } from './daemon.js';
 import type { ResourceEngine } from './resource-engine.js';
@@ -18,6 +19,8 @@ export interface LocalControlOptions {
   history?: ResourceHistory | undefined; clock?: () => number; log?: (entry: { event: string; code?: string }) => void;
   /** Used to decide when the machine has rebooted (a "until reboot" pause); injectable for tests. */
   bootTime?: () => number;
+  /** The job slots this process started with, and whether PRIVANODE_JOB_SLOTS set them (then a saved choice cannot override it). */
+  jobSlots?: { running: number; fromEnvironment: boolean };
   /** Called after a change has been applied, so the status snapshot can be republished at once. */
   onChange?: () => void;
 }
@@ -90,8 +93,14 @@ export class LocalControl {
     return { local: this.local, localProblem: this.localProblem, pause: this.pauseNow, policy: policy?.policy, source: policy?.source, policyProblem: policy?.problem,
       preset: policy ? detectPreset(policy.policy) : 'custom' as const,
       /** Settings changed since start-up that only take effect after a restart (the web-fetch limits are built into the handler when the node starts). */
-      restartRequired: policy && JSON.stringify(policy.policy.fetch) !== this.startupFetch ? ['fetch'] : [] as string[] };
+      restartRequired: [...(policy && JSON.stringify(policy.policy.fetch) !== this.startupFetch ? ['fetch'] : []), ...(this.jobSlotsPending ? ['job slots'] : [])] as string[],
+      jobSlots: this.jobSlotsView };
   }
+  private get jobSlotsView() {
+    const slots = this.options.jobSlots; const saved = this.local.jobSlots ?? null;
+    return { running: slots?.running ?? null, saved, editable: slots ? !slots.fromEnvironment : false, source: slots?.fromEnvironment ? 'environment' as const : saved === null ? 'default' as const : 'saved' as const };
+  }
+  private get jobSlotsPending(): boolean { const slots = this.options.jobSlots; return !!slots && !slots.fromEnvironment && this.local.jobSlots !== undefined && this.local.jobSlots !== slots.running; }
 
   // ---- changes: each validates, writes atomically, then applies at once ----
   async savePolicy(policy: ResourcePolicy, context: { jobSlots: number; capabilities: JobType[] }): Promise<{ findings: ReturnType<typeof policyFindings> }> {
@@ -117,6 +126,13 @@ export class LocalControl {
   }
   async setName(name: string | undefined): Promise<void> {
     await updateLocalState(this.options.stateDir, state => { const { name: _name, ...rest } = state; void _name; return name === undefined ? rest : { ...rest, name }; });
+    await this.reloadLocal(); this.stamps.local = localStateStamp(this.options.stateDir); this.options.onChange?.();
+  }
+  /** Saves how many jobs may run at once (1 to 64, or undefined for the default). It applies at the next start; an explicit PRIVANODE_JOB_SLOTS cannot be overridden from here. */
+  async setJobSlots(slots: number | undefined): Promise<void> {
+    if (this.options.jobSlots?.fromEnvironment) throw new PolicyError('JOB_SLOTS_SET_BY_ENVIRONMENT');
+    if (slots !== undefined && (!Number.isInteger(slots) || slots < 1 || slots > MAX_JOB_SLOTS)) throw new PolicyError('POLICY_FILE_INVALID', [`jobSlots: a whole number from 1 to ${MAX_JOB_SLOTS}`]);
+    await updateLocalState(this.options.stateDir, state => { const { jobSlots: _slots, ...rest } = state; void _slots; return slots === undefined ? rest : { ...rest, jobSlots: slots }; });
     await this.reloadLocal(); this.stamps.local = localStateStamp(this.options.stateDir); this.options.onChange?.();
   }
   async setDisabledCapabilities(disabled: JobType[]): Promise<void> {

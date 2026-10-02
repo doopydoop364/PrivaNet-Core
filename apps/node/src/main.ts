@@ -24,6 +24,7 @@ import { buildSupportBundle } from './support-bundle.js';
 import { diagnose } from './doctor.js';
 import type { PanelHandle } from './panel.js';
 import { DEFAULT_PANEL_PORT } from './panel-token.js';
+import { jobSlotsChoice, readLocalState } from './local-state.js';
 import { checkForUpdate } from './update-check.js';
 import { STATUS_FILE, STATUS_PUBLISH_MS } from './status-file.js';
 import { privateDirectory, replacePrivateFile } from '@privanet/shared';
@@ -67,9 +68,12 @@ async function main() {
   if (policy.fetch.unsafeLocal) log({ event: 'fetch.unsafe_local_enabled' });
   const handlers = { ...defaultHandlers, 'web.fetch.v1': createFetchHandler({ policy: policy.fetch }) };
   const engine = new ResourceEngine(policy, new OsSampler(config.stateDir), Date.now, transfer);
-  const node = new PrivaNode({ ...config, handlers, engine, transfer, checkpoints, log });
+  // Job slots: an explicit PRIVANODE_JOB_SLOTS wins; otherwise the owner's saved choice (panel or `privanet-node slots`); they apply at start, so this is read before the node is built.
+  const earlyLocal = await readLocalState(config.stateDir);
+  const slots = jobSlotsChoice(config.jobSlots, process.env.PRIVANODE_JOB_SLOTS !== undefined, earlyLocal.kind === 'error' ? undefined : earlyLocal.state.jobSlots);
+  const node = new PrivaNode({ ...config, jobSlots: slots.value, handlers, engine, transfer, checkpoints, log });
   const history = new ResourceHistory(config.stateDir);
-  const control = new LocalControl({ stateDir: config.stateDir, envPolicyFile: process.env.PRIVANODE_POLICY_FILE, node, engine, transfer, history, log, onChange: () => { void publish(); } });
+  const control = new LocalControl({ stateDir: config.stateDir, envPolicyFile: process.env.PRIVANODE_POLICY_FILE, node, engine, transfer, history, log, jobSlots: { running: slots.value, fromEnvironment: slots.source === 'environment' }, onChange: () => { void publish(); } });
   // The snapshot `privanet-node status` reads: private, replaced atomically, no secrets (see status-document.ts).
   const publish = async () => {
     try { await replacePrivateFile(join(await privateDirectory(config.stateDir), STATUS_FILE), JSON.stringify({ version: 1, publishedAt: Date.now(), status: buildStatus({ node, engine, control, transfer, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities }) })); } catch { /* status is a convenience */ }
@@ -92,7 +96,7 @@ async function main() {
     const port = Number(process.env.PRIVANODE_PANEL_PORT ?? DEFAULT_PANEL_PORT);
     try {
       if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('bad port');
-      panel = await startPanel({ stateDir: config.stateDir, port, node, engine, control, transfer, history, logs, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities, jobSlots: config.jobSlots, env: process.env, actions,
+      panel = await startPanel({ stateDir: config.stateDir, port, node, engine, control, transfer, history, logs, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities, jobSlots: slots.value, env: process.env, actions,
         supportBundle: async () => buildSupportBundle({ env: process.env, policy: resolved, local: control.view.local, localProblem: control.view.localProblem, status: JSON.parse(JSON.stringify(buildStatus({ node, engine, control, transfer, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities }))) as Record<string, unknown>,
           doctor: await diagnose({ url: config.url, stateDir: config.stateDir, allowInsecureLoopback: process.env.PRIVANODE_ALLOW_INSECURE_LOOPBACK === 'true', timeoutMs: 8000, env: process.env }).catch(() => undefined), logs: logs.recent(200) }), updateCheck: () => checkForUpdate() });
       log({ event: 'panel.listening', code: String(panel.port) });

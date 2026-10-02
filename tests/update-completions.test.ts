@@ -4,6 +4,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { checkForUpdate, RELEASES_API } from '@privanet/node/update-check';
 import { COMPLETION_TREE, SHELLS, completionScript } from '@privanet/node/completions';
 import { runLocal, LOCAL_COMMANDS } from '@privanet/node/local-cli';
@@ -54,4 +55,18 @@ test('the CLI prints completions, refuses unknown shells and unknown update subc
   const bash = await run('completions', ['bash']); assert.equal(bash.code, 0); assert.equal(bash.out, completionScript('bash'));
   assert.equal((await run('completions', ['tcsh'])).code, 78); assert.equal((await run('completions', [])).code, 78);
   assert.equal((await run('update', [])).code, 78); assert.equal((await run('update', ['install'])).code, 78); assert.match((await run('update', ['install'])).err, /usage: privanet-node update check/);
+});
+
+test('privanet-admin completions: every shell, no credential needed, no secret or network word, unknown shell refused', () => {
+  const root = fileURLToPath(new URL('../../', import.meta.url));
+  const run = (args: string[]) => spawnSync(process.execPath, [join(root, 'scripts', 'admin.mjs'), ...args], { cwd: root, env: { PATH: process.env.PATH ?? '' }, encoding: 'utf8' });
+  for (const shell of SHELLS) {
+    const result = run(['completions', shell]); assert.equal(result.status, 0, shell); assert.equal(result.stderr, '');
+    for (const word of ['enrollment', 'invite', 'requests', 'approve', 'deny', 'nodes', 'revoke-application', 'rotate-application', 'ui', 'completions', '--capabilities']) assert.ok(result.stdout.includes(word), `${shell}: ${word}`);
+    assert.doesNotMatch(result.stdout, /curl|wget|https?:|\beval\b|ADMIN_SECRET/i, shell);
+  }
+  const bash = run(['completions', 'bash']).stdout; const dir = mkdtempSync(join(tmpdir(), 'privanet-admin-completions-'));
+  try { const file = join(dir, 'a.bash').replaceAll('\\', '/'); writeFileSync(file, bash); execFileSync('bash', ['-n', file]);
+    assert.equal(execFileSync('bash', ['-c', `source ${file}; COMP_WORDS=(privanet-admin nodes re); COMP_CWORD=2; _privanet_admin; echo "\${COMPREPLY[@]}"`]).toString().trim(), 'revoke rename'); } finally { rmSync(dir, { recursive: true, force: true }); }
+  assert.equal(run(['completions', 'tcsh']).status, 1); assert.equal(run(['completions']).status, 1);
 });

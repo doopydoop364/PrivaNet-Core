@@ -1,11 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- the status document is rendered from a published JSON snapshot whose shape is checked where it is produced (status-document.ts) */
 import { openSync, closeSync, writeSync, readFileSync, constants as fsConstants } from 'node:fs';
-import { JobTypeSchema } from '@privanet/protocol';
+import { JobTypeSchema, MAX_JOB_SLOTS } from '@privanet/protocol';
 import type { JobType } from '@privanet/protocol';
 import { isMissing, readPrivateFileUpTo } from '@privanet/shared';
 import { checkConfig, policyFindings } from './config-check.js';
 import type { Finding } from './config-check.js';
-import { activePause, readLocalState, updateLocalState, makePause } from './local-state.js';
+import { activePause, jobSlotsChoice, readLocalState, updateLocalState, makePause } from './local-state.js';
 import type { PauseRequest } from './local-state.js';
 import { PolicyError, MAX_POLICY_BYTES, exportPolicyText, parsePolicyText, removePolicyFile, resolvePolicy, savePolicyFile } from './policy-store.js';
 import { PRESET_IDS, PRESETS, applyPreset, detectPreset } from './presets.js';
@@ -48,7 +48,7 @@ const done = (io: CliIo, parsed: Parsed, data: unknown, human: string): void => 
 const bytes = (n: number | null | undefined): string => n === null || n === undefined ? 'unlimited' : n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(n % 1024 ** 3 === 0 ? 0 : 1)} GiB` : n >= 1024 ** 2 ? `${Math.round(n / 1024 ** 2)} MiB` : `${Math.round(n / 1024)} KiB`;
 const ago = (at: number | null, now: number): string => at === null ? 'never' : `${Math.max(0, Math.round((now - at) / 1000))}s ago`;
 
-export const LOCAL_COMMANDS = ['status', 'pause', 'resume', 'config', 'policy', 'name', 'capability', 'panel', 'support-bundle', 'update', 'completions'] as const;
+export const LOCAL_COMMANDS = ['status', 'pause', 'resume', 'config', 'policy', 'name', 'capability', 'slots', 'panel', 'support-bundle', 'update', 'completions'] as const;
 
 /** `status`: the live document the running node publishes, or an offline view built from the files when it is not running. Never contacts the Coordinator. */
 async function statusCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
@@ -170,6 +170,25 @@ async function nameCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): P
   }
   throw new UsageError('usage: privanet-node name show|clear|set NAME');
 }
+/** `slots`: how many jobs may run at once. Saved in the local state; it applies the next time the node starts, and an explicit PRIVANODE_JOB_SLOTS (when set) takes priority. */
+async function slotsCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
+  const parsed = parse(argv, COMMON); const stateDir = stateDirOf(parsed, env); const [action, value] = parsed.positional;
+  const fromEnvironment = env.PRIVANODE_JOB_SLOTS !== undefined;
+  if (action === 'show' && parsed.positional.length === 1) {
+    const local = await readLocalState(stateDir); const configured = Number(env.PRIVANODE_JOB_SLOTS ?? 1) || 1; const choice = jobSlotsChoice(configured, fromEnvironment, local.state.jobSlots);
+    done(io, parsed, { slots: choice.value, source: choice.source, saved: local.state.jobSlots ?? null }, `Job slots: ${choice.value} (${choice.source === 'environment' ? 'set by PRIVANODE_JOB_SLOTS, which takes priority' : choice.source === 'saved' ? 'saved with this command or the panel' : 'the default'}).`);
+    return 0;
+  }
+  if (action === 'clear' && parsed.positional.length === 1) { await updateLocalState(stateDir, state => { const { jobSlots: _slots, ...others } = state; void _slots; return others; }); done(io, parsed, { ok: true }, 'Saved job slots cleared; the default applies at the next start.'); return 0; }
+  if (action === 'set' && value !== undefined && parsed.positional.length === 2) {
+    const slots = /^\d{1,2}$/.test(value) ? Number(value) : NaN;
+    if (!(slots >= 1 && slots <= MAX_JOB_SLOTS)) throw new UsageError(`job slots are a whole number from 1 to ${MAX_JOB_SLOTS}`);
+    await updateLocalState(stateDir, state => ({ ...state, jobSlots: slots }));
+    done(io, parsed, { ok: true, slots, appliesAtNextStart: true, overriddenByEnvironment: fromEnvironment }, `Saved: ${slots} job slot${slots === 1 ? '' : 's'}. It applies the next time the node starts.${fromEnvironment ? ' NOTE: PRIVANODE_JOB_SLOTS is set in this environment and takes priority over it.' : ''}`);
+    return 0;
+  }
+  throw new UsageError('usage: privanet-node slots show|clear|set N');
+}
 async function capabilityCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
   const parsed = parse(argv, COMMON); const stateDir = stateDirOf(parsed, env); const [action, type] = parsed.positional;
   if ((action !== 'enable' && action !== 'disable') || !type || parsed.positional.length !== 2) throw new UsageError('usage: privanet-node capability enable|disable CAPABILITY');
@@ -242,6 +261,7 @@ const USAGE = `Usage: privanet-node COMMAND [options]
   policy show|export FILE|import FILE|reset|preset ${PRESET_IDS.join('|')}
   name show|set NAME|clear             this machine's local display name
   capability enable|disable NAME       switch an enrolled capability on or off
+  slots show|set N|clear               how many jobs may run at once (applies at the next start)
   panel                                how to open the local control panel
   support-bundle [FILE] [--no-network] [--log-file F]    a sanitized troubleshooting file you can share
   update check [--json]                ask GitHub (only now) whether a newer release exists; nothing is downloaded or installed
@@ -260,6 +280,7 @@ export async function runLocal(command: string, argv: string[], env: NodeJS.Proc
       case 'config': return await configCommand(argv, env, io);
       case 'policy': return await policyCommand(argv, env, io);
       case 'name': return await nameCommand(argv, env, io);
+      case 'slots': return await slotsCommand(argv, env, io);
       case 'capability': return await capabilityCommand(argv, env, io);
       case 'panel': return await panelCommand(argv, env, io);
       case 'support-bundle': return await supportBundleCommand(argv, env, io);

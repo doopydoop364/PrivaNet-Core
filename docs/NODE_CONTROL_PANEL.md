@@ -31,7 +31,7 @@ The part of the link after `#` never goes to the server in the URL: the page pos
 - **Actions** (a fixed allowlist): pause, resume, save policy, rename, toggle capabilities, run diagnostics, create a support bundle, check for updates (when configured), **Drain and stop** and **Restart** (each asks for confirmation).
 - **Privacy**: what stays on the machine, what the Coordinator sees, and the outbound requests the node makes.
 
-Things the panel cannot change: job slots (`PRIVANODE_JOB_SLOTS`, set in the environment), `fetch` policy changes take effect after a restart (the panel says so), and `fetch.unsafeLocal` (the SSRF escape hatch) can never be set from the panel, a preset, an import or a saved policy.
+Job slots (how many jobs may run at once) are set under Contribute, or with `privanet-node slots show|set N|clear`; the choice is saved in `local-state.json` and applies **the next time the node starts** (the panel says so, and Restart is one click). An explicit `PRIVANODE_JOB_SLOTS` in the service environment takes priority and, while it is set, the panel shows the number read-only. More slots never raise your limits: the same CPU, memory and bandwidth budgets are shared between the jobs. Other things the panel cannot change: `fetch` policy changes take effect after a restart (the panel says so), and `fetch.unsafeLocal` (the SSRF escape hatch) can never be set from the panel, a preset, an import or a saved policy.
 
 ## Presets
 
@@ -67,7 +67,7 @@ Pausing is an owner decision stored in `<state dir>/local-state.json`, separate 
 | File (in the state directory, all mode 0600) | Content |
 | --- | --- |
 | `policy.json` | `{version: 1, preset?, savedAt, policy}`: the saved owner policy. Takes precedence over the installer's `PRIVANODE_POLICY_FILE`, which remains the base. |
-| `local-state.json` | `{version: 1, name?, pause?, disabledCapabilities}` |
+| `local-state.json` | `{version: 1, name?, pause?, disabledCapabilities, jobSlots?}` |
 | `status.json` | Snapshot the node publishes every 10 s so `privanet-node status` works while it runs (stale after 35 s) |
 | `history.json` | Bounded resource history |
 | `panel-token` | Panel sign-in secret |
@@ -83,6 +83,7 @@ privanet-node config check [--json]           validate policy, local state and e
 privanet-node policy show|export FILE|import FILE|reset|preset NAME
 privanet-node name show|clear|set "My laptop"   the local friendly name
 privanet-node capability enable|disable CAP   offer fewer capabilities (can only narrow what was enrolled)
+privanet-node slots show|set N|clear          how many jobs may run at once (applies at the next start)
 privanet-node panel [--url-only]              panel address and sign-in link
 privanet-node support-bundle [FILE] [--no-network]   a secret-free diagnostic bundle
 ```
@@ -110,9 +111,9 @@ Tests: `tests/panel.test.ts` (including a real-process end-to-end run), `local-c
 - **Update check.** `privanet-node update check` (or "Check for update" in the panel) makes one HTTPS request, only when you ask, to GitHub's latest-release address for this project (no redirects, a small validated answer, nothing about the node sent beyond a `privanet-node/VERSION` User-Agent). It says whether a newer release exists and where its notes are. **It never downloads or installs anything**, and the node never updates itself, so new code never runs without the owner deciding. An unreachable server, an unexpected answer or a foreign release address is reported as "could not check" and changes nothing. Automatic update (and any "update too large to apply silently" notification) is **not implemented**: there is no auto-update to be silent about.
 - **Upgrading** is the installer: run the new release's `install-node.sh` / `install-node.ps1` (verified against `SHA256SUMS.txt`, see [INSTALLER.md](INSTALLER.md)). It keeps the identity and the state directory. **Rollback** is installing the previous release the same way: the installer keeps each release in its own directory and switches a `current` link, so the old files are still there until you remove them; `policy.json` and `local-state.json` are versioned, and an older node ignores them. An in-place "update now" and "roll back" button in the panel is **deferred**: it would make the panel a way to run downloaded code, which this milestone deliberately does not add.
 - **Version compatibility** is shown on both sides: the node's status says whether the Coordinator is current, newer, older, incompatible or unknown (the protocol decides; software versions only inform), and the operator dashboard shows the same per node.
-- **Shell completions** for `privanet-node`: `privanet-node completions bash|zsh|fish|powershell` prints a script made of command and option names only (no secrets, no node or network calls). bash: `source <(privanet-node completions bash)` or save it under `/etc/bash_completion.d/`; zsh: save as `_privanet-node` on your `$fpath`; fish: `privanet-node completions fish > ~/.config/fish/completions/privanet-node.fish`; PowerShell: add `privanet-node completions powershell | Out-String | Invoke-Expression` to `$PROFILE`. `privanet-admin` has no completions yet.
+- **Shell completions** for `privanet-node`: `privanet-node completions bash|zsh|fish|powershell` prints a script made of command and option names only (no secrets, no node or network calls). bash: `source <(privanet-node completions bash)` or save it under `/etc/bash_completion.d/`; zsh: save as `_privanet-node` on your `$fpath`; fish: `privanet-node completions fish > ~/.config/fish/completions/privanet-node.fish`; PowerShell: add `privanet-node completions powershell | Out-String | Invoke-Expression` to `$PROFILE`. `privanet-admin completions bash|zsh|fish|powershell` works the same way (command and option names only; it needs neither the Coordinator nor the administrator secret).
 - **Desktop convenience:** a Linux desktop entry and a Windows Start Menu shortcut open the panel in your browser. A **system tray icon is deferred** (it needs a native, per-platform component; no Electron or bundled browser is added).
-- **Not done in this milestone:** a node-side job-slot editor (slots stay an environment setting), per-job accounting or history beyond aggregate counts (a later phase), and any change to how the Coordinator schedules or admits nodes.
+- **Not done in this milestone:** per-job accounting or history beyond aggregate counts (a later phase), and any change to how the Coordinator schedules or admits nodes.
 
 ## Upgrading a 0.3.5 node
 

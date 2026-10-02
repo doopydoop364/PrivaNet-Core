@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
-import { DisplayNameSchema, JobTypeSchema, PROTOCOL_VERSION, SERVICE_VERSION } from '@privanet/protocol';
+import { DisplayNameSchema, JobTypeSchema, MAX_JOB_SLOTS, PROTOCOL_VERSION, SERVICE_VERSION } from '@privanet/protocol';
 import type { JobType } from '@privanet/protocol';
 import { equalSecret } from '@privanet/shared';
 import { loadOrCreatePanelToken } from './panel-token.js';
@@ -52,6 +52,7 @@ const fail = (res: ServerResponse, status: number, code: string, extra: Record<s
 const PauseBody = z.strictObject({ kind: z.enum(['15m', '1h', 'tomorrow', 'reboot', 'indefinite']) });
 const PolicyBody = z.union([z.strictObject({ preset: z.enum(PRESET_IDS) }), z.strictObject({ reset: z.literal(true) }), z.strictObject({ policy: z.record(z.string(), z.unknown()) })]);
 const NameBody = z.strictObject({ name: DisplayNameSchema.nullable() });
+const SlotsBody = z.strictObject({ slots: z.number().int().min(1).max(MAX_JOB_SLOTS).nullable() });
 const CapabilitiesBody = z.strictObject({ disabled: z.array(JobTypeSchema).max(32) });
 const ConfirmBody = z.strictObject({ confirm: z.literal(true) });
 const LoginBody = z.strictObject({ token: z.string().length(64) });
@@ -82,7 +83,8 @@ export async function startPanel(options: PanelOptions): Promise<PanelHandle> {
   const policyDocument = () => {
     const view = options.control.view; const policy = view.policy;
     return { source: view.source ?? null, preset: view.preset, problem: view.policyProblem ?? null, restartRequired: view.restartRequired, policy: policy ?? null,
-      findings: policy ? policyFindings(policy, { jobSlots: options.jobSlots, capabilities: options.enrolledCapabilities }) : [], jobSlots: { value: options.jobSlots, note: 'Set by PRIVANODE_JOB_SLOTS in the service environment; changing it needs a restart.' },
+      findings: policy ? policyFindings(policy, { jobSlots: options.jobSlots, capabilities: options.enrolledCapabilities }) : [], jobSlots: { value: options.jobSlots, saved: view.jobSlots.saved, source: view.jobSlots.source, editable: view.jobSlots.editable, max: MAX_JOB_SLOTS,
+        note: view.jobSlots.editable ? 'How many jobs may run at once. A change applies the next time the node starts.' : 'Set by PRIVANODE_JOB_SLOTS in the service environment, which takes priority; change it there and restart.' },
       presets: PRESET_IDS.map(id => ({ id, label: PRESETS[id].label, summary: PRESETS[id].summary, values: PRESETS[id].values })) };
   };
 
@@ -156,6 +158,7 @@ export async function startPanel(options: PanelOptions): Promise<PanelHandle> {
           const result = await options.control.savePolicy(parsed.data, ctx); return json(res, 200, { ok: true, findings: result.findings, restartRequired: options.control.view.restartRequired });
         }
         case '/api/name': { const data = schema(NameBody) as z.infer<typeof NameBody> | undefined; if (!data) return invalid(); await options.control.setName(data.name ?? undefined); return json(res, 200, { ok: true }); }
+        case '/api/jobslots': { const data = schema(SlotsBody) as z.infer<typeof SlotsBody> | undefined; if (!data) return invalid(); await options.control.setJobSlots(data.slots ?? undefined); return json(res, 200, { ok: true, restartRequired: options.control.view.restartRequired }); }
         case '/api/capabilities': { const data = schema(CapabilitiesBody) as z.infer<typeof CapabilitiesBody> | undefined; if (!data) return invalid(); await options.control.setDisabledCapabilities(data.disabled.filter(type => options.enrolledCapabilities.includes(type))); return json(res, 200, { ok: true }); }
         case '/api/doctor': {
           if (!schema(EmptyBody)) return invalid(); if (doctorRunning) return fail(res, 429, 'DOCTOR_BUSY'); doctorRunning = true;
@@ -168,7 +171,7 @@ export async function startPanel(options: PanelOptions): Promise<PanelHandle> {
         default: return fail(res, 404, 'NOT_FOUND');
       }
     } catch (error) {
-      if (error instanceof PolicyError) return fail(res, 422, error.code, { issues: error.issues });
+      if (error instanceof PolicyError) return fail(res, error.code === 'JOB_SLOTS_SET_BY_ENVIRONMENT' ? 409 : 422, error.code, { issues: error.issues });
       return fail(res, 500, 'INTERNAL');
     }
   };

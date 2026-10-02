@@ -17,7 +17,7 @@ const PresetLabel = z.enum(['minimal', 'balanced', 'generous', 'maximum-idle']);
 export const PolicyFileSchema = z.strictObject({ version: z.literal(POLICY_FILE_VERSION), preset: PresetLabel.optional(), savedAt: z.number().int().min(0), policy: ResourcePolicySchema });
 export type PolicyFile = z.infer<typeof PolicyFileSchema>;
 
-export type PolicyProblemCode = 'POLICY_FILE_INVALID' | 'POLICY_FILE_NEWER' | 'POLICY_FILE_UNSAFE' | 'UNSAFE_LOCAL_NOT_ALLOWED' | 'POLICY_TOO_LARGE' | 'POLICY_NOT_JSON';
+export type PolicyProblemCode = 'POLICY_FILE_INVALID' | 'POLICY_FILE_NEWER' | 'POLICY_FILE_UNSAFE' | 'UNSAFE_LOCAL_NOT_ALLOWED' | 'POLICY_TOO_LARGE' | 'POLICY_NOT_JSON' | 'JOB_SLOTS_SET_BY_ENVIRONMENT';
 /** A policy that cannot be accepted. `issues` name the settings (paths) that are wrong, never a file's raw contents. */
 export class PolicyError extends Error {
   constructor(readonly code: PolicyProblemCode, readonly issues: string[] = []) { super(code); this.name = 'PolicyError'; }

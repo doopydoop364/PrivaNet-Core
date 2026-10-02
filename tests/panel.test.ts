@@ -43,7 +43,7 @@ async function rig(t: TestContext, options: { clock?: () => number; actions?: { 
   const policy = ResourcePolicySchema.parse({ maxMemoryBytes: 8 * GiB });
   const engine = new ResourceEngine(policy, { sample: () => ({ ...host }) });
   const node = new PrivaNode({ url: 'https://127.0.0.1:9', stateDir: state, capabilities: ['system.echo.v1', 'web.fetch.v1'], engine });
-  const history = new ResourceHistory(state); const control = new LocalControl({ stateDir: state, node, engine, history });
+  const history = new ResourceHistory(state); const control = new LocalControl({ stateDir: state, node, engine, history, jobSlots: { running: 1, fromEnvironment: false } });
   await control.init({ policy, source: { kind: 'defaults' } }); engine.update();
   const calls = { drain: 0, restart: 0 }; const actions = options.actions ?? { drainAndStop: () => { calls.drain++; }, restart: () => { calls.restart++; } };
   const logs = new LogRing(); logs.push({ event: 'node.authenticated' });
@@ -211,6 +211,10 @@ test('pause, resume, presets, saved policy, name and capabilities work through t
   assert.equal((await r.post(s, '/api/policy', { preset: 'turbo' })).status, 400); assert.equal((await r.post(s, '/api/policy', { policy: 'x' })).status, 400); assert.equal((await r.post(s, '/api/policy', { reset: true })).status, 200);
   assert.equal((await r.post(s, '/api/name', { name: 'Garage PC' })).status, 200); assert.equal((await r.get(s, '/api/status')).json().node.localName, 'Garage PC');
   assert.equal((await r.post(s, '/api/name', { name: 'bad\nname' })).status, 400); assert.equal((await r.post(s, '/api/name', { name: null })).status, 200);
+  const slots = await r.get(s, '/api/policy'); assert.deepEqual([slots.json().jobSlots.editable, slots.json().jobSlots.source, slots.json().jobSlots.max], [true, 'default', 64]);
+  const saved4 = await r.post(s, '/api/jobslots', { slots: 4 }); assert.equal(saved4.status, 200); assert.deepEqual(saved4.json().restartRequired, ['job slots']); assert.equal((await r.get(s, '/api/policy')).json().jobSlots.saved, 4);
+  for (const bad of [0, 65, 1.5, 'x', undefined]) assert.equal((await r.post(s, '/api/jobslots', { slots: bad })).status, 400, String(bad)); assert.equal((await r.post(s, '/api/jobslots', { slots: 2, extra: 1 })).status, 400);
+  assert.equal((await r.post(s, '/api/jobslots', { slots: null })).status, 200); assert.equal((await r.get(s, '/api/policy')).json().jobSlots.saved, null);
   assert.equal((await r.post(s, '/api/capabilities', { disabled: ['web.fetch.v1'] })).status, 200); assert.deepEqual(r.node.capabilities, ['system.echo.v1']);
   assert.deepEqual((await r.get(s, '/api/status')).json().capabilities, [{ id: 'system.echo.v1', enabled: true }, { id: 'web.fetch.v1', enabled: false }]);
   assert.equal((await r.post(s, '/api/capabilities', { disabled: ['system.rm.v1'] })).status, 400);
