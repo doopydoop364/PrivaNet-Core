@@ -15,10 +15,12 @@ import type { ResourceHistory } from './history.js';
 import { PolicyError } from './policy-store.js';
 import { PRESETS, PRESET_IDS } from './presets.js';
 import { policyFindings } from './config-check.js';
-import { ResourcePolicySchema } from './resource-policy.js';
+import { ResourcePolicySchema, defaultResourcePolicy } from './resource-policy.js';
 import { buildStatus } from './status-document.js';
 import { diagnose } from './doctor.js';
 import { gatherSettings } from './effective-settings.js';
+import type { StorageService } from './store/service.js';
+import { emptyStorageStatus } from './store/status.js';
 import { renderPage } from './panel-page.js';
 import { PRIVACY_STATEMENT } from './privacy.js';
 
@@ -35,7 +37,7 @@ const COOKIE = 'privanet_panel';
 
 export interface PanelOptions {
   stateDir: string; /** 0 picks a free port (tests). */ port: number;
-  node: PrivaNode; engine: ResourceEngine; control: LocalControl; transfer?: TransferMeter | undefined; history?: ResourceHistory | undefined; logs: LogRing;
+  node: PrivaNode; engine: ResourceEngine; control: LocalControl; storage?: StorageService | undefined; transfer?: TransferMeter | undefined; history?: ResourceHistory | undefined; logs: LogRing;
   coordinatorUrl: string; enrolledCapabilities: JobType[]; jobSlots: number; env: NodeJS.ProcessEnv;
   actions: { drainAndStop: () => void; restart: () => void };
   /** Optional operations supplied by the host: a support bundle and an update check (each only runs when the owner asks). */
@@ -80,7 +82,7 @@ export async function startPanel(options: PanelOptions): Promise<PanelHandle> {
     if (session.expires <= clock()) { sessions.delete(id); return undefined; }
     return { id, ...session };
   };
-  const context = () => ({ node: options.node, engine: options.engine, control: options.control, transfer: options.transfer, coordinatorUrl: options.coordinatorUrl, enrolledCapabilities: options.enrolledCapabilities });
+  const context = () => ({ node: options.node, engine: options.engine, control: options.control, transfer: options.transfer, coordinatorUrl: options.coordinatorUrl, enrolledCapabilities: options.enrolledCapabilities, storage: options.storage?.status });
   const policyDocument = () => {
     const view = options.control.view; const policy = view.policy;
     return { locked: view.policyLocked, source: view.source ?? null, preset: view.preset, problem: view.policyProblem ?? null, restartRequired: view.restartRequired, policy: policy ?? null,
@@ -125,6 +127,7 @@ export async function startPanel(options: PanelOptions): Promise<PanelHandle> {
         case '/api/session': return json(res, 200, { csrf: session.csrf, version: SERVICE_VERSION, protocolVersion: PROTOCOL_VERSION, features: { supportBundle: options.supportBundle !== undefined, updateCheck: options.updateCheck !== undefined } });
         case '/api/status': return json(res, 200, buildStatus(context(), { fullId: url.searchParams.get('fullId') === '1' }));
         case '/api/policy': return json(res, 200, policyDocument());
+        case '/api/storage': return json(res, 200, { ...(options.storage ? await options.storage.refresh() : emptyStorageStatus(options.control.view.policy?.storage ?? defaultResourcePolicy().storage)), note: 'A local store only: nothing can reach it over the network and no application can use it yet. There is no file browser by design.' });
         case '/api/settings': { const gathered = await gatherSettings(options.env, options.stateDir, clock(), options.jobSlots); return json(res, 200, { ...gathered.settings, ...(gathered.localProblem ? { localStateProblem: gathered.localProblem } : {}), ...(gathered.policyProblem ? { policyProblem: gathered.policyProblem } : {}) }); }
         case '/api/jobs': { const snapshot = options.node.snapshot; return json(res, 200, { active: snapshot.activeJobs, counters: snapshot.counters, slots: snapshot.slots, note: 'Job payloads are never shown or stored here.' }); }
         case '/api/history': return json(res, 200, { points: options.history?.points() ?? [], note: 'Permitted budgets and measured host numbers only; not per-job accounting. Kept on this machine for 24 hours.' });

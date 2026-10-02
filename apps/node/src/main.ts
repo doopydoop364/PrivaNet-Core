@@ -19,6 +19,7 @@ import { ResourceHistory } from './history.js';
 import { LogRing } from './log-ring.js';
 import { resolvePolicy } from './policy-store.js';
 import { buildStatus } from './status-document.js';
+import { StorageService } from './store/service.js';
 import { startPanel } from './panel.js';
 import { buildSupportBundle } from './support-bundle.js';
 import { diagnose } from './doctor.js';
@@ -74,12 +75,14 @@ async function main() {
   const slots = jobSlotsChoice(config.jobSlots, process.env.PRIVANODE_JOB_SLOTS !== undefined, earlyLocal.kind === 'error' ? undefined : earlyLocal.state.jobSlots);
   const node = new PrivaNode({ ...config, jobSlots: slots.value, handlers, engine, transfer, checkpoints, log });
   const history = new ResourceHistory(config.stateDir);
-  const control = new LocalControl({ stateDir: config.stateDir, envPolicyFile: process.env.PRIVANODE_POLICY_FILE, node, engine, transfer, history, log, jobSlots: { running: slots.value, fromEnvironment: slots.source === 'environment' }, policyLocked: process.env.PRIVANODE_POLICY_LOCKED === 'true', onChange: () => { void publish(); } });
+  // The local chunk store (off unless the owner enables it): a library inside this process, with no network or Coordinator interface in this version.
+  const storage = new StorageService({ stateDir: config.stateDir, policy: () => control.view.policy ?? resolved.policy, inputs: { draining: () => node.snapshot.draining, engine }, log });
+  const control = new LocalControl({ stateDir: config.stateDir, envPolicyFile: process.env.PRIVANODE_POLICY_FILE, node, engine, transfer, history, log, jobSlots: { running: slots.value, fromEnvironment: slots.source === 'environment' }, policyLocked: process.env.PRIVANODE_POLICY_LOCKED === 'true', onPolicy: policy => { void storage.apply(policy); }, onChange: () => { void publish(); } });
   // The snapshot `privanet-node status` reads: private, replaced atomically, no secrets (see status-document.ts).
   const publish = async () => {
-    try { await replacePrivateFile(join(await privateDirectory(config.stateDir), STATUS_FILE), JSON.stringify({ version: 1, publishedAt: Date.now(), status: buildStatus({ node, engine, control, transfer, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities }) })); } catch { /* status is a convenience */ }
+    try { await replacePrivateFile(join(await privateDirectory(config.stateDir), STATUS_FILE), JSON.stringify({ version: 1, publishedAt: Date.now(), status: buildStatus({ node, engine, control, transfer, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities, storage: storage.status }) })); } catch { /* status is a convenience */ }
   };
-  await control.init(resolved); control.start();
+  await control.init(resolved); control.start(); await storage.start();
   const publisher = setInterval(() => { void publish(); }, STATUS_PUBLISH_MS); publisher.unref(); void publish();
   let restartRequested = false;
   const abort = new AbortController();
@@ -97,8 +100,8 @@ async function main() {
     const port = Number(process.env.PRIVANODE_PANEL_PORT ?? DEFAULT_PANEL_PORT);
     try {
       if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('bad port');
-      panel = await startPanel({ stateDir: config.stateDir, port, node, engine, control, transfer, history, logs, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities, jobSlots: slots.value, env: process.env, actions,
-        supportBundle: async () => buildSupportBundle({ env: process.env, settings: (await gatherSettings(process.env, config.stateDir, Date.now(), slots.value)).settings, policy: resolved, local: control.view.local, localProblem: control.view.localProblem, status: JSON.parse(JSON.stringify(buildStatus({ node, engine, control, transfer, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities }))) as Record<string, unknown>,
+      panel = await startPanel({ stateDir: config.stateDir, port, storage, node, engine, control, transfer, history, logs, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities, jobSlots: slots.value, env: process.env, actions,
+        supportBundle: async () => buildSupportBundle({ env: process.env, settings: (await gatherSettings(process.env, config.stateDir, Date.now(), slots.value)).settings, storage: await storage.refresh(), policy: resolved, local: control.view.local, localProblem: control.view.localProblem, status: JSON.parse(JSON.stringify(buildStatus({ node, engine, control, transfer, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities, storage: storage.status }))) as Record<string, unknown>,
           doctor: await diagnose({ url: config.url, stateDir: config.stateDir, allowInsecureLoopback: process.env.PRIVANODE_ALLOW_INSECURE_LOOPBACK === 'true', timeoutMs: 8000, env: process.env }).catch(() => undefined), logs: logs.recent(200) }), updateCheck: () => checkForUpdate() });
       log({ event: 'panel.listening', code: String(panel.port) });
     } catch { log({ event: 'panel.unavailable', code: 'LISTEN_FAILED' }); }
@@ -112,7 +115,7 @@ async function main() {
   watcher.unref();
   // However the run ends (a drain, or a refusal such as a changed Coordinator binding), everything this process started must be stopped, or the panel's listener and the timers would keep it alive.
   try { await node.run(abort.signal); } finally {
-    clearTimeout(forced); clearInterval(watcher); clearInterval(publisher); control.stop(); await panel?.close().catch(() => undefined);
+    clearTimeout(forced); clearInterval(watcher); clearInterval(publisher); control.stop(); await storage.stop(); await panel?.close().catch(() => undefined);
     try { unlinkSync(join(config.stateDir, STATUS_FILE)); } catch { /* none */ }
   }
   if (restartRequested) process.exitCode = EXIT_RESTART;

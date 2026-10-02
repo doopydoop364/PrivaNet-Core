@@ -30,6 +30,8 @@ export interface EffectiveSettings {
   capabilities: { source: 'environment' | 'enrollment' | 'none'; configured: JobType[]; disabledByOwner: JobType[]; advertised: JobType[] };
   coordinator: { source: 'environment' | 'enrollment' | 'default'; host: string | null; editableHere: false };
   panel: { enabled: boolean; port: number; source: 'environment' | 'default'; editableHere: false };
+  /** The local chunk store's switches (the store itself is reported by `storage status`). Governed by the same policy source and lock as every other limit. */
+  storage: { enabled: boolean; maxBytes: number; reserveFreeBytes: number; source: 'saved' | 'installer-file' | 'default'; locked: boolean; networkAccessible: false };
   name: { value: string | null; source: 'saved' | 'none' };
   pause: { active: boolean; kind: string | null; until: number | null };
   updates: { automatic: false };
@@ -66,6 +68,8 @@ export function computeEffectiveSettings(input: SettingsInputs): EffectiveSettin
     capabilities: { source: envCaps !== undefined ? 'environment' : enrolledCaps.length ? 'enrollment' : 'none', configured, disabledByOwner: disabled, advertised: configured.filter(type => !disabled.includes(type)) },
     coordinator: { source: env.PRIVANODE_COORDINATOR_URL !== undefined ? 'environment' : input.enrolled ? 'enrollment' : 'default', host: hostOf(url ?? 'http://127.0.0.1:4010'), editableHere: false },
     panel: { enabled: env.PRIVANODE_PANEL !== 'off', port: Number.isInteger(panelPort) ? panelPort : DEFAULT_PANEL_PORT, source: env.PRIVANODE_PANEL !== undefined || env.PRIVANODE_PANEL_PORT !== undefined ? 'environment' : 'default', editableHere: false },
+    storage: { enabled: input.policy.policy.storage.enabled, maxBytes: input.policy.policy.storage.maxBytes, reserveFreeBytes: input.policy.policy.storage.reserveFreeBytes,
+      source: input.policy.source.kind === 'saved' ? 'saved' : input.policy.source.kind === 'env-file' ? 'installer-file' : 'default', locked: policyLocked, networkAccessible: false },
     name: { value: local.name ?? null, source: local.name === undefined ? 'none' : 'saved' },
     pause: { active: pause !== undefined, kind: pause?.kind ?? null, until: pause?.until ?? null },
     updates: { automatic: false },
@@ -73,12 +77,14 @@ export function computeEffectiveSettings(input: SettingsInputs): EffectiveSettin
 }
 
 /** A few plain lines for `privanet-node settings`. */
+const gib = (n: number): string => `${n % (1024 ** 3) === 0 ? n / 1024 ** 3 : (n / 1024 ** 3).toFixed(1)} GiB`;
 export function renderSettings(s: EffectiveSettings): string {
   const by = (source: string, locked = false): string => locked ? ` (set by the environment; this cannot be changed from the panel or the CLI)` : source === 'saved' ? ' (saved by you)' : source === 'enrollment' ? ' (from enrollment)' : source === 'installer-file' ? ' (the installer\'s policy file)' : source === 'environment' ? ' (set by the environment)' : ' (default)';
   return [
     `Job slots      ${s.jobSlots.value}${by(s.jobSlots.source, s.jobSlots.locked)}${s.jobSlots.restartRequired ? `; saved ${s.jobSlots.saved}, applies at the next start` : ''}`,
     `Policy         ${s.policy.preset}${by(s.policy.source)}${s.policy.locked ? `; LOCKED by ${s.policy.lockedBy}: edits from the panel and the CLI are refused${s.policy.savedFileIgnored ? ', and the saved policy file is ignored' : ''}` : ''}`,
     `Capabilities   ${s.capabilities.advertised.join(', ') || 'none'}${by(s.capabilities.source)}${s.capabilities.disabledByOwner.length ? `; switched off by you: ${s.capabilities.disabledByOwner.join(', ')}` : ''}`,
+    `Storage        ${s.storage.enabled ? `ON: up to ${gib(s.storage.maxBytes)}, keeping ${gib(s.storage.reserveFreeBytes)} of disk free` : 'off'}${by(s.storage.source)}${s.policy.locked ? '; locked with the policy' : ''}; local only (no network access)`,
     `Coordinator    ${s.coordinator.host ?? 'unknown'}${by(s.coordinator.source)}; not editable here`,
     `Panel          ${s.panel.enabled ? `on, port ${s.panel.port}` : 'off'}${by(s.panel.source)}; set in the environment`,
     `Name           ${s.name.value ?? '(none)'}${s.name.source === 'saved' ? ' (saved by you; stays on this machine)' : ''}`,

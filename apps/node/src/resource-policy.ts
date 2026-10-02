@@ -62,6 +62,16 @@ export const ResourcePolicySchema = z.strictObject({
       hostMap: z.record(z.string().min(3).max(253), z.string().min(2).max(60)).default({}),
     }).optional(),
   }).prefault({}),
+  /**
+   * The local chunk store (Phase 4.0-alpha.1): opaque, immutable, content-addressed chunks kept on this machine. **Off by default.** In this version it is a local library only: nothing
+   * can reach it over the network and no application can use it yet. `maxBytes` is the most the store may ever hold; `reserveFreeBytes` is the free space on its disk that it must
+   * never eat into (the store stops accepting data before either limit is crossed). Lowering a limit never deletes data.
+   */
+  storage: z.strictObject({
+    enabled: z.boolean().default(false),
+    maxBytes: bytes.default(1 * GiB),
+    reserveFreeBytes: bytes.default(10 * GiB),
+  }).prefault({}),
   /** How long HIGH pressure must persist before running preemptible jobs are handed back. */
   preemptAfterMs: z.number().int().min(0).max(600000).default(10000),
 });
