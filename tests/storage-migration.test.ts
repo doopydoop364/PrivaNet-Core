@@ -65,7 +65,7 @@ test('migrations are applied once, in order, inside a transaction: a failing ver
   assert.throws(() => new SqliteStore(path, broken));
   const db = new DatabaseSync(path, { readOnly: true }); assert.deepEqual(db.prepare('SELECT version FROM schema_migrations').all().map(row => Number(row.version)), [1]); for (const name of ['chunk', 'transfer', 'replica', 'node_service']) assert.equal(tables(db).includes(name), false, name); db.close();
   const reopened = new SqliteStore(path, V1); const core = new Coordinator(reopened, { staleMs: 15000, offlineMs: 60000 }, () => old.now); assert.equal(core.listNodes().length, 1); reopened.close();
-  const again = new SqliteStore(path); assert.equal(new DatabaseSync(path, { readOnly: true }).prepare('SELECT COUNT(*) AS n FROM schema_migrations').get()?.n, 2); again.close(); // and the real migration applies afterwards
+  const again = new SqliteStore(path); again.close(); const check = new DatabaseSync(path, { readOnly: true }); try { assert.equal(check.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get()?.n, 2); } finally { check.close(); } // and the real migration applies afterwards (every handle is closed: Windows cannot delete an open database)
 });
 test('downgrade is refused honestly: an older Coordinator will not open a version 2 database, and an edited applied migration is detected', async t => {
   const path = join(await tmp(t), 'coordinator.sqlite'); new SqliteStore(path).close();
