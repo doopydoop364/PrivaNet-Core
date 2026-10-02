@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import {
   AckSchema, CapabilitiesSchema, DisplayNameSchema, HealthSchema, INVITE_MAX_MS, InviteCreatedSchema, InviteIdSchema, InvitesSchema, JOB_TYPE_IDS, JoinRequestsSchema, NodeIdSchema, NodesSchema,
-  PROTOCOL_VERSION, SERVICE_VERSION, TypedCodeSchema, formatCode, normalizeCode,
+  PROTOCOL_VERSION, SERVICE_VERSION, StorageSummarySchema, TypedCodeSchema, formatCode, normalizeCode,
 } from '@privanet/protocol';
 import type { NodeViewSchema } from '@privanet/protocol';
 import { ApiError, Transport, startLocalUi } from '@privanet/shared';
@@ -71,7 +71,7 @@ export async function startAdminUi(options: AdminUiOptions): Promise<AdminUiHand
   };
 
   const overview = async (): Promise<LocalUiReply> => {
-    const [health, nodes, invites, requests] = await Promise.allSettled([call('GET', '/v1/health', HealthSchema), call('GET', '/v1/admin/nodes', NodesSchema), call('GET', '/v1/admin/invites', InvitesSchema), call('GET', '/v1/admin/requests', JoinRequestsSchema)]);
+    const [health, nodes, invites, requests, storage] = await Promise.allSettled([call('GET', '/v1/health', HealthSchema), call('GET', '/v1/admin/nodes', NodesSchema), call('GET', '/v1/admin/invites', InvitesSchema), call('GET', '/v1/admin/requests', JoinRequestsSchema), call('GET', '/v1/admin/storage', StorageSummarySchema)]);
     const coordinator = health.status === 'fulfilled' ? { serviceVersion: health.value.serviceVersion, protocolVersion: health.value.protocolVersion } : undefined;
     const adminRefused = [nodes, invites, requests].some(result => result.status === 'rejected' && result.reason instanceof ApiError && (result.reason.status === 401 || result.reason.status === 403));
     const now = clock();
@@ -80,6 +80,8 @@ export async function startAdminUi(options: AdminUiOptions): Promise<AdminUiHand
       dashboardVersion: SERVICE_VERSION, dashboardProtocol: PROTOCOL_VERSION, now, publicUrl: options.publicUrl ?? null, capabilities: JOB_TYPE_IDS,
       nodes: nodes.status === 'fulfilled' ? nodes.value.nodes.map(node => describeNode(node, coordinator, now)) : null,
       invites: invites.status === 'fulfilled' ? invites.value.invites : null, requests: requests.status === 'fulfilled' ? requests.value.requests : null,
+      // Aggregates only (counts and sizes): null from an older Coordinator, which has no storage control plane.
+      storage: storage.status === 'fulfilled' ? storage.value : null,
     });
   };
   const parse = <S extends z.ZodType>(schema: S, body: unknown): z.infer<S> | undefined => { const result = schema.safeParse(body); return result.success ? result.data : undefined; };

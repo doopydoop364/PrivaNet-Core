@@ -186,7 +186,7 @@ async function storageCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo)
     `Quota          ${gib(status.maxBytes)} at most; ${gib(status.reserveFreeBytes)} of the disk always left free`,
     `Stored         ${status.chunkCount} chunk${status.chunkCount === 1 ? '' : 's'}, ${gib(status.committedBytes)}${status.incomingBytes ? `; ${gib(status.incomingBytes)} of unfinished writes` : ''}${status.anomalies ? `; ${status.anomalies} unrecognised entr${status.anomalies === 1 ? 'y' : 'ies'} (left alone)` : ''}`,
     `Room now       ${status.enabled ? gib(status.allowedBytes) : 'none (storage is off)'}${status.freeBytes === null ? '' : `   (disk free: ${gib(status.freeBytes)})`}`,
-    'This is a local store only: nothing can reach it over the network and no application can use it yet. Lowering a limit never deletes data.'].join('\n'));
+    'The store opens no port and nothing can send a chunk to it yet. While it is on and healthy this node tells the Coordinator how much room it has (so a later version can place data here). Lowering a limit never deletes data.'].join('\n'));
   return status.health === 'UNSAFE' ? 1 : 0;
 }
 /** `settings`: what the node is using and where each value comes from (environment, saved, enrollment, installer file, default), and what the panel and CLI cannot change because the environment sets it. */

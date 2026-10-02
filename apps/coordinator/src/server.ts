@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { isIP } from 'node:net';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ZodError } from 'zod';
-import { AuthStartSchema, EnrollmentTokenIdSchema, IdSchema, InviteIdSchema, TypedCodeSchema, LeaseRequestSchema, MAX_BODY_BYTES, MAX_JOB_WAIT_MS, NodeIdSchema, PROTOCOL_VERSION } from '@privanet/protocol';
+import { AuthStartSchema, ChunkIdSchema, EnrollmentTokenIdSchema, IdSchema, TransferIdSchema, InviteIdSchema, TypedCodeSchema, LeaseRequestSchema, MAX_BODY_BYTES, MAX_JOB_WAIT_MS, NodeIdSchema, PROTOCOL_VERSION } from '@privanet/protocol';
 import { ApiError, equalSecret } from '@privanet/shared';
 import type { Coordinator } from './service.js';
 
@@ -155,6 +155,11 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
           if (req.method === 'POST' && rename) {
             const id = NodeIdSchema.parse(rename[1]); core.renameNode(id, await body(req)); log({ event: 'node.renamed' }); send(res, 200, { ok: true }); return;
           }
+          if (req.method === 'GET' && path === '/v1/admin/storage') { send(res, 200, core.storage.summary()); return; }
+          if (req.method === 'POST' && path === '/v1/admin/storage/keys/rotate') {
+            if (JSON.stringify(await body(req)) !== '{}') throw new ApiError(400, 'INVALID_REQUEST', 'expected empty object');
+            send(res, 200, await core.storage.rotateKeys()); log({ event: 'storage.key_rotated' }); return;
+          }
           if (req.method === 'POST' && path === '/v1/admin/applications') { send(res, 201, core.createApplication(await body(req))); return; }
           const rotate = /^\/v1\/admin\/applications\/([^/]+)\/rotate$/.exec(path);
           if (req.method === 'POST' && rotate) {
@@ -171,6 +176,8 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
         } else if (path.startsWith('/v1/node/')) {
           const node = core.authenticateNode(token);
           if (req.method === 'GET' && path === '/v1/node/self') { send(res, 200, core.nodeSelf(node)); return; }
+          // Public verification keys for tickets, on an authenticated node route (the session response is parsed strictly by older nodes, so it cannot grow). An older Coordinator answers 404, which a node treats as "storage unavailable".
+          if (req.method === 'GET' && path === '/v1/node/transfer-keys') { send(res, 200, core.storage.transferKeys(core.store.coordinatorId)); return; }
           if (req.method === 'POST' && path === '/v1/node/heartbeat') { const input = await body(req); core.authenticateNode(token); core.heartbeat(node.nodeId, input); send(res, 200, { ok: true }); return; }
           if (req.method === 'POST' && path === '/v1/node/jobs/lease') {
             const { waitMs = 0 } = LeaseRequestSchema.parse(await body(req));
@@ -220,6 +227,16 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
           if (req.method === 'POST' && path === '/v1/jobs') {
             const input = await body(req); const currentApp = core.authenticateApplication(token);
             const job = core.submit(currentApp, input); log({ event: 'job.submitted' }); send(res, 201, job); return;
+          }
+          // Storage control plane (metadata and tickets only; no route here, or anywhere in the Coordinator, accepts or returns chunk bytes).
+          if (req.method === 'POST' && path === '/v1/storage/placements') { const input = await body(req); const current = core.authenticateApplication(token); send(res, 200, core.storage.place(current, input)); log({ event: 'storage.placed' }); return; }
+          if (req.method === 'POST' && path === '/v1/storage/tickets') { const input = await body(req); const current = core.authenticateApplication(token); send(res, 200, core.storage.ticket(current, input)); log({ event: 'storage.ticket_issued' }); return; }
+          const chunkStatus = /^\/v1\/storage\/chunks\/([^/]+)$/.exec(path);
+          if (req.method === 'GET' && chunkStatus) { send(res, 200, core.storage.chunkStatus(app, ChunkIdSchema.parse(chunkStatus[1]))); return; }
+          const abort = /^\/v1\/storage\/transfers\/([^/]+)\/abort$/.exec(path);
+          if (req.method === 'POST' && abort) {
+            const id = TransferIdSchema.parse(abort[1]); if (JSON.stringify(await body(req)) !== '{}') throw new ApiError(400, 'INVALID_REQUEST', 'expected empty object');
+            send(res, 200, core.storage.abort(core.authenticateApplication(token), id)); log({ event: 'storage.transfer_aborted' }); return;
           }
           const get = /^\/v1\/jobs\/([^/]+)$/.exec(path);
           if (req.method === 'GET' && get) {

@@ -7,7 +7,7 @@ import type { GateVerdict } from './chunk-store.js';
  */
 export interface GateInputs {
   enabled: () => boolean; draining: () => boolean;
-  engine: { state: { blockers: readonly string[] }; report: { diskIo?: string | undefined } };
+  engine: { state: { blockers: readonly string[] }; report: { diskIo?: string | undefined; contribution?: string | undefined } };
 }
 export function storageGate(inputs: GateInputs): () => GateVerdict {
   return () => {

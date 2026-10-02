@@ -9,6 +9,9 @@ import type { Challenge, EnrollmentTokenInfo, EnrollmentTokenStatus, InviteInfo,
 import { ApiError, canonicalPublicKey, hash, secret } from '@privanet/shared';
 import type { ApplicationRecord, ChallengeRecord, Grant, JobRecord, NodeRecord, Store } from './model.js';
 import { ResourceAwareScheduler } from './scheduler.js';
+import { StorageControl } from './storage.js';
+import type { StorageLimits } from './storage.js';
+import type { TransferKeyring } from './transfer-keys.js';
 import type { Scheduler } from './scheduler.js';
 
 export interface Policy { staleMs: number; offlineMs: number; leaseMs: number; maxAttempts: number; maxReleases: number; sessionMs: number; challengeMs: number;
@@ -42,10 +45,17 @@ export class Coordinator {
    * `inviteKey` keys the hashes that protect invite codes. It must come from a secret that is not in the database (the server derives it from the administrator secret), so a copy of
    * the database cannot be used to search the small code space offline. Without it invites are switched off.
    */
-  constructor(readonly store: Store, policy: Partial<Policy> = {}, private readonly now: () => number = Date.now, private readonly scheduler: Scheduler = new ResourceAwareScheduler(), private readonly options: { inviteKey?: Buffer } = {}) {
+  /**
+   * `transferKeys` is the signing keyring for storage tickets (loaded by the server from its own private file, never from the database); without it every storage route answers 503 and nothing else
+   * changes. `storageLimits` and `storageRandom` exist for tests and operators who need to lower the per-application limits.
+   */
+  readonly storage: StorageControl;
+  constructor(readonly store: Store, policy: Partial<Policy> = {}, private readonly now: () => number = Date.now, private readonly scheduler: Scheduler = new ResourceAwareScheduler(),
+    private readonly options: { inviteKey?: Buffer; transferKeys?: TransferKeyring; storageLimits?: Partial<StorageLimits>; storageRandom?: () => number } = {}) {
     this.policy = { ...defaultPolicy, ...policy };
     for (const [key, value] of Object.entries(this.policy)) if (!Number.isSafeInteger(value) || value < (key === 'retentionMs' ? 0 : 1)) throw new Error('Invalid policy');
     if (this.policy.offlineMs <= this.policy.staleMs || this.policy.maxAttempts > 100 || this.policy.sessionMs > 86400000 || this.policy.challengeMs > 300000 || this.policy.joinRequestMs > 1800000) throw new Error('Invalid policy boundaries');
+    this.storage = new StorageControl(store, { now, status: node => this.status(node), offlineMs: this.policy.offlineMs, keyring: options.transferKeys, limits: options.storageLimits, random: options.storageRandom });
   }
   health() { return { protocolVersion: PROTOCOL_VERSION, serviceVersion: SERVICE_VERSION, coordinatorId: this.store.coordinatorId, status: 'ok' as const }; }
   private grantStatus(grant: Grant): EnrollmentTokenStatus {
@@ -300,8 +310,9 @@ export class Coordinator {
   }
   createApplication(input: unknown) {
     const request = AppCreateSchema.parse(input); const token = secret(); const applicationId = randomUUID();
-    const { fetchIdentity, ...rest } = request;
-    this.store.saveApplication({ id: applicationId, tokenHash: hash(token), ...rest, ...(fetchIdentity ? { fetchIdentity } : {}), revoked: false });
+    const { fetchIdentity, allowedServices, ...rest } = request;
+    // `allowedServices` is stored only when given and non-empty, so an application created without one is byte-for-byte what it was before services existed.
+    this.store.saveApplication({ id: applicationId, tokenHash: hash(token), ...rest, ...(fetchIdentity ? { fetchIdentity } : {}), ...(allowedServices && allowedServices.length > 0 ? { allowedServices } : {}), revoked: false });
     return { applicationId, token };
   }
   authenticateApplication(token: string): ApplicationRecord {
@@ -310,8 +321,10 @@ export class Coordinator {
     return app;
   }
   revokeApplication(id: string): void {
-    const app = this.store.getApplication(id); if (!app) reject(404, 'NOT_FOUND');
-    this.store.saveApplication({ ...app, revoked: true });
+    this.store.transaction(() => {
+      const app = this.store.getApplication(id); if (!app) reject(404, 'NOT_FOUND');
+      this.store.saveApplication({ ...app, revoked: true }); this.storage.onApplicationRevoked(id); // its open storage transfers become unusable; its chunks stay
+    });
   }
   /** Issues a new credential for the same application identity; the old credential stops working at once. */
   rotateApplication(id: string) {
@@ -324,7 +337,7 @@ export class Coordinator {
   revokeNode(id: string): void {
     this.store.transaction(() => {
       const node = this.store.getNode(id); if (!node) reject(404, 'NOT_FOUND');
-      this.store.saveNode({ ...node, revoked: true, revokedAt: node.revokedAt ?? this.now() }); this.store.deleteNodeSessions(id);
+      this.store.saveNode({ ...node, revoked: true, revokedAt: node.revokedAt ?? this.now() }); this.store.deleteNodeSessions(id); this.storage.onNodeRevoked(id);
       for (const job of this.store.listPendingJobs()) if (job.status === 'LEASED' && job.assignedNodeId === id) this.retry(job, 'NODE_REVOKED');
     });
   }
@@ -361,10 +374,13 @@ export class Coordinator {
     const request = HeartbeatSchema.parse(input);
     const node = this.store.getNode(nodeId); if (!node || node.revoked) reject(401, 'UNAUTHORIZED_NODE');
     if (request.capabilities.some(capability => !node.allowedCapabilities.includes(capability))) reject(403, 'CAPABILITY_FORBIDDEN');
-    const { lifecycle = 'ACTIVE', resources, ...rest } = request;
-    // Absent resources means the node no longer reports them: never keep a stale, more generous budget.
+    const { lifecycle = 'ACTIVE', resources, services, ...rest } = request;
+    // Absent resources means the node no longer reports them: never keep a stale, more generous budget. The same goes for services: the advertisement is replaced (or removed) with every heartbeat.
     const kept: NodeRecord = { ...node }; delete kept.resources;
-    this.store.saveNode({ ...kept, ...rest, lifecycle, ...(resources ? { resources } : {}), lastHeartbeatAt: this.now() });
+    this.store.transaction(() => {
+      this.store.saveNode({ ...kept, ...rest, lifecycle, ...(resources ? { resources } : {}), lastHeartbeatAt: this.now() });
+      this.storage.recordServices(nodeId, services);
+    });
   }
   capabilities(app: ApplicationRecord) {
     return { capabilities: app.allowedJobTypes.map(capability => ({ capability,
@@ -431,7 +447,7 @@ export class Coordinator {
     }
   }
   private lastRetentionAt = 0;
-  maintain(): void { this.sweep(); }
+  maintain(): void { this.sweep(); this.storage.maintain(); }
   /** Housekeeping and expiry; returns the pending jobs as they stand afterwards so a caller that needs them does not read and parse them again. */
   private sweep(): JobRecord[] {
     return this.store.transaction(() => {

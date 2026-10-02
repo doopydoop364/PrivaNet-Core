@@ -63,8 +63,8 @@ export const ResourcePolicySchema = z.strictObject({
     }).optional(),
   }).prefault({}),
   /**
-   * The local chunk store (Phase 4.0-alpha.1): opaque, immutable, content-addressed chunks kept on this machine. **Off by default.** In this version it is a local library only: nothing
-   * can reach it over the network and no application can use it yet. `maxBytes` is the most the store may ever hold; `reserveFreeBytes` is the free space on its disk that it must
+   * The local chunk store (Phase 4.0-alpha.1): opaque, immutable, content-addressed chunks kept on this machine. **Off by default.** It opens no port and nothing can send a chunk to it yet; while it is
+   * on and healthy the node offers the Coordinator its free room (0.4.0-alpha.2), and the Coordinator can place and authorize but not move data. `maxBytes` is the most the store may ever hold; `reserveFreeBytes` is the free space on its disk that it must
    * never eat into (the store stops accepting data before either limit is crossed). Lowering a limit never deletes data.
    */
   storage: z.strictObject({

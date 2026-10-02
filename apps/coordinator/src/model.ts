@@ -1,10 +1,12 @@
-import type { Challenge, EnrollmentStart, FetchIdentity, Job, JobType, NodeView } from '@privanet/protocol';
+import type { Challenge, EnrollmentStart, FetchIdentity, Job, JobType, NodeView, ServiceId, StorageAdvertisement, StorageOperation, TransferState } from '@privanet/protocol';
 export interface NodeRecord extends Omit<NodeView, 'status'> {
   publicKey: string; allowedCapabilities: JobType[]; enrolledAt: number; revoked: boolean;
   /** Absent in records written before Phase 2; treated as ACTIVE. DEPARTED = announced planned departure. */
   lifecycle?: 'ACTIVE' | 'DRAINING' | 'DEPARTED';
 }
-export interface ApplicationRecord { id: string; tokenHash: string; name: string; allowedJobTypes: JobType[]; revoked: boolean; fetchIdentity?: FetchIdentity }
+export interface ApplicationRecord { id: string; tokenHash: string; name: string; allowedJobTypes: JobType[]; revoked: boolean; fetchIdentity?: FetchIdentity;
+  /** Added in 0.4.0-alpha.2. Absent (every record written before it) means none: an application never gains a service it was not explicitly given. */
+  allowedServices?: ServiceId[] }
 export interface Grant {
   tokenHash: string; expiresAt: number; capabilities: JobType[]; used: boolean;
   /** Added by Remote Node Onboarding; absent on a grant written before it (such a grant still redeems exactly as before and is listed with unknown creation time). */
@@ -32,6 +34,15 @@ export interface JobRecord extends Job {
   /** When the current lease was first granted; renewals may not extend a lease past this plus policy.maxLeaseMs. */
   leasedAt?: number;
 }
+// ---- Storage control plane (0.4.0-alpha.2): metadata only ----
+export interface ChunkRecord { applicationId: string; chunkId: string; size: number; class: string | null; state: 'PENDING' | 'STORED' | 'DELETING'; createdAt: number; updatedAt: number; expiresAt: number | null }
+export interface ReplicaRecord { applicationId: string; chunkId: string; nodeId: string; state: 'RESERVED' | 'STORED' | 'LOST'; size: number; reservedAt: number; storedAt: number | null; verifiedAt: number | null }
+export interface TransferRecord {
+  id: string; operation: StorageOperation; applicationId: string; chunkId: string; nodeId: string; kid: string;
+  /** SHA-256 of the holder's public key: enough to audit which key a ticket named, without keeping the key. The ticket itself is never stored. */
+  holderHash: string; maxBytes: number; state: TransferState; reason: string | null; issuedAt: number; expiresAt: number; startedAt: number | null; completedAt: number | null; evidence: Record<string, unknown> | null;
+}
+export interface NodeServiceRecord extends StorageAdvertisement { nodeId: string; service: ServiceId; reportedAt: number }
 export interface Store {
   readonly coordinatorId: string;
   transaction<T>(operation: () => T): T;
@@ -61,5 +72,40 @@ export interface Store {
   /** Deletes COMPLETED/FAILED jobs finished at or before the cutoff and returns how many were removed. */
   deleteTerminalJobs(completedBefore: number): number;
   prune(now: number): void;
+  // -- storage control plane
+  getChunk(applicationId: string, chunkId: string): ChunkRecord | undefined;
+  saveChunk(chunk: ChunkRecord): void;
+  /** Removes the chunk and its replicas (the transfer rows stay, as the audit trail). */
+  deleteChunk(applicationId: string, chunkId: string): void;
+  /** Chunks of one application that count against its limits (PENDING, STORED and DELETING). */
+  chunkUsage(applicationId: string): { count: number; bytes: number };
+  getReplica(applicationId: string, chunkId: string, nodeId: string): ReplicaRecord | undefined;
+  listReplicas(applicationId: string, chunkId: string): ReplicaRecord[];
+  saveReplica(replica: ReplicaRecord): void;
+  deleteReplica(applicationId: string, chunkId: string, nodeId: string): void;
+  listNodeReplicas(nodeId: string, state?: ReplicaRecord['state']): ReplicaRecord[];
+  /** Bytes reserved (RESERVED replicas) on a node, per node. */
+  reservedBytes(): Map<string, number>;
+  getTransfer(id: string): TransferRecord | undefined;
+  saveTransfer(transfer: TransferRecord): void;
+  /** Transfers in AUTHORIZED or IN_PROGRESS, filtered; the filters combine. */
+  listOpenTransfers(filter?: { applicationId?: string; nodeId?: string; chunk?: { applicationId: string; chunkId: string } }): TransferRecord[];
+  countOpenTransfers(filter: { applicationId?: string; nodeId?: string }): number;
+  /** Open transfers per node (all operations, and puts alone) in one grouped query. */
+  openTransferCounts(): Map<string, { total: number; puts: number }>;
+  /** Open transfers whose time has run out: AUTHORIZED past `expiresAt`, IN_PROGRESS past `expiresAt` plus `graceMs`. */
+  listOverdueTransfers(now: number, graceMs: number): TransferRecord[];
+  /** Deletes final transfers that ended at or before the cutoff; returns how many. */
+  deleteFinalTransfers(endedBefore: number): number;
+  transferCounts(since: number): Record<TransferState, number>;
+  /** PENDING chunks nobody has touched since the cutoff, and that have no open transfer. */
+  listAbandonedChunks(updatedBefore: number, limit: number): ChunkRecord[];
+  getNodeService(nodeId: string, service: ServiceId): NodeServiceRecord | undefined;
+  saveNodeService(record: NodeServiceRecord): void;
+  deleteNodeServices(nodeId: string): void;
+  listNodeServices(service: ServiceId): NodeServiceRecord[];
+  /** Deletes advertisements last reported at or before the cutoff; returns how many. */
+  deleteStaleNodeServices(reportedBefore: number): number;
+  storageTotals(): { pending: number; stored: number; deleting: number; storedBytes: number; reservedBytes: number };
   close(): void;
 }

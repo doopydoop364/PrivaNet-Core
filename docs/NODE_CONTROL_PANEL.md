@@ -57,7 +57,7 @@ A damaged `local-state.json` (for example a job-slot number outside 1 to 64) is 
 
 The Contribute tab has a **Local storage** section (off by default: an on/off box, the most to store and the disk to always leave free) and the Status tab a **Local storage** card (state, health, chunks and bytes used, your limits, room now). `privanet-node storage status [--json]` shows the same from a shell (read-only, creates nothing, works while the node is stopped). The settings are part of the resource policy, so they follow the same precedence, are shown as locked under `PRIVANODE_POLICY_LOCKED`, are included in `policy export`, `config check`, `settings` and the support bundle (counts and health only, never a path or a chunk list), and never make a preset "Custom".
 
-This is a **local store only**: nothing can reach it over the network, no application can use it yet, and there is deliberately **no file browser, chunk list, download or upload** in the panel or the CLI. Turning storage off closes the store and keeps what is in it; lowering a limit never deletes data.
+The store opens **no port** and nothing can send a chunk to it yet (0.4.0-alpha.2 added only the Coordinator's side: while the store is on and healthy the node tells the Coordinator how much room it has, which the Coordinator uses to choose where data could go later). There is deliberately **no file browser, chunk list, download or upload** in the panel or the CLI. Turning storage off closes the store and keeps what is in it; lowering a limit never deletes data.
 
 ## Presets
 

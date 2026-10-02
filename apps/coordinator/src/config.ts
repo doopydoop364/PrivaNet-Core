@@ -13,13 +13,15 @@ const schema = z.object({
   PRIVANET_MAX_LEASE_MS: positive(3600000, 86400000),
   PRIVANET_AUTH_REQUESTS_PER_MINUTE: positive(120, 1000000), PRIVANET_ENROLLMENT_FAILURES_PER_MINUTE: positive(10, 1000000), PRIVANET_INVITE_FAILURES_PER_MINUTE: positive(5, 1000000),
   PRIVANET_JOIN_REQUEST_MS: positive(600000, 1800000), PRIVANET_INVITE_MAX_ATTEMPTS: positive(5, 100), PRIVANET_INVITE_GLOBAL_FAILURES: positive(100, 1000000),
+  // Storage control plane (0.4.0-alpha.2): the only operational knobs. Ticket lifetime, key overlap and transfer limits are fixed in code on purpose.
+  PRIVANET_STORAGE_MAX_BYTES_PER_APP: positive(256 * 1024 ** 3, 2 ** 50), PRIVANET_STORAGE_MAX_CHUNKS_PER_APP: positive(100000, 100000000),
   PRIVANET_TLS_TERMINATED: boolean, PRIVANET_TRUST_LOOPBACK_PROXY: boolean,
 });
 export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   const c = schema.parse(env);
   if (!['127.0.0.1', '::1'].includes(c.PRIVANET_HOST) && !c.PRIVANET_TLS_TERMINATED) throw new Error('Non-loopback bind requires explicit TLS termination');
   return { adminSecret: c.PRIVANET_ADMIN_SECRET, host: c.PRIVANET_HOST, port: c.PRIVANET_PORT,
-    dataDir: c.PRIVANET_DATA_DIR, maintenanceMs: c.PRIVANET_MAINTENANCE_MS, authRequestsPerMinute: c.PRIVANET_AUTH_REQUESTS_PER_MINUTE, enrollmentFailuresPerMinute: c.PRIVANET_ENROLLMENT_FAILURES_PER_MINUTE, inviteFailuresPerMinute: c.PRIVANET_INVITE_FAILURES_PER_MINUTE, trustLoopbackProxy: c.PRIVANET_TRUST_LOOPBACK_PROXY,
+    dataDir: c.PRIVANET_DATA_DIR, storageLimits: { maxBytesPerApplication: c.PRIVANET_STORAGE_MAX_BYTES_PER_APP, maxChunksPerApplication: c.PRIVANET_STORAGE_MAX_CHUNKS_PER_APP }, maintenanceMs: c.PRIVANET_MAINTENANCE_MS, authRequestsPerMinute: c.PRIVANET_AUTH_REQUESTS_PER_MINUTE, enrollmentFailuresPerMinute: c.PRIVANET_ENROLLMENT_FAILURES_PER_MINUTE, inviteFailuresPerMinute: c.PRIVANET_INVITE_FAILURES_PER_MINUTE, trustLoopbackProxy: c.PRIVANET_TRUST_LOOPBACK_PROXY,
     policy: { staleMs: c.PRIVANET_STALE_MS, offlineMs: c.PRIVANET_OFFLINE_MS, leaseMs: c.PRIVANET_LEASE_MS,
       maxAttempts: c.PRIVANET_MAX_ATTEMPTS, maxReleases: c.PRIVANET_MAX_RELEASES, sessionMs: c.PRIVANET_SESSION_MS,
       retentionMs: c.PRIVANET_RETENTION_MS, maxLeaseMs: c.PRIVANET_MAX_LEASE_MS, maxPendingPerApplication: c.PRIVANET_MAX_PENDING_PER_APP,

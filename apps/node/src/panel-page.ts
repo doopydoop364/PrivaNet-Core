@@ -82,7 +82,7 @@ function renderStatus(s) {
       h('tr', null, h('td', { text: 'Power / battery' }), h('td', { text: String(me.power) }), h('td', { text: 'on battery: ' + cfg.onBattery })),
       h('tr', null, h('td', { text: 'Your own CPU use' }), h('td', { text: Math.round(me.ownerCpuPercent) + '%' }), h('td', { text: 'free memory above your reserve: ' + bytes(me.memoryHeadroomBytes) })))));
   var st = s.storage;
-  if (st) root.appendChild(h('div', { class: 'card' }, h('h3', { text: 'Local storage' }), h('p', { class: 'note', text: 'A local store of opaque chunks on this machine. Nothing can reach it over the network and no application can use it yet; there is deliberately no file browser.' }),
+  if (st) root.appendChild(h('div', { class: 'card' }, h('h3', { text: 'Local storage' }), h('p', { class: 'note', text: 'A store of opaque chunks on this machine. It opens no port, and nothing can send a chunk to it yet. When it is healthy, this node tells the Coordinator how much room it has, so a later version can place data here; there is deliberately no file browser.' }),
     h('table', null,
       h('tr', null, h('th', { text: 'State' }), h('td', { text: (st.enabled ? st.state : 'OFF') + (st.reasons.length ? ' (' + st.reasons.join(', ') + ')' : '') + (st.error ? ' [' + st.error + ']' : '') + '; health ' + st.health + (st.flags.length ? ' (' + st.flags.join(', ') + ')' : '') })),
       h('tr', null, h('th', { text: 'Used' }), h('td', { text: st.chunkCount + ' chunk(s), ' + bytes(st.committedBytes) + (st.incomingBytes ? '; ' + bytes(st.incomingBytes) + ' of unfinished writes' : '') })),
@@ -121,7 +121,7 @@ function renderContribute(d) {
   var storageBox = h('input', { type: 'checkbox', checked: !!p.storage.enabled, 'aria-label': 'Turn the local store on', disabled: !!d.locked, on: { change: function () { dirty = true; } } });
   var storageQuota = h('input', { type: 'number', step: 'any', value: String(+(p.storage.maxBytes / 1073741824).toFixed(3)), 'aria-label': 'Most storage to use (GiB)', disabled: !!d.locked, on: { input: function () { dirty = true; } } });
   var storageReserve = h('input', { type: 'number', step: 'any', value: String(+(p.storage.reserveFreeBytes / 1073741824).toFixed(3)), 'aria-label': 'Disk always left free beside storage (GiB)', disabled: !!d.locked, on: { input: function () { dirty = true; } } });
-  form.appendChild(h('div', null, h('h4', { text: 'Local storage (off by default)' }), h('p', { class: 'note', text: 'A local store of opaque chunks. Nothing can reach it over the network and no application can use it yet. Lowering a limit never deletes anything.' }),
+  form.appendChild(h('div', null, h('h4', { text: 'Local storage (off by default)' }), h('p', { class: 'note', text: 'A store of opaque chunks. It opens no port and nothing can send a chunk to it yet; while it is on and healthy, this node tells the Coordinator how much room it has. Lowering a limit never deletes anything.' }),
     h('label', null, storageBox, ' Turn the local store on'), h('label', null, 'Most to store (GiB) ', storageQuota), h('label', null, 'Disk always left free (GiB) ', storageReserve)));
   var selects = {};
   [['defaultLevel', 'Mode when no schedule rule applies', ['OFF', 'MINIMAL', 'ADAPTIVE', 'FULL']], ['maxDiskIo', 'Disk-I/O class', ['none', 'low', 'medium', 'high']], ['onBattery', 'On battery', ['normal', 'reduce', 'disable']]].forEach(function (s) {

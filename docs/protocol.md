@@ -146,3 +146,21 @@ All additive and optional; nodes and applications that do not use them are unaff
 - The lease may carry an optional `client` object, present only for job types that require an application identity (`web.fetch.v1`). Old nodes never receive it for types they do not run.
 - New job type `web.fetch.v1` (see [PRIVASEARCH_INTEGRATION.md](PRIVASEARCH_INTEGRATION.md)); submission by an application with no registered identity fails with 403 `FETCH_IDENTITY_REQUIRED`.
 - Package compatibility and version-mismatch handling: [PACKAGES.md](PACKAGES.md).
+
+## Storage control plane (0.4.0-alpha.2, protocol version stays 1)
+
+Metadata only: no message here carries chunk bytes, a path, an address or an endpoint, and no route accepts or returns them. Every addition is optional and additive; the response schemas older nodes, tools and SDKs parse (the session, node list, node self, capability list, credentials, leases) are **unchanged**, which is why the verification keys have their own route. Design and rationale: [PHASE4_DESIGN section 16](PHASE4_DESIGN.md#16-40-alpha2-as-built-and-what-changed-from-this-design).
+
+- **Services** are a second registry beside the job types (`SERVICES`, `kind: 'service'`; today `storage.chunk.v1`). A service id is never a job type and never appears in `capabilities`, `allowedJobTypes` or an enrollment grant.
+- **Heartbeat**: an optional `services` member, `{ "storage.chunk.v1": { "capacityBytes", "freeBytes", "maxChunkBytes" } }` (integers, 0 to 2^50, free not above capacity, chunk limit 1 to 8 MiB). Absent means nothing offered; it replaces the previous offer every time. An older Coordinator answers 400 (its heartbeat schema is strict) and a new node then stops sending the member (it says so once).
+- **Applications**: `POST /v1/admin/applications` accepts an optional `allowedServices` (default none; the CLI sends it only with `--services`). Application routes require it:
+  - `POST /v1/storage/placements` `{ chunkId, size, class?, holderKey }`: choose a node (the application never does) and return `{ chunkId, size, state, grant }`, where `grant` is `{ transferId, operation: "put", chunkId, expiresAt, ticket }`, or null when the chunk is already stored.
+  - `POST /v1/storage/tickets` `{ operation: "put" | "get" | "delete", chunkId, holderKey }`: a ticket for an existing chunk; `get` needs a stored, reachable copy, `delete` marks the chunk DELETING.
+  - `GET /v1/storage/chunks/{chunkId}`: `{ chunkId, size, class, state, createdAt, available }` for the caller's own chunk. A missing chunk and another application's chunk are the same 404.
+  - `POST /v1/storage/transfers/{transferId}/abort`: withdraw an authorization the node has not begun.
+- **Nodes**: `GET /v1/node/transfer-keys` (node session) returns `{ coordinatorId, keys: [{ kid, publicKey, notAfter }] }`, public halves only; a node keeps them only if `coordinatorId` is the one it is bound to. An older Coordinator answers 404. There is **no** node route for receipts or transfer begin yet (alpha.3).
+- **Administrator**: `GET /v1/admin/storage` (aggregates), `POST /v1/admin/storage/keys/rotate`.
+- **Ticket**: 234 bytes, base64url, signed over a domain-separated fixed layout; at most 120 s; bound to operation, application, chunk, target node, size and a per-transfer holder key. Exact bytes: [PHASE4_DESIGN section 16](PHASE4_DESIGN.md#16-40-alpha2-as-built-and-what-changed-from-this-design).
+- **Errors** (fixed codes): 403 `SERVICE_FORBIDDEN`; 400 `INVALID_REQUEST`, `INVALID_HOLDER_KEY`; 404 `NOT_FOUND`; 409 `SIZE_CONFLICT`, `CHUNK_DELETING`, `CHUNK_NOT_STORED`, `CHUNK_UNAVAILABLE`, `TRANSFER_IN_PROGRESS`; 429 `APPLICATION_CHUNK_LIMIT`, `APPLICATION_BYTE_LIMIT`, `TRANSFER_LIMIT`, `TICKET_RATE_LIMIT`; 503 `NO_CAPACITY`, `NODE_UNAVAILABLE`, `STORAGE_UNAVAILABLE` (no usable signing key).
+- **Database**: migration 2 adds `chunk`, `replica`, `transfer` and `node_service`. An older Coordinator refuses the upgraded database; restore a pre-upgrade backup to go back.
+

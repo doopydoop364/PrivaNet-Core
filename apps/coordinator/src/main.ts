@@ -4,6 +4,7 @@ import { loadConfig } from './config.js';
 import { Coordinator } from './service.js';
 import { SqliteStore } from './store.js';
 import { createCoordinatorServer } from './server.js';
+import { KeyringError, TransferKeyring } from './transfer-keys.js';
 import { ZodError } from 'zod';
 /** Exit status for a configuration problem (BSD `EX_CONFIG`): a service manager should not restart-loop on it (`RestartPreventExitStatus=78`). */
 const EXIT_CONFIG = 78;
@@ -19,8 +20,11 @@ async function main() {
   const directory = await privateDirectory(config.dataDir);
   const store = new SqliteStore(join(directory, 'coordinator.sqlite'));
   // Invite codes are short, so the hashes that protect them are keyed with something that is not in the database: derived from the administrator secret.
-  const core = new Coordinator(store, config.policy, Date.now, undefined, { inviteKey: Buffer.from(hash(`privanet.invite-key.v1:${config.adminSecret}`), 'hex') });
   const log = (entry: { event: string; code?: string }) => console.log(JSON.stringify(entry));
+  // The ticket-signing keyring is its own private file next to (never inside) the database. An unusable one is reported by a fixed code and storage stays off; it is never silently replaced, and jobs are unaffected.
+  let transferKeys: TransferKeyring | undefined;
+  try { transferKeys = await TransferKeyring.open(directory); } catch (error) { log({ event: 'storage.keyring_unusable', code: error instanceof KeyringError ? error.code : 'KEYRING_IO' }); }
+  const core = new Coordinator(store, config.policy, Date.now, undefined, { inviteKey: Buffer.from(hash(`privanet.invite-key.v1:${config.adminSecret}`), 'hex'), storageLimits: config.storageLimits, ...(transferKeys ? { transferKeys } : {}) });
   const server = createCoordinatorServer(core, { adminSecret: config.adminSecret, log, authRequestsPerMinute: config.authRequestsPerMinute, enrollmentFailuresPerMinute: config.enrollmentFailuresPerMinute, inviteFailuresPerMinute: config.inviteFailuresPerMinute, trustLoopbackProxy: config.trustLoopbackProxy });
   try {
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(config.port, config.host, resolve); });

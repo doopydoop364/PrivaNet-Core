@@ -1,7 +1,7 @@
 import { ApiError, SHELLS, Transport, completionScript } from '@privanet/shared';
 import {
   AckSchema, AppCredentialSchema, CapabilitiesSchema, DisplayNameSchema, EnrollmentTokenIdSchema, EnrollmentTokenSchema, EnrollmentTokensSchema, IdSchema, InviteCreatedSchema, InviteIdSchema,
-  InvitesSchema, JoinRequestsSchema, NodeIdSchema, NodesSchema, TypedCodeSchema, formatCode, normalizeCode,
+  InvitesSchema, JoinRequestsSchema, KeyRotationSchema, NodeIdSchema, NodesSchema, ServiceListSchema, StorageSummarySchema, TypedCodeSchema, formatCode, normalizeCode,
 } from '@privanet/protocol';
 
 const USAGE = `Usage:
@@ -18,14 +18,16 @@ const USAGE = `Usage:
   privanet-admin nodes show NODE [--json]                  NODE is a node ID, a unique prefix of one (8+ characters) or an exact name
   privanet-admin nodes revoke NODE
   privanet-admin nodes rename NODE NAME... | nodes rename NODE --clear
-  privanet-admin application [NAME] | revoke-application ID | rotate-application ID
+  privanet-admin application [NAME] [--services storage.chunk.v1] | revoke-application ID | rotate-application ID
+  privanet-admin storage status [--json]                   storage control plane: nodes offering storage, chunk and transfer counts (aggregates only)
+  privanet-admin storage rotate-key [--json]               new ticket-signing key; the old one keeps verifying for 4.5 minutes, so no live ticket breaks
   privanet-admin completions bash|zsh|fish|powershell      a shell completion script (command and option names only)
   privanet-admin ui [--port 4041]                          the operator dashboard in your browser (this machine only; see docs/OPERATOR_DASHBOARD.md)
 Older forms still work and print JSON: enrollment | nodes | revoke-node ID | application NAME
 Durations: 30s, 10m, 2h, 1d (1 second to 24 hours; an invite at most 1 hour).`;
 
 class UsageError extends Error {}
-const VALUE_FLAGS = new Set(['--expires', '--capabilities', '--label', '--port']);
+const VALUE_FLAGS = new Set(['--expires', '--capabilities', '--label', '--port', '--services']);
 const BOOLEAN_FLAGS = new Set(['--json', '--all', '--clear']);
 function parseArgs(argv) {
   const flags = {}; const positional = [];
@@ -69,7 +71,7 @@ function requestCode(parts) {
 const COMPLETION_TREE = {
   enrollment: { subs: ['create', 'list', 'revoke'], options: ['--expires', '--capabilities', '--label', '--all', '--json'] }, invite: { subs: ['create', 'list', 'revoke'], options: ['--expires', '--capabilities', '--label', '--all', '--json'] },
   requests: { subs: ['list'], options: ['--all', '--json'] }, approve: { options: ['--capabilities', '--label', '--json'] }, deny: { options: ['--json'] },
-  nodes: { subs: ['list', 'show', 'revoke', 'rename'], options: ['--json', '--clear'] }, application: {}, 'revoke-application': {}, 'rotate-application': {}, ui: { options: ['--port'] }, completions: { subs: [...SHELLS] },
+  nodes: { subs: ['list', 'show', 'revoke', 'rename'], options: ['--json', '--clear'] }, application: { options: ['--services'] }, storage: { subs: ['status', 'rotate-key'], options: ['--json'] }, 'revoke-application': {}, 'rotate-application': {}, ui: { options: ['--port'] }, completions: { subs: [...SHELLS] },
 };
 async function main() {
   // Completions need neither the Coordinator nor the administrator credential.
@@ -203,7 +205,20 @@ async function main() {
   } else if (operation === 'application') {
     // An application that uses a fetch capability registers its identity here (product token for the User-Agent and robots.txt, plus an information URL); the Coordinator stamps it into leases.
     const identity = process.env.PRIVANET_FETCH_PRODUCT ? { fetchIdentity: { product: process.env.PRIVANET_FETCH_PRODUCT, infoUrl: process.env.PRIVANET_FETCH_INFO_URL ?? '' } } : {};
-    printJson(await request('POST', '/v1/admin/applications', AppCredentialSchema, { name: subcommand ?? 'demo', allowedJobTypes: envTypes, ...identity }));
+    // Services are opt-in and sent only when asked for: an application gets no storage authority by default, and an older Coordinator's strict schema would refuse the field.
+    const services = flags.services === undefined ? [] : ServiceListSchema.parse(flags.services.split(','));
+    printJson(await request('POST', '/v1/admin/applications', AppCredentialSchema, { name: subcommand ?? 'demo', allowedJobTypes: envTypes, ...identity, ...(services.length > 0 ? { allowedServices: services } : {}) }));
+  } else if (operation === 'storage' && subcommand === 'status') {
+    const summary = await request('GET', '/v1/admin/storage', StorageSummarySchema);
+    if (flags.json) { printJson(summary); return; }
+    const gib = (bytes) => `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+    console.log([`Signing key:   ${summary.keyring.available ? `${summary.keyring.currentKid} (${summary.keyring.keys} key${summary.keyring.keys === 1 ? '' : 's'} valid)` : 'NOT AVAILABLE: storage is off at this Coordinator'}`,
+      `Chunks:        ${summary.chunks.stored} stored (${gib(summary.chunks.storedBytes)}), ${summary.chunks.pending} pending (${gib(summary.chunks.reservedBytes)} reserved), ${summary.chunks.deleting} deleting`,
+      `Transfers:     ${summary.transfers.open} open; last 24h: ${summary.transfers.last24h.completed} completed, ${summary.transfers.last24h.failed} failed, ${summary.transfers.last24h.expired} expired, ${summary.transfers.last24h.revoked} revoked`, '',
+      summary.nodes.length === 0 ? 'No node is offering storage.' : table([['NODE', 'STATUS', 'CAPACITY', 'FREE (reported)', 'RESERVED', 'OPEN'], ...summary.nodes.map(node => [`${node.nodeId.slice(0, 13)}…`, node.status, gib(node.capacityBytes), gib(node.freeBytes), gib(node.reservedBytes), node.openTransfers])])].join('\n'));
+  } else if (operation === 'storage' && subcommand === 'rotate-key') {
+    const rotation = await request('POST', '/v1/admin/storage/keys/rotate', KeyRotationSchema, {});
+    if (flags.json) printJson(rotation); else console.log(`New signing key ${rotation.currentKid}. The previous key (${rotation.previousKid}) keeps verifying until ${iso(rotation.previousValidUntil)}, so tickets already issued still work.`);
   } else if (operation === 'revoke-node') printJson(await request('POST', `/v1/admin/nodes/${NodeIdSchema.parse(subcommand)}/revoke`, AckSchema, {}));
   else if (operation === 'revoke-application') printJson(await request('POST', `/v1/admin/applications/${IdSchema.parse(subcommand)}/revoke`, AckSchema, {}));
   else if (operation === 'rotate-application') printJson(await request('POST', `/v1/admin/applications/${IdSchema.parse(subcommand)}/rotate`, AppCredentialSchema, {}));

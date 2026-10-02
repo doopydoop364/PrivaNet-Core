@@ -49,6 +49,13 @@ Status key: `NOT DONE` (default), `DONE <date> <who> <notes>`.
 - [ ] `NOT DONE` A removable or network filesystem as the state directory: confirm the node refuses or degrades safely (it checks permissions and links, not the filesystem type).
 - [ ] `NOT DONE` A full-disk drill: fill the volume to the reserve with another process while a large put runs.
 
+## 3c. The storage control plane (0.4.0-alpha.2) in a real deployment
+
+- [ ] `NOT DONE` A real Coordinator and two real nodes on separate machines (one storage-enabled, one compute-only): confirm the offer appears in `privanet-admin storage status` within one heartbeat and disappears when the owner pauses, drains or disables storage, and that the compute-only node is never placed on.
+- [ ] `NOT DONE` Clock behaviour: a node whose clock is minutes off, to confirm what the ticket skew allowance (30 s) will mean once alpha.3's listener verifies tickets (nothing verifies a ticket on a node yet).
+- [ ] `NOT DONE` A real upgrade of a long-lived Coordinator database from 0.4.0-alpha.1 (or v0.3.6), then back up and restore it onto a fresh directory, and rotate the ticket key while a real node is connected.
+- [ ] `NOT DONE` The keyring file under a service manager's account on Windows (the owner-only mode is POSIX; the ACL of the data directory protects it there, which is not verified on a real machine).
+
 ## 4. Control panel and CLI on real desktops
 
 - [ ] `NOT DONE` Firefox, Chrome/Edge and Safari: sign-in link, every tab, no console errors, keyboard and screen-reader pass (state is shown as words, but this was not tested with assistive technology).
