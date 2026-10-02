@@ -4,18 +4,15 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer as createHttpsServer } from 'node:https';
 import { createServer as createNetServer } from 'node:net';
-import type { Server } from 'node:http';
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { hash, secret } from '@privanet/shared';
-import { Coordinator } from '@privanet/coordinator/service';
-import { SqliteStore } from '@privanet/coordinator/store';
-import { createCoordinatorServer } from '@privanet/coordinator/server';
+import { secret } from '@privanet/shared';
 import { diagnose, formatReport } from '@privanet/node/doctor';
 import type { DoctorReport, Stage } from '@privanet/node/doctor';
 import { GOOD_CERT, GOOD_KEY, OTHER_CERT, OTHER_KEY } from './doctor-fixture.js';
+import { listenAny, realCoordinator } from './tls-harness.js';
 
 const root = fileURLToPath(new URL('../../', import.meta.url)); const NODE = join(root, 'apps', 'node', 'dist', 'main.js');
 const stageOf = (report: DoctorReport, id: string): Stage => { const found = report.stages.find(item => item.id === id); assert.ok(found, `stage ${id}`); return found; };
@@ -32,10 +29,6 @@ async function sandbox(t: TestContext) {
   const dir = await mkdtemp(join(tmpdir(), 'privanet-doctor-')); t.after(() => rm(dir, { recursive: true, force: true }));
   await writeFile(join(dir, 'good.crt'), GOOD_CERT); await writeFile(join(dir, 'other.crt'), OTHER_CERT);
   return { dir, goodCa: join(dir, 'good.crt'), otherCa: join(dir, 'other.crt') };
-}
-async function listenAny(server: { listen: (port: number, host: string, cb: () => void) => unknown; address: () => unknown; once: (event: string, cb: (e: Error) => void) => unknown }): Promise<number> {
-  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
-  const address = server.address(); assert(address && typeof address === 'object' && 'port' in address); return Number(address.port);
 }
 /** A TLS server with the given certificate; `answer` is what it says to HTTP requests (default: a healthy PrivaNet health answer). */
 async function tlsServer(t: TestContext, cert: string, key: string, answer?: (path: string) => { status: number; body: unknown; protocol?: string }) {
@@ -101,17 +94,6 @@ test('doctor: a Coordinator speaking another protocol is reported, with a way fo
   const report = result.report as DoctorReport; assert.equal(result.code, 1); assert.equal(stageOf(report, 'tls').status, 'OK'); assert.equal(stageOf(report, 'health').status, 'FAILED');
   assert.equal(stageOf(report, 'protocol').status, 'FAILED'); assert.match(stageOf(report, 'protocol').advice ?? '', /Update whichever/);
 });
-
-/** A real Coordinator behind TLS, so the healthy path is the real one. */
-async function realCoordinator(t: TestContext, cert = GOOD_CERT, key = GOOD_KEY, hide: string[] = []) {
-  const dir = await mkdtemp(join(tmpdir(), 'privanet-doctor-coordinator-')); const adminSecret = secret();
-  const store = new SqliteStore(join(dir, 'c.sqlite')); const core = new Coordinator(store, { offlineMs: 60000, staleMs: 30000 }, Date.now, undefined, { inviteKey: Buffer.from(hash(`k${adminSecret}`), 'hex') });
-  const inner: Server = createCoordinatorServer(core, { adminSecret, authRequestsPerMinute: 10000 });
-  const server = createHttpsServer({ cert, key }, (req, res) => { if (hide.some(prefix => (req.url ?? '').startsWith(prefix))) { res.writeHead(404, { 'content-type': 'application/json' }); res.end('{}'); return; } inner.emit('request', req, res); });
-  const port = await listenAny(server);
-  t.after(async () => { await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }); store.close(); await rm(dir, { recursive: true, force: true }); });
-  return { port, core, store, url: `https://localhost:${port}` };
-}
 
 test('doctor: a healthy Coordinator, then an enrolled node: every stage is reported, nothing is created or changed, and no secret appears', async t => {
   const { dir, goodCa } = await sandbox(t); const c = await realCoordinator(t); const stateDir = join(dir, 'state'); const env = { NODE_EXTRA_CA_CERTS: goodCa };

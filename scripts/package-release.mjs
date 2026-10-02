@@ -45,4 +45,14 @@ writeFileSync(join(stage, 'RUNNING.txt'), [
   'Admin/demo:  node tools/admin.mjs ... / node tools/demo.mjs',
   'Backup:      node tools/backup.mjs <destination-file>   (see docs/deployment.md)',
   'Configuration and first-run steps: docs/development.md. Configure through environment variables; never commit secrets.', ''].join('\n'));
+// The installers published with a release are pinned to it: the version is stamped in, and they are written NEXT TO the archive (not inside it) so the release workflow publishes them as assets
+// and lists them in SHA256SUMS.txt, which lets a user verify the installer itself before running it. The unstamped templates are also in the archive under deploy/install/.
+for (const [target, name, mode] of [['linux', 'install-node.sh', 0o755], ['windows', 'install-node.ps1', 0o644]]) {
+  if (platform !== target) continue;
+  const template = readFileSync(join('deploy', 'install', name), 'utf8');
+  // Only the one stamp line is changed (the installer also compares against the placeholder to detect an unstamped copy).
+  const stampLine = /^(\$?VERSION_STAMP\s*=\s*)'@PRIVANET_VERSION@'$/m;
+  if (!stampLine.test(template)) throw new Error(`${name} has no version stamp line`);
+  writeFileSync(join(outDir, name), template.replace(stampLine, `$1'${version}'`)); chmodSync(join(outDir, name), mode);
+}
 console.log(stage);
