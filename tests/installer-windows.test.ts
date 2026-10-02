@@ -80,8 +80,10 @@ async function releaseServer(t: TestContext, mutate: Record<string, (data: Buffe
   return `https://localhost:${port}/releases/v${version}`;
 }
 function installer(rootDir: string, args: string[], env: NodeJS.ProcessEnv = {}): Promise<Run> {
+  // PSModulePath is dropped: a PowerShell 7 parent (as on the CI runner) sets one that Windows PowerShell 5.1 cannot load its own modules from (Get-FileHash would not be found).
+  const inherited = { ...process.env }; delete inherited.PSModulePath;
   const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(releaseDir, 'install-node.ps1'), ...args],
-    { env: { ...process.env, PRIVANET_NODE_BIN: process.execPath, PRIVANET_NODE_MIN: '22.0.0', ...env, PRIVANET_INVITE_CODE: '' }, cwd: rootDir, stdio: ['ignore', 'pipe', 'pipe'] });
+    { env: { ...inherited, PRIVANET_NODE_BIN: process.execPath, PRIVANET_NODE_MIN: '22.0.0', ...env, PRIVANET_INVITE_CODE: '' }, cwd: rootDir, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = ''; let err = ''; child.stdout.on('data', (chunk: Buffer) => { out += chunk.toString(); }); child.stderr.on('data', (chunk: Buffer) => { err += chunk.toString(); });
   return new Promise(resolve => child.once('close', code => resolve({ code: code ?? -1, out, err })));
 }
