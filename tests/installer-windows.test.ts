@@ -109,7 +109,7 @@ test('windows: an invite installs and enrolls a node with no secret left anywher
   assert.equal(run.code, 0, run.err + run.out); assert.match(run.out, /Enrolled\./);
   assert.equal(c.core.listInvites()[0]?.status, 'USED'); assert.equal(c.core.listNodes()[0]?.displayName, 'Windows PC');
   const plain = made.code.replace('-', '');
-  const walk = (path: string): string[] => readdirSync(path, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? walk(join(path, entry.name)) : [join(path, entry.name)]);
+  const walk = (path: string): string[] => readdirSync(path, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? walk(join(path, entry.name)) : entry.isFile() ? [join(path, entry.name)] : []);
   for (const file of walk(dir)) { if (file === inviteFile) continue; const bytes = readFileSync(file); for (const needle of [made.code, plain]) assert.equal(bytes.includes(needle), false, `${file} must not hold the invite`); }
   for (const text of [run.out, run.err]) assert.equal(text.includes(plain), false);
   const launcher = readFileSync(join(dir, 'ProgramFiles', 'PrivaNet', 'node', version, 'run-node.cmd'), 'utf8'); assert.match(launcher, /PRIVANODE_STATE_DIR=/); assert.doesNotMatch(launcher, /INVITE|TOKEN/i);
