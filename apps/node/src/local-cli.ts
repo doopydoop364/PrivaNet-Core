@@ -18,6 +18,8 @@ import { STATUS_STALE_MS, STATUS_FILE } from './status-file.js';
 import { join } from 'node:path';
 import { DEFAULT_PANEL_PORT, loadOrCreatePanelToken, panelUrl } from './panel-token.js';
 import { explainIdle } from './status.js';
+import { diagnose } from './doctor.js';
+import { UnsafeBundleError, buildSupportBundle } from './support-bundle.js';
 
 export interface CliIo { out: (text: string) => void; err: (text: string) => void }
 export const EXIT_USAGE = 78;
@@ -43,7 +45,7 @@ const done = (io: CliIo, parsed: Parsed, data: unknown, human: string): void => 
 const bytes = (n: number | null | undefined): string => n === null || n === undefined ? 'unlimited' : n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(n % 1024 ** 3 === 0 ? 0 : 1)} GiB` : n >= 1024 ** 2 ? `${Math.round(n / 1024 ** 2)} MiB` : `${Math.round(n / 1024)} KiB`;
 const ago = (at: number | null, now: number): string => at === null ? 'never' : `${Math.max(0, Math.round((now - at) / 1000))}s ago`;
 
-export const LOCAL_COMMANDS = ['status', 'pause', 'resume', 'config', 'policy', 'name', 'capability', 'panel'] as const;
+export const LOCAL_COMMANDS = ['status', 'pause', 'resume', 'config', 'policy', 'name', 'capability', 'panel', 'support-bundle'] as const;
 
 /** `status`: the live document the running node publishes, or an offline view built from the files when it is not running. Never contacts the Coordinator. */
 async function statusCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
@@ -187,6 +189,34 @@ async function panelCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): 
   return 0;
 }
 
+/** `support-bundle`: writes a sanitized troubleshooting file (see support-bundle.ts). It makes no change to the node and sends nothing anywhere; the doctor part contacts only the Coordinator, and `--no-network` skips even that. */
+async function supportBundleCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
+  const parsed = parse(argv, { flags: [...COMMON.flags, '--no-network', '--stdout'], values: [...COMMON.values, '--log-file'] });
+  const stateDir = stateDirOf(parsed, env); const now = Date.now();
+  const resolved = await resolvePolicy(stateDir, env.PRIVANODE_POLICY_FILE).catch(() => undefined);
+  if (!resolved) { io.err('The policy could not be read; run `privanet-node config check`.\n'); return 1; }
+  const local = await readLocalState(stateDir);
+  let status: Record<string, unknown> | undefined;
+  try { const file = StatusFileSchema.parse(JSON.parse(await readPrivateFileUpTo(join(stateDir, STATUS_FILE), 262144))); if (now - file.publishedAt <= STATUS_STALE_MS) status = file.status; } catch { /* the node is not running */ }
+  const config = await checkConfig({ ...env, PRIVANODE_STATE_DIR: stateDir }).catch(() => undefined);
+  const doctor = parsed.flags.has('--no-network') ? undefined : await diagnose({ stateDir, allowInsecureLoopback: env.PRIVANODE_ALLOW_INSECURE_LOOPBACK === 'true', timeoutMs: 8000, env }).catch(() => undefined);
+  let logText: string | undefined;
+  const logFile = parsed.values.get('--log-file');
+  if (logFile) { try { const { readFileSync, statSync } = await import('node:fs'); const size = statSync(logFile).size; logText = readFileSync(logFile, 'utf8').slice(-Math.min(size, 120000)); } catch { io.err('The log file could not be read; continuing without it.\n'); } }
+  let bundle: Record<string, unknown>;
+  try { bundle = buildSupportBundle({ env, now, policy: resolved, local: local.state, ...(local.kind === 'error' ? { localProblem: local.code } : {}), status, doctor, logText }); }
+  catch (error) { if (error instanceof UnsafeBundleError) { io.err(`No bundle was written: something that looks like a secret (${error.kind}) survived redaction. This is a bug in the redaction rules; please report it without attaching anything.\n`); return 1; } throw error; }
+  if (config) bundle.configurationCheck = { ok: config.ok, findings: config.findings.map(finding => ({ severity: finding.severity, id: finding.id, ...(finding.setting ? { setting: finding.setting } : {}) })) };
+  const text = JSON.stringify(bundle, null, 2) + '\n';
+  if (parsed.flags.has('--stdout')) { io.out(text); return 0; }
+  const target = parsed.positional[0] ?? `privanet-support-bundle-${new Date(now).toISOString().replace(/[:.]/g, '-')}.json`;
+  let fd: number;
+  try { fd = openSync(target, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0), 0o600); } catch { io.err(`Cannot create ${target} (it already exists?).\n`); return 1; }
+  try { writeSync(fd, text); } finally { closeSync(fd); }
+  io.out(`Support bundle written to ${target} (readable only by you).\nRead it before you share it: it holds versions, a sanitized configuration and policy, the doctor's output and recent events. Private keys, tokens, authorization headers and secrets are removed or never included.\n`);
+  return 0;
+}
+
 const USAGE = `Usage: privanet-node COMMAND [options]
   status [--json]                      what the node is doing, and why it is idle if it is
   pause 15m|1h|tomorrow|reboot|indefinite     stop contributing for a while (resume ends it)
@@ -196,6 +226,7 @@ const USAGE = `Usage: privanet-node COMMAND [options]
   name show|set NAME|clear             this machine's local display name
   capability enable|disable NAME       switch an enrolled capability on or off
   panel                                how to open the local control panel
+  support-bundle [FILE] [--no-network] [--log-file F]    a sanitized troubleshooting file you can share
   doctor | enroll | join | support-bundle | update | completions   (see each command's --help)
 Common options: --state-dir DIR (default: PRIVANODE_STATE_DIR or ./var/node), --json. Exit status: 0 ok, 1 a problem was found, 78 bad usage.`;
 
@@ -212,6 +243,7 @@ export async function runLocal(command: string, argv: string[], env: NodeJS.Proc
       case 'name': return await nameCommand(argv, env, io);
       case 'capability': return await capabilityCommand(argv, env, io);
       case 'panel': return await panelCommand(argv, env, io);
+      case 'support-bundle': return await supportBundleCommand(argv, env, io);
       default: io.err(USAGE + '\n'); return EXIT_USAGE;
     }
   } catch (error) {

@@ -286,6 +286,10 @@ test('the real node program serves the panel on loopback, `status` and `pause` w
   await until('the second node to report no panel', () => out2.includes('panel.unavailable')); assert.equal(second.exitCode, null, 'it keeps running');
   second.kill('SIGTERM'); await second1;
   const session = (await call(port, 'GET', '/api/session', { headers: { cookie } })).json();
+  const bundle = await call(port, 'POST', '/api/support-bundle', { headers: { cookie, 'x-csrf-token': session.csrf, 'content-type': 'application/json', origin }, body: '{}' });
+  assert.equal(bundle.status, 200); assert.match(String(bundle.headers['content-disposition']), /attachment/);
+  const bundleBody = bundle.json(); assert.ok(bundleBody.software); assert.ok(Array.isArray(bundleBody.recentEvents) && bundleBody.recentEvents.length > 0);
+  for (const secretLike of [token, cookie.split('=')[1] ?? 'x', session.csrf as string, 'privateKey']) assert.equal(bundle.text.includes(secretLike), false, 'no secret in the panel\'s bundle');
   const drain = await call(port, 'POST', '/api/drain', { headers: { cookie, 'x-csrf-token': session.csrf, 'content-type': 'application/json', origin }, body: JSON.stringify({ confirm: true }) }); assert.equal(drain.status, 200);
   const code = await exited; assert.equal(code, 0, `the node stopped cleanly after "drain and stop" (${err.slice(0, 200)})`);
 });

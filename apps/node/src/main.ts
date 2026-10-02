@@ -20,6 +20,8 @@ import { LogRing } from './log-ring.js';
 import { resolvePolicy } from './policy-store.js';
 import { buildStatus } from './status-document.js';
 import { startPanel } from './panel.js';
+import { buildSupportBundle } from './support-bundle.js';
+import { diagnose } from './doctor.js';
 import type { PanelHandle } from './panel.js';
 import { DEFAULT_PANEL_PORT } from './panel-token.js';
 import { STATUS_FILE, STATUS_PUBLISH_MS } from './status-file.js';
@@ -89,7 +91,9 @@ async function main() {
     const port = Number(process.env.PRIVANODE_PANEL_PORT ?? DEFAULT_PANEL_PORT);
     try {
       if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('bad port');
-      panel = await startPanel({ stateDir: config.stateDir, port, node, engine, control, transfer, history, logs, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities, jobSlots: config.jobSlots, env: process.env, actions });
+      panel = await startPanel({ stateDir: config.stateDir, port, node, engine, control, transfer, history, logs, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities, jobSlots: config.jobSlots, env: process.env, actions,
+        supportBundle: async () => buildSupportBundle({ env: process.env, policy: resolved, local: control.view.local, localProblem: control.view.localProblem, status: JSON.parse(JSON.stringify(buildStatus({ node, engine, control, transfer, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities }))) as Record<string, unknown>,
+          doctor: await diagnose({ url: config.url, stateDir: config.stateDir, allowInsecureLoopback: process.env.PRIVANODE_ALLOW_INSECURE_LOOPBACK === 'true', timeoutMs: 8000, env: process.env }).catch(() => undefined), logs: logs.recent(200) }) });
       log({ event: 'panel.listening', code: String(panel.port) });
     } catch { log({ event: 'panel.unavailable', code: 'LISTEN_FAILED' }); }
   }
