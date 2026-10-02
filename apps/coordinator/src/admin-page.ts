@@ -54,6 +54,9 @@ function tabs() { var nav = clear($('tabs')); TABS.forEach(function (t) { var n 
 
 function nodesView() {
   var root = h('div'); if (!data.nodes) return h('p', { text: 'The node list could not be loaded.' });
+  if (data.storage) { var st = data.storage; root.appendChild(h('div', { class: 'card' }, h('h3', { text: 'Storage control plane' }), h('p', { class: 'note', text: st.keyring.available
+    ? st.nodes.length + ' node(s) offering storage; ' + st.chunks.stored + ' stored and ' + st.chunks.pending + ' pending chunk(s) on record; ' + st.transfers.open + ' open transfer(s). Metadata only: the Coordinator never holds chunk bytes.'
+    : 'Storage is off at this Coordinator: there is no usable signing key.' }))); }
   var shown = data.nodes; var counts = {}; shown.forEach(function (n) { counts[n.status] = (counts[n.status] || 0) + 1; });
   root.appendChild(h('p', { class: 'note', text: shown.length + ' node(s)' + (shown.length ? ': ' + Object.keys(counts).map(function (k) { return counts[k] + ' ' + k.toLowerCase().replace('_', ' '); }).join(', ') : '') + '. Everything here is what the Coordinator has stored; what a node says about its own resources is self-reported and not verified.' }));
   shown.forEach(function (n) {

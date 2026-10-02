@@ -184,7 +184,10 @@ test('checksummed migrations reject modified history and transactions roll back'
   const path = join(dir, 'db.sqlite'); const store = new SqliteStore(path);
   assert.throws(() => store.transaction(() => { store.saveGrant({ tokenHash: 'test', expiresAt: 1, capabilities: [], used: false }); throw new Error('rollback'); }));
   assert.equal(store.getGrant('test'), undefined); store.close();
-  assert.throws(() => new SqliteStore(path, [{ version: 1, sql: migrations[0].sql + '\n-- changed' }]), /Applied migration changed/);
+  // The history is the whole list (the database is at the latest version): editing any applied migration, the first or a later one, is detected.
+  assert.throws(() => new SqliteStore(path, [{ version: 1, sql: migrations[0].sql + '\n-- changed' }, ...migrations.slice(1)]), /Applied migration changed/);
+  assert.throws(() => new SqliteStore(path, [migrations[0], { version: 2, sql: migrations[1].sql + '\n-- changed' }]), /Applied migration changed/);
+  assert.throws(() => new SqliteStore(path, [migrations[0]]), /schema is newer than service/);
 });
 
 test('lowered retry policy after restart cannot issue an excess attempt', t => {
