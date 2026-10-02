@@ -318,7 +318,7 @@ for (const way of ['invite', 'approval'] as const) {
 }
 
 // Upgrading a v0.3.5 node. A v0.3.5 install is what the installer lays down without the control panel's files: identity, enrollment, node.env, the policy file, and none of policy.json,
-// local-state.json, panel-token, status.json or history.json. (The persistent formats are unchanged since v0.3.5: see tests/compat-v0.3.5.test.ts.) The administrator's own edits to node.env and the
+// local-state.json, panel-token, status.json or history.json. (The persistent formats are unchanged since v0.3.5: see tests/compat-previous-release.test.ts.) The administrator's own edits to node.env and the
 // policy file must survive an upgrade byte for byte; the node must come back with the same identity, enrolled, with the administrator's settings winning over anything the owner saves later.
 test('upgrading a v0.3.5-shaped node: identity, enrollment, administrator settings and permissions survive; the new local files appear only when used; the environment keeps winning', { skip, timeout: 240000 }, async t => {
   const { sb, base, invite, c } = await reserve(t); const first = await installer(sb, base(['--invite-stdin']), {}, `${invite('Upgrade PC').code}\n`).done; assert.equal(first.code, 0, first.err + first.out);

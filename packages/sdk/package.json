@@ -1,6 +1,6 @@
 {
   "name": "@privanet/sdk",
-  "version": "0.3.6",
+  "version": "0.4.0-alpha.1",
   "description": "PrivaNet application SDK: submit typed jobs to a PrivaNet Coordinator and wait for validated results.",
   "license": "Apache-2.0",
   "type": "module",
@@ -21,8 +21,8 @@
   },
   "sideEffects": false,
   "dependencies": {
-    "@privanet/protocol": "0.3.6",
-    "@privanet/shared": "0.3.6"
+    "@privanet/protocol": "0.4.0-alpha.1",
+    "@privanet/shared": "0.4.0-alpha.1"
   },
   "repository": {
     "type": "git",

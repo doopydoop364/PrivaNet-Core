@@ -64,7 +64,7 @@ async function rig(t: TestContext, options: { clock?: () => number; actions?: { 
   const get = (session: { cookie: string }, path: string) => call(panel.port, 'GET', path, { headers: { cookie: session.cookie } });
   return { dir, state, panel, origin, login, post, get, calls, control, engine, node, history, logs };
 }
-const API_GETS = ['/api/session', '/api/status', '/api/policy', '/api/settings', '/api/jobs', '/api/history', '/api/logs', '/api/privacy'];
+const API_GETS = ['/api/session', '/api/status', '/api/policy', '/api/settings', '/api/storage', '/api/jobs', '/api/history', '/api/logs', '/api/privacy'];
 
 test('the panel listens on loopback only, on a numeric loopback address, and not on any other interface', async t => {
   const r = await rig(t);
@@ -321,4 +321,17 @@ test('a damaged local-state.json is reported with a fixed code and a next step, 
     const reply = await r.post(s, path, body); assert.equal(reply.status, 409, path); assert.equal(reply.json().error.code, 'LOCAL_STATE_UNREADABLE'); assert.match(reply.json().error.hint, /config check/); }
   assert.equal(await readFile(join(r.state, 'local-state.json'), 'utf8'), '{broken', 'the damaged file was not overwritten');
   assert.match(renderPage('n'), /error\.hint/);
+});
+
+test('storage in the panel: a status card with no path or chunk list, edits through the same policy path as everything else, refused when the policy is locked', async t => {
+  const r = await rig(t); const s = await r.login(); const status = await r.get(s, '/api/storage'); assert.equal(status.status, 200);
+  const body = status.json(); assert.deepEqual([body.enabled, body.state, body.networkAccessible, body.maxChunkBytes], [false, 'DISABLED', false, 8 * 1024 * 1024]); assert.doesNotMatch(status.text, new RegExp(r.state.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), 'no host path'); assert.doesNotMatch(status.text, /chk_[0-9a-f]{64}/);
+  const doc = (await r.get(s, '/api/policy')).json(); assert.deepEqual(doc.policy.storage, { enabled: false, maxBytes: 1024 ** 3, reserveFreeBytes: 10 * 1024 ** 3 });
+  const saved = await r.post(s, '/api/policy', { policy: { ...doc.policy, storage: { enabled: true, maxBytes: 2 * 1024 ** 3, reserveFreeBytes: 5 * 1024 ** 3 } } }); assert.equal(saved.status, 200, saved.text);
+  assert.deepEqual((await r.get(s, '/api/policy')).json().policy.storage, { enabled: true, maxBytes: 2 * 1024 ** 3, reserveFreeBytes: 5 * 1024 ** 3 }); assert.equal((await r.get(s, '/api/policy')).json().preset, doc.preset, 'storage never changes which preset the policy matches');
+  assert.equal((await r.post(s, '/api/policy', { policy: { ...doc.policy, storage: { enabled: true, maxBytes: -5, reserveFreeBytes: 0 } } })).status, 422);
+  assert.equal((await r.post(s, '/api/policy', { policy: { ...doc.policy, storage: { enabled: true, listenerPort: 4041 } } })).status, 422, 'there is no network setting to change');
+  for (const path of ['/api/storage/list', '/api/storage/chunks', '/api/storage/get', '/api/storage/put']) { assert.equal((await r.get(s, path)).status, 404, path); assert.equal((await r.post(s, path, {})).status, 404, path); }
+  const locked = await rig(t, { policyLocked: true, env: { PRIVANODE_POLICY_LOCKED: 'true' } }); const ls = await locked.login(); const reply = await locked.post(ls, '/api/policy', { policy: { ...(await locked.get(ls, '/api/policy')).json().policy, storage: { enabled: true, maxBytes: 1, reserveFreeBytes: 0 } } });
+  assert.equal(reply.status, 409); assert.equal(reply.json().error.code, 'POLICY_LOCKED_BY_ENVIRONMENT'); assert.equal((await locked.get(ls, '/api/settings')).json().storage.locked, true);
 });

@@ -20,6 +20,7 @@ import { DEFAULT_PANEL_PORT, loadOrCreatePanelToken, panelUrl } from './panel-to
 import { explainIdle } from './status.js';
 import { diagnose } from './doctor.js';
 import { gatherSettings, renderSettings } from './effective-settings.js';
+import { inspectStorage } from './store/status.js';
 import { UnsafeBundleError, buildSupportBundle } from './support-bundle.js';
 import { checkForUpdate } from './update-check.js';
 import { SHELLS, completionScript } from './completions.js';
@@ -49,7 +50,7 @@ const done = (io: CliIo, parsed: Parsed, data: unknown, human: string): void => 
 const bytes = (n: number | null | undefined): string => n === null || n === undefined ? 'unlimited' : n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(n % 1024 ** 3 === 0 ? 0 : 1)} GiB` : n >= 1024 ** 2 ? `${Math.round(n / 1024 ** 2)} MiB` : `${Math.round(n / 1024)} KiB`;
 const ago = (at: number | null, now: number): string => at === null ? 'never' : `${Math.max(0, Math.round((now - at) / 1000))}s ago`;
 
-export const LOCAL_COMMANDS = ['status', 'pause', 'resume', 'config', 'policy', 'name', 'capability', 'slots', 'settings', 'panel', 'support-bundle', 'update', 'completions'] as const;
+export const LOCAL_COMMANDS = ['status', 'pause', 'resume', 'config', 'policy', 'name', 'capability', 'slots', 'settings', 'storage', 'panel', 'support-bundle', 'update', 'completions'] as const;
 
 /** `status`: the live document the running node publishes, or an offline view built from the files when it is not running. Never contacts the Coordinator. */
 async function statusCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
@@ -172,6 +173,22 @@ async function nameCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): P
   }
   throw new UsageError('usage: privanet-node name show|clear|set NAME');
 }
+/** `storage status`: the local chunk store's switches, limits, usage and health, read from disk without changing anything. There is deliberately no command here that adds, lists or fetches chunks. */
+async function storageCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
+  const parsed = parse(argv, COMMON); const stateDir = stateDirOf(parsed, env);
+  if (parsed.positional[0] !== 'status' || parsed.positional.length !== 1) throw new UsageError('usage: privanet-node storage status [--json]');
+  const locked = env.PRIVANODE_POLICY_LOCKED === 'true'; const resolved = await resolvePolicy(stateDir, env.PRIVANODE_POLICY_FILE, { locked });
+  const status = await inspectStorage(stateDir, resolved.policy.storage); const source = resolved.source.kind === 'saved' ? 'saved' : resolved.source.kind === 'env-file' ? 'installer-file' : 'default';
+  const gib = (n: number | null): string => n === null ? 'unknown' : bytes(n);
+  done(io, parsed, { ...status, policySource: source, locked }, [
+    `Storage        ${status.enabled ? 'ENABLED' : 'DISABLED'}   health: ${status.health}${status.error ? `   (${status.error})` : ''}${status.flags.length ? `   flags: ${status.flags.join(', ')}` : ''}`,
+    `Policy         ${source}${locked ? '; LOCKED (PRIVANODE_POLICY_LOCKED): the panel and the CLI cannot change it' : ''}`,
+    `Quota          ${gib(status.maxBytes)} at most; ${gib(status.reserveFreeBytes)} of the disk always left free`,
+    `Stored         ${status.chunkCount} chunk${status.chunkCount === 1 ? '' : 's'}, ${gib(status.committedBytes)}${status.incomingBytes ? `; ${gib(status.incomingBytes)} of unfinished writes` : ''}${status.anomalies ? `; ${status.anomalies} unrecognised entr${status.anomalies === 1 ? 'y' : 'ies'} (left alone)` : ''}`,
+    `Room now       ${status.enabled ? gib(status.allowedBytes) : 'none (storage is off)'}${status.freeBytes === null ? '' : `   (disk free: ${gib(status.freeBytes)})`}`,
+    'This is a local store only: nothing can reach it over the network and no application can use it yet. Lowering a limit never deletes data.'].join('\n'));
+  return status.health === 'UNSAFE' ? 1 : 0;
+}
 /** `settings`: what the node is using and where each value comes from (environment, saved, enrollment, installer file, default), and what the panel and CLI cannot change because the environment sets it. */
 async function settingsCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
   const parsed = parse(argv, COMMON); const stateDir = stateDirOf(parsed, env);
@@ -234,13 +251,14 @@ async function supportBundleCommand(argv: string[], env: NodeJS.ProcessEnv, io: 
   let status: Record<string, unknown> | undefined;
   try { const file = StatusFileSchema.parse(JSON.parse(await readPrivateFileUpTo(join(stateDir, STATUS_FILE), 262144))); if (now - file.publishedAt <= STATUS_STALE_MS) status = file.status; } catch { /* the node is not running */ }
   const config = await checkConfig({ ...env, PRIVANODE_STATE_DIR: stateDir }).catch(() => undefined);
+  const storageFacts = await inspectStorage(stateDir, resolved.policy.storage).catch(() => undefined);
   const gathered = await gatherSettings(env, stateDir, now, (status as { jobs?: { slots?: { configured?: number } } } | undefined)?.jobs?.slots?.configured).catch(() => undefined);
   const doctor = parsed.flags.has('--no-network') ? undefined : await diagnose({ stateDir, allowInsecureLoopback: env.PRIVANODE_ALLOW_INSECURE_LOOPBACK === 'true', timeoutMs: 8000, env }).catch(() => undefined);
   let logText: string | undefined;
   const logFile = parsed.values.get('--log-file');
   if (logFile) { try { const { readFileSync, statSync } = await import('node:fs'); const size = statSync(logFile).size; logText = readFileSync(logFile, 'utf8').slice(-Math.min(size, 120000)); } catch { io.err('The log file could not be read; continuing without it.\n'); } }
   let bundle: Record<string, unknown>;
-  try { bundle = buildSupportBundle({ env, now, policy: resolved, local: local.state, ...(local.kind === 'error' ? { localProblem: local.code } : {}), status, doctor, logText, settings: gathered?.settings }); }
+  try { bundle = buildSupportBundle({ env, now, policy: resolved, local: local.state, ...(local.kind === 'error' ? { localProblem: local.code } : {}), status, doctor, logText, settings: gathered?.settings, storage: storageFacts }); }
   catch (error) { if (error instanceof UnsafeBundleError) { io.err(`No bundle was written: something that looks like a secret (${error.kind}) survived redaction. This is a bug in the redaction rules; please report it without attaching anything.\n`); return 1; } throw error; }
   if (config) bundle.configurationCheck = { ok: config.ok, findings: config.findings.map(finding => ({ severity: finding.severity, id: finding.id, ...(finding.setting ? { setting: finding.setting } : {}) })) };
   const text = JSON.stringify(bundle, null, 2) + '\n';
@@ -276,6 +294,7 @@ const USAGE = `Usage: privanet-node COMMAND [options]
   name show|set NAME|clear             this machine's local display name
   capability enable|disable NAME       switch an enrolled capability on or off
   slots show|set N|clear               how many jobs may run at once (applies at the next start)
+  storage status [--json]             the local chunk store: switches, limits, usage and health (local only; no file access commands)
   settings [--json]                    what the node is using and where each value comes from; what the environment locks
   panel                                how to open the local control panel
   support-bundle [FILE] [--no-network] [--log-file F]    a sanitized troubleshooting file you can share
@@ -295,6 +314,7 @@ export async function runLocal(command: string, argv: string[], env: NodeJS.Proc
       case 'config': return await configCommand(argv, env, io);
       case 'policy': return await policyCommand(argv, env, io);
       case 'name': return await nameCommand(argv, env, io);
+      case 'storage': return await storageCommand(argv, env, io);
       case 'settings': return await settingsCommand(argv, env, io);
       case 'slots': return await slotsCommand(argv, env, io);
       case 'capability': return await capabilityCommand(argv, env, io);

@@ -103,7 +103,7 @@ Memory-intensive PrivaNet work should be preempted or avoided before the host be
 
 Storage contribution and disk activity are separate concerns.
 
-A node may have large storage capacity but should still be able to limit background disk I/O. (Scratch-disk and disk-I/O limits exist since v0.2.1; storage *contribution* is a Phase 4/5 concern.) Future resource-aware scheduling may distinguish sequential/background storage tasks from latency-sensitive operations.
+A node may have large storage capacity but should still be able to limit background disk I/O. (Scratch-disk and disk-I/O limits exist since v0.2.1.) **Storage contribution, 0.4.0-alpha.1:** a default-off `storage` block (`enabled`, `maxBytes`, `reserveFreeBytes`) controls the node's local chunk store ([PHASE4_DESIGN](PHASE4_DESIGN.md#15-40-alpha1-as-built-and-what-changed-from-this-design)). The store never holds more than `maxBytes` (committed data, writes in progress and leftover partial files all count), never takes the disk below `reserveFreeBytes` free (checked before, while and at the end of every write), stops accepting writes while the node is paused, draining, off-schedule, on a disabled battery policy or the owner is busy on the disk, and lowering a limit never deletes anything. It is a **local library only**: no network access, no Coordinator interface, nothing advertised, and no application can use it yet. Future resource-aware scheduling may distinguish sequential/background storage tasks from latency-sensitive operations.
 
 ## Network
 

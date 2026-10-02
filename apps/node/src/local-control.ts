@@ -23,6 +23,8 @@ export interface LocalControlOptions {
   policyLocked?: boolean;
   /** The job slots this process started with, and whether PRIVANODE_JOB_SLOTS set them (then a saved choice cannot override it). */
   jobSlots?: { running: number; fromEnvironment: boolean };
+  /** Called with the policy that was just applied (the local store follows the owner's storage settings through this). */
+  onPolicy?: (policy: ResourcePolicy) => void;
   /** Called after a change has been applied, so the status snapshot can be republished at once. */
   onChange?: () => void;
 }
@@ -72,6 +74,7 @@ export class LocalControl {
     if (next.problem && this.resolved) { this.resolved = { ...this.resolved, problem: next.problem }; this.options.log?.({ event: 'node.policy_invalid', code: next.problem.code }); return; }
     this.resolved = next; this.options.engine.setPolicy(next.policy);
     this.options.transfer?.setLimits({ ratePerSec: next.policy.maxBandwidthBytesPerSec, monthlyBytes: next.policy.monthlyTransferBytes });
+    this.options.onPolicy?.(next.policy);
     this.options.log?.({ event: 'node.policy_applied' });
   }
   /** One pass: pick up changed files, end an expired pause, record history. Called every second, and directly after a change made through this object. */

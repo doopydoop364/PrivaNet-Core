@@ -7,6 +7,23 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 
 ## [Unreleased]
 
+## [0.4.0-alpha.1] - 2026-10-02
+
+Phase 4.0-alpha.1: the node-local chunk store. **No network feature:** the store has no listener and no client, the Coordinator is unchanged, the protocol version stays 1, and the storage policy is off by default. Design and as-built differences: [docs/PHASE4_DESIGN.md](docs/PHASE4_DESIGN.md#15-40-alpha1-as-built-and-what-changed-from-this-design).
+
+### Added
+- **Chunk store** (`apps/node/src/store/`): opaque immutable chunks addressed `chk_<sha-256 hex of the stored bytes>`, at most 8 MiB, under `<state>/store/chunks/<aa>/<bb>/<hex>` (owner-only, links refused). Atomic streaming `put` (exclusive partial file, size and hash verified before commit, fsync, rename), idempotent duplicates, verified `get`, cheap `has`, idempotent `delete`, fixed error vocabulary.
+- **Quota and accounting:** committed + reserved + partial bytes never exceed the owner's allowance; free space is re-checked while writing and at commit.
+- **Startup recovery:** the chunk directories are the only source of truth; counters are rebuilt by scan, stale partials swept, malformed names, links and impossible sizes reported, and an unsafe store disables storage without stopping the node.
+- **`storage` policy block** (`enabled: false`, `maxBytes` 1 GiB, `reserveFreeBytes` 10 GiB), covered by the v0.3.6 precedence and `PRIVANODE_POLICY_LOCKED`; obeys paused, draining, disabled, schedule, battery and disk-pressure states.
+- **`privanet-node storage status [--json]`**, a panel "Local storage" card and policy controls (no file listing, upload or download), `config check`, `settings` and support-bundle facts (counts and sizes only, no ids or paths).
+
+### Tests
+- Fault injection at every put step, real SIGKILL crash recovery, symlink/permission/malicious-id attacks, corrupt-at-rest, property tests; compatibility test now against v0.3.6.
+
+### Limits
+- Verified locally on Linux only; Windows and macOS rely on CI (permission-bit tests skip on Windows). Power-loss durability and Windows ACL protection of the store are unverified on real hardware. No independent review.
+
 ## [0.3.6] - 2026-10-02
 
 Contributor and operator experience release: a local control panel and CLI for the node, an operator dashboard, and explicit, tested rules for which setting wins. It is a quality-of-life release for people running PrivaNet, not a change to how the network works: **the protocol version stays 1, the Coordinator's routes are unchanged, and nothing on the wire changed** (the persistent state formats and wire schemas are asserted identical to v0.3.5 by a test). A v0.3.5 node upgrades in place and keeps its identity, enrollment, name, policy and service configuration; the new local files appear only when the owner uses the new features. What is still unverified on real machines is listed in [docs/MANUAL_VALIDATION.md](docs/MANUAL_VALIDATION.md).

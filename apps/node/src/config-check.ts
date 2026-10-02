@@ -9,6 +9,8 @@ import { ResourcePolicySchema } from './resource-policy.js';
 import type { ResourcePolicy } from './resource-policy.js';
 import { PolicyError, assertNoUnsafeLocal, resolvePolicy } from './policy-store.js';
 import { readLocalState } from './local-state.js';
+import { ChunkStore } from './store/chunk-store.js';
+import { storeRoot } from './store/status.js';
 
 export type FindingSeverity = 'error' | 'warning' | 'info';
 export interface Finding { severity: FindingSeverity; id: string; message: string; /** The setting concerned, by name. Never a value. */ setting?: string }
@@ -41,6 +43,11 @@ export function policyFindings(policy: unknown, context: { jobSlots?: number; ca
   const biggest = Math.max(0, ...(context.capabilities ?? (Object.keys(JOB_TYPES) as JobType[])).map(type => JOB_TYPES[type].resources.memoryBytes));
   if (slots > 1 && biggest * slots > p.maxMemoryBytes) out.push({ severity: 'warning', id: 'SLOTS_EXCEED_MEMORY', setting: 'PRIVANODE_JOB_SLOTS', message: `${slots} job slots at the largest declared per-job memory (${Math.round(biggest / (1024 * 1024))} MiB each) exceed maxMemoryBytes, so not every slot can be used at once.` });
   if (p.reserveDiskBytes < 1 * GiB && p.maxDiskBytes > 0) out.push({ severity: 'info', id: 'LOW_DISK_RESERVE', setting: 'reserveDiskBytes', message: 'Less than 1 GiB of free disk space is reserved for you; a full disk can hurt other programs.' });
+  if (p.storage.enabled) {
+    out.push({ severity: 'info', id: 'STORAGE_LOCAL_ONLY', setting: 'storage.enabled', message: 'The local chunk store is on. In this version it is a local store only: it opens no port, advertises nothing and no application can use it yet.' });
+    if (p.storage.maxBytes === 0) out.push({ severity: 'warning', id: 'STORAGE_QUOTA_ZERO', setting: 'storage.maxBytes', message: 'The storage quota is 0, so the store can hold nothing.' });
+    if (p.storage.reserveFreeBytes < 1 * GiB) out.push({ severity: 'warning', id: 'STORAGE_LOW_RESERVE', setting: 'storage.reserveFreeBytes', message: 'Less than 1 GiB of disk space is kept free beyond the store; a full disk can disturb your own work.' });
+  }
   return out;
 }
 
@@ -66,6 +73,12 @@ export async function checkConfig(env: NodeJS.ProcessEnv): Promise<ConfigCheck> 
   if (!existsSync(stateDir)) findings.push({ severity: 'info', id: 'STATE_DIR_MISSING', setting: 'PRIVANODE_STATE_DIR', message: 'The state directory does not exist yet; it is created (private) when the node enrolls.' });
   else if (process.platform !== 'win32') { const stat = lstatSync(stateDir); if ((stat.mode & 0o077) !== 0) findings.push({ severity: 'error', id: 'STATE_DIR_NOT_PRIVATE', setting: 'PRIVANODE_STATE_DIR', message: 'The state directory is accessible to other users; it must be mode 700.' }); }
   if (env.PRIVANODE_POLICY_FILE !== undefined && !existsSync(env.PRIVANODE_POLICY_FILE)) findings.push({ severity: 'error', id: 'POLICY_FILE_MISSING', setting: 'PRIVANODE_POLICY_FILE', message: 'The policy file named by PRIVANODE_POLICY_FILE does not exist.' });
+  // The local chunk store, read from disk without changing anything: a link or loosened permissions inside it is an error (the node refuses to open such a store).
+  try {
+    const inspected = await ChunkStore.inspect(storeRoot(stateDir));
+    if (inspected.unsafe) findings.push({ severity: 'error', id: 'STORE_UNSAFE', setting: 'storage', message: 'The local chunk store contains a symbolic link or has permissions that are too broad, so the node refuses to open it. Nothing was changed; inspect the store directory in the state directory.' });
+    else if (inspected.anomalies > 0) findings.push({ severity: 'warning', id: 'STORE_ANOMALIES', setting: 'storage', message: `The local chunk store holds ${inspected.anomalies} entr${inspected.anomalies === 1 ? 'y' : 'ies'} that are not valid chunks (they are never counted, served or deleted).` });
+  } catch { findings.push({ severity: 'error', id: 'STORE_UNREADABLE', setting: 'storage', message: 'The local chunk store directory could not be read.' }); }
   const local = await readLocalState(stateDir);
   // The job slots that will apply at the next start: an explicit PRIVANODE_JOB_SLOTS, else the saved choice, else the default (so a saved number is checked against the policy too).
   if (jobSlots !== undefined && env.PRIVANODE_JOB_SLOTS === undefined && local.state.jobSlots !== undefined) jobSlots = local.state.jobSlots;

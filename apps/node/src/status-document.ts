@@ -5,10 +5,13 @@ import type { ResourceEngine } from './resource-engine.js';
 import type { TransferMeter } from './transfer-meter.js';
 import type { LocalControl } from './local-control.js';
 import { compatibility, explainIdle } from './status.js';
+import type { StorageStatus } from './store/status.js';
 
 export interface StatusContext {
   node: PrivaNode; engine: ResourceEngine; control: LocalControl; transfer?: TransferMeter | undefined;
   coordinatorUrl: string; enrolledCapabilities: JobType[]; now?: () => number;
+  /** The local chunk store's cached status (absent where there is no store service, as in tests and in `status` of a stopped node). */
+  storage?: StorageStatus | undefined;
 }
 const abbreviate = (nodeId: string | null): string | null => nodeId === null ? null : `${nodeId.slice(0, 13)}…`;
 const hostOf = (url: string): string => { try { return new URL(url).hostname; } catch { return ''; } };
@@ -43,6 +46,7 @@ export function buildStatus(context: StatusContext, options: { fullId?: boolean 
       measured: { ownerCpuPercent: engine.ownerCpuPercent, memoryHeadroomBytes: engine.memoryHeadroomBytes, power: report.power },
       transfer: usage ? { month: usage.month, usedBytes: usage.usedBytes, monthlyBytes: usage.monthlyBytes, remainingBytes: context.transfer?.remainingBytes() ?? null } : null,
       accounting: 'Per-job verified resource accounting does not exist yet: these figures are configured limits, coarse permitted budgets and host samples only.' },
+    storage: context.storage ?? null,
     idle,
   };
 }

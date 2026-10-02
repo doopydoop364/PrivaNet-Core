@@ -44,6 +44,7 @@ One rule everywhere: **what an administrator sets explicitly in the environment 
 | Capabilities | `PRIVANODE_CAPABILITIES` > what the node enrolled with; the owner can only switch some **off** (saved) | panel, `capability` | at once |
 | Coordinator | `PRIVANODE_COORDINATOR_URL` > enrollment record > loopback default | environment or re-enrolling only | next start |
 | Panel on/off and port | `PRIVANODE_PANEL`, `PRIVANODE_PANEL_PORT` > on, 4040 | environment only | next start |
+| Local chunk store (`storage.enabled`, `maxBytes`, `reserveFreeBytes`) | the same as the resource policy: lock > saved > installer file > defaults (off) | panel (Contribute), `policy import` (refused when locked) | at once (opens/closes the store, applies limits) |
 | Node display name | saved only (a label on this machine) | panel, `name` | at once |
 | Pause | saved only; ends by itself or with Resume | panel, `pause`, `resume` | at once |
 | Updates | never automatic; `update check` runs only when asked | | |
@@ -51,6 +52,12 @@ One rule everywhere: **what an administrator sets explicitly in the environment 
 The installer always sets `PRIVANODE_POLICY_FILE`, so that file is the *starting point*: the owner's saved policy wins over it, which is why the table lists the policy lock separately. An administrator who wants the file to be the last word sets `PRIVANODE_POLICY_LOCKED=true`: the saved policy is then ignored (and left alone on disk), and `policy import|preset|reset`, the presets and every edit in the panel are refused with `POLICY_LOCKED_BY_ENVIRONMENT`. `config check` says when an environment setting hides a saved value.
 
 A damaged `local-state.json` (for example a job-slot number outside 1 to 64) is never partly used: the node starts on the defaults, holds itself paused, and says so in `status`, `settings`, the panel and `config check`; every writing command refuses, changes nothing and tells you to run `privanet-node config check` and fix or move the file aside. State files are written atomically (a temporary file, flushed, renamed) and are mode 0600 inside the private state directory on Linux and macOS; on Windows the state directory's access control list is what protects them (not verified on a real machine).
+
+## Local storage (0.4.0-alpha.1)
+
+The Contribute tab has a **Local storage** section (off by default: an on/off box, the most to store and the disk to always leave free) and the Status tab a **Local storage** card (state, health, chunks and bytes used, your limits, room now). `privanet-node storage status [--json]` shows the same from a shell (read-only, creates nothing, works while the node is stopped). The settings are part of the resource policy, so they follow the same precedence, are shown as locked under `PRIVANODE_POLICY_LOCKED`, are included in `policy export`, `config check`, `settings` and the support bundle (counts and health only, never a path or a chunk list), and never make a preset "Custom".
+
+This is a **local store only**: nothing can reach it over the network, no application can use it yet, and there is deliberately **no file browser, chunk list, download or upload** in the panel or the CLI. Turning storage off closes the store and keeps what is in it; lowering a limit never deletes data.
 
 ## Presets
 
