@@ -1,0 +1,28 @@
+[Unit]
+Description=PrivaNet read-only crawler roundup API
+After=network-online.target privanet-coordinator.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=privanet
+Group=privanet
+EnvironmentFile=-/etc/privanet/roundup.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 /opt/privanet/bin/privanet-roundup-api
+Restart=on-failure
+RestartSec=5
+StateDirectory=privanet-roundup
+StateDirectoryMode=0750
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target
