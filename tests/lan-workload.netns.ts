@@ -54,6 +54,7 @@ test('server node (conservative) and desktop node (larger): both work, limits di
   const total = 4000; const inputs = Array.from({ length: total }, (_, i) => ({ url: `http://crawl.example:8080/p/${i}` }));
   const cpuBefore = { coordinator: await proc(lan.pids().coordinator), caddy: await proc(lan.pids().caddy), srv: await proc(srv.child.pid), dsk: await proc(dsk.child.pid) };
   const peaks = [0, 0]; let sampling = true;
+  t.after(() => { sampling = false; }); // failed workloads must also stop the sampling timer
   const sampler = (async () => { while (sampling) { try { for (const view of await lan.nodeViews()) { const i = ids.indexOf(view.nodeId); if (i >= 0) peaks[i] = Math.max(peaks[i] ?? 0, view.currentJobs); } } catch { /* sampling only */ } await sleep(300); } })();
   const started = Date.now();
   const work = lan.client(lan.web, app.token, { type: 'web.fetch.v1', inputs, inflight: 64, keyPrefix: 'wl', attempts: true, timeoutMs: 300000 }, 400000);

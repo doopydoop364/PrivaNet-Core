@@ -1,0 +1,78 @@
+{
+  "environment": {
+    "node": "v24.21.0",
+    "os": "linux 7.0.2-6-pve",
+    "cpu": "Intel(R) Core(TM) i5-4590 CPU @ 3.30GHz",
+    "logicalCpus": 4,
+    "ramGiB": 23.378963470458984
+  },
+  "methodology": "One measured batch per size/concurrency after warm startup; real Coordinator/node/SDK on loopback, TLS enabled; PUT includes placement, holder proof, replay fsync, chunk fsync and STORED receipt; GET includes full at-rest hashing, SDK hashing and signed acknowledgement. CPU is aggregate for all three components in one process. SHA-256 reference averages 100 independent hashes. No integrity checks disabled.",
+  "rows": [
+    {
+      "size": 1024,
+      "concurrency": 1,
+      "tls": true,
+      "putMs": 44.44353799999999,
+      "getMs": 32.28044699999987,
+      "putMiBPerSec": 0.02197310439146407,
+      "getMiBPerSec": 0.030252446628140067,
+      "aggregateCpuMs": 86.258,
+      "sha256MsPerChunk": 0.0063708900000006
+    },
+    {
+      "size": 1024,
+      "concurrency": 4,
+      "tls": true,
+      "putMs": 88.28526499999998,
+      "getMs": 101.38406500000019,
+      "putMiBPerSec": 0.04424577532841976,
+      "getMiBPerSec": 0.038529230407165,
+      "aggregateCpuMs": 251.185,
+      "sha256MsPerChunk": 0.005459200000004784
+    },
+    {
+      "size": 65536,
+      "concurrency": 1,
+      "tls": true,
+      "putMs": 20.82031999999981,
+      "getMs": 24.106380000000172,
+      "putMiBPerSec": 3.0018750912570304,
+      "getMiBPerSec": 2.592674636341066,
+      "aggregateCpuMs": 48.49,
+      "sha256MsPerChunk": 0.14353063999999904
+    },
+    {
+      "size": 65536,
+      "concurrency": 4,
+      "tls": true,
+      "putMs": 84.08300099999997,
+      "getMs": 99.64806200000021,
+      "putMiBPerSec": 2.973252584074635,
+      "getMiBPerSec": 2.5088295244517598,
+      "aggregateCpuMs": 245.579,
+      "sha256MsPerChunk": 0.14189511999999013
+    },
+    {
+      "size": 8388608,
+      "concurrency": 1,
+      "tls": true,
+      "putMs": 115.55982600000061,
+      "getMs": 152.42699700000048,
+      "putMiBPerSec": 69.22821084898447,
+      "getMiBPerSec": 52.484140981928384,
+      "aggregateCpuMs": 396.23,
+      "sha256MsPerChunk": 18.06725278
+    },
+    {
+      "size": 8388608,
+      "concurrency": 4,
+      "tls": true,
+      "putMs": 442.5480229999994,
+      "getMs": 480.54997100000037,
+      "putMiBPerSec": 72.30853678449274,
+      "getMiBPerSec": 66.59036922509766,
+      "aggregateCpuMs": 1357.025,
+      "sha256MsPerChunk": 17.997948099999995
+    }
+  ]
+}

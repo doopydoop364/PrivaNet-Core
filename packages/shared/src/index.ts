@@ -4,3 +4,4 @@ export * from './files.js';
 export * from './local-ui.js';
 export * from './completions.js';
 export * from './transfer-ticket.js';
+export * from './transfer-endpoint.js';

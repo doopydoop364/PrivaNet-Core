@@ -33,7 +33,7 @@ async function sandbox(t: TestContext) {
 const enable = (state: string, extra: Record<string, unknown> = {}) => writeFile(join(state, 'policy.json'), JSON.stringify({ version: 1, savedAt: 1, policy: ResourcePolicySchema.parse({ storage: { enabled: true, maxBytes: 2 * GiB, reserveFreeBytes: 1 * GiB, ...extra } }) }), { mode: 0o600 });
 
 test('the storage policy block is off by default, strict, bounded, additive for a v0.3.6 policy, and untouched by presets', () => {
-  const defaults = defaultResourcePolicy(); assert.deepEqual(defaults.storage, { enabled: false, maxBytes: 1 * GiB, reserveFreeBytes: 10 * GiB });
+  const defaults = defaultResourcePolicy(); assert.deepEqual(defaults.storage, { enabled: false, maxBytes: 1 * GiB, reserveFreeBytes: 10 * GiB, transfer: { enabled: false, bindAddress: "127.0.0.1", port: 4050, endpoint: "", certificateFile: "", keyFile: "", maxConcurrent: 8, maxConcurrentPuts: 2 } });
   // A policy file written by v0.3.6 (no storage key at all) still loads and gets the off-by-default block.
   const old = JSON.stringify({ version: 1, preset: 'generous', savedAt: 5, policy: (() => { const { storage: _storage, ...rest } = ResourcePolicySchema.parse({ maxCpuPercent: 40 }); void _storage; return rest; })() });
   const parsed = parsePolicyText(old); assert.deepEqual(parsed.policy.storage, defaults.storage); assert.equal(parsed.policy.maxCpuPercent, 40);
@@ -79,7 +79,7 @@ test('an unsafe store is reported, never repaired by guesswork, and never stops 
 
 test('privanet-node storage status: local facts only, nothing created, no file access commands, exit 1 when the store is unsafe', async t => {
   const { state, run } = await sandbox(t);
-  const off = await run('storage', ['status']); assert.equal(off.code, 0); assert.match(off.out, /DISABLED/); assert.match(off.out, /nothing can send a chunk to it yet/); assert.deepEqual(await readdir(state), [], 'asking creates nothing');
+  const off = await run('storage', ['status']); assert.equal(off.code, 0); assert.match(off.out, /DISABLED/); assert.match(off.out, /Capacity alone opens no transfer listener/); assert.deepEqual(await readdir(state), [], 'asking creates nothing');
   const json = JSON.parse((await run('storage', ['status', '--json'])).out); assert.deepEqual([json.enabled, json.state, json.health, json.networkAccessible, json.maxChunkBytes, json.policySource], [false, 'DISABLED', 'DISABLED', false, 8 * 1024 * 1024, 'default']);
   await enable(state); const on = await run('storage', ['status']); assert.match(on.out, /ENABLED/); assert.match(on.out, /2\.0? ?GiB|2 GiB/); assert.match(on.out, /saved/);
   const locked = await run('storage', ['status'], { PRIVANODE_POLICY_LOCKED: 'true' }); assert.match(locked.out, /DISABLED/, 'a locked policy ignores the saved one'); assert.match(locked.out, /LOCKED/);

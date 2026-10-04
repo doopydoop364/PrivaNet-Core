@@ -2,8 +2,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import {
   PlacementRequestSchema, SERVICES, TICKET_MAX_LIFETIME_MS, TICKET_MAX_SKEW_MS, TicketRequestSchema, TransferReceiptSchema,
 } from '@privanet/protocol';
-import type { ChunkStatus, NodeView, PlacementResponse, ServicesAdvertisement, StorageSummary, TicketResponse, TransferGrant, TransferState } from '@privanet/protocol';
-import { ApiError, canonicalPublicKey, signTicket } from '@privanet/shared';
+import type { TransferBinding, ChunkStatus, NodeView, PlacementResponse, ServicesAdvertisement, StorageSummary, TicketResponse, TransferGrant, TransferState } from '@privanet/protocol';
+import { ApiError, canonicalPublicKey, signTicket, validateTransferEndpoint } from '@privanet/shared';
 import type { ApplicationRecord, ChunkRecord, NodeRecord, ReplicaRecord, Store, TransferRecord } from './model.js';
 import { KeyringError } from './transfer-keys.js';
 import type { TransferKeyring } from './transfer-keys.js';
@@ -76,6 +76,7 @@ export class StorageControl {
   /** Called with every heartbeat (inside its transaction). An absent service deletes the row, like absent resources: a stale, more generous advertisement is never kept. */
   recordServices(nodeId: string, services: ServicesAdvertisement | undefined): void {
     const advertisement = services?.[SERVICE];
+    if (advertisement?.transferEndpoint) { try { validateTransferEndpoint(advertisement.transferEndpoint, this.now, nodeId); } catch { reject(400, 'INVALID_TRANSFER_ENDPOINT'); } }
     if (advertisement) this.store.saveNodeService({ nodeId, service: SERVICE, ...advertisement, reportedAt: this.now }); else this.store.deleteNodeServices(nodeId);
   }
   /** A revoked node: its open transfers are revoked, its stored copies become LOST (kept for audit and Phase 5 repair, never silently dropped), its reservations are released, it offers nothing. */
@@ -109,10 +110,10 @@ export class StorageControl {
   }
 
   // ---- Placement: choose a node and authorize an attempt --------------------------------------------------------------------------------------------------------------------------
-  private eligible(size: number, exclude?: string): { node: NodeRecord; room: number }[] {
+  private eligible(size: number, exclude?: string, direct = false): { node: NodeRecord; room: number }[] {
     const reserved = this.store.reservedBytes(); const open = this.store.openTransferCounts(); const out: { node: NodeRecord; room: number }[] = [];
     for (const advertisement of this.store.listNodeServices(SERVICE)) {
-      if (advertisement.nodeId === exclude) continue;
+      if (advertisement.nodeId === exclude || (direct && !advertisement.transferEndpoint)) continue;
       const node = this.store.getNode(advertisement.nodeId);
       // Online (a recent heartbeat, so the advertisement is fresh), not draining, not revoked, not paused by its owner, and able to take a chunk this size.
       if (!node || node.revoked || this.deps.status(node) !== 'ONLINE' || node.resources?.contribution === 'PAUSED' || advertisement.maxChunkBytes < size) continue;
@@ -135,7 +136,7 @@ export class StorageControl {
     try { canonicalPublicKey(key); } catch { reject(400, 'INVALID_HOLDER_KEY'); }
     return { hash: sha256hex(key) };
   }
-  private issue(app: ApplicationRecord, keyring: TransferKeyring, chunk: ChunkRecord, node: NodeRecord, operation: TransferGrant['operation'], holderKey: string): TransferGrant {
+  private issue(app: ApplicationRecord, keyring: TransferKeyring, chunk: ChunkRecord, node: NodeRecord, operation: TransferGrant['operation'], holderKey: string, direct = false): TransferGrant {
     this.rate(app.id);
     if (this.store.countOpenTransfers({ applicationId: app.id }) >= this.limits.maxOpenTransfersPerApplication) reject(429, 'TRANSFER_LIMIT');
     // Per-node ceilings apply to every operation, not only to the choice of a node for a new chunk: a node is never asked to hold more open transfers than this, whoever the application is.
@@ -146,7 +147,9 @@ export class StorageControl {
     const ticket = signTicket({ kid, transferId: id, operation, applicationId: app.id, chunkId: chunk.chunkId, nodeId: node.nodeId, maxBytes, issuedAt: now, expiresAt, holderKey, nonce: randomBytes(16).toString('hex') }, privateKey);
     // The ticket itself is returned and not kept; the row records what was authorized and for which key.
     this.store.saveTransfer({ id, operation, applicationId: app.id, chunkId: chunk.chunkId, nodeId: node.nodeId, kid, holderHash: sha256hex(holderKey), maxBytes, state: 'AUTHORIZED', reason: null, issuedAt: now, expiresAt, startedAt: null, completedAt: null, evidence: null });
-    return { transferId: id, operation, chunkId: chunk.chunkId, expiresAt, ticket };
+    const endpoint = direct ? this.store.getNodeService(node.nodeId, SERVICE)?.transferEndpoint : undefined;
+    if (direct && !endpoint) reject(503, 'TRANSFER_UNAVAILABLE');
+    return { transferId: id, operation, chunkId: chunk.chunkId, expiresAt, ticket, ...(endpoint ? { transferEndpoint: validateTransferEndpoint(endpoint, now, node.nodeId) } : {}) };
   }
   /** A retry (a new ticket for the same chunk) supersedes any earlier open transfer of the same operation, so at most one is ever open per chunk and operation. */
   private supersede(applicationId: string, chunkId: string, operation: TransferGrant['operation']): void {
@@ -167,20 +170,21 @@ export class StorageControl {
         if (usage.count + 1 > this.limits.maxChunksPerApplication) reject(429, 'APPLICATION_CHUNK_LIMIT');
         if (usage.bytes + request.size > this.limits.maxBytesPerApplication) reject(429, 'APPLICATION_BYTE_LIMIT');
       }
-      const grant = this.reserveAndIssue(app, keyring, existing ?? undefined, { chunkId: request.chunkId, size: request.size, class: request.class ?? null }, request.holderKey);
+      const grant = this.reserveAndIssue(app, keyring, existing ?? undefined, { chunkId: request.chunkId, size: request.size, class: request.class ?? null }, request.holderKey, request.directTransfer);
       return { chunkId: request.chunkId, size: request.size, state: 'PENDING' as const, grant };
     });
   }
-  private reserveAndIssue(app: ApplicationRecord, keyring: TransferKeyring, existing: ChunkRecord | undefined, wanted: { chunkId: string; size: number; class: string | null }, holderKey: string): TransferGrant {
+  private reserveAndIssue(app: ApplicationRecord, keyring: TransferKeyring, existing: ChunkRecord | undefined, wanted: { chunkId: string; size: number; class: string | null }, holderKey: string, direct = false): TransferGrant {
+    if (this.store.listOpenTransfers({ chunk: { applicationId: app.id, chunkId: wanted.chunkId } }).some(t => t.operation === 'put' && t.state === 'IN_PROGRESS')) reject(409, 'TRANSFER_IN_PROGRESS');
     const now = this.now; const replicas = existing ? this.store.listReplicas(app.id, wanted.chunkId) : [];
     // Keep the node this chunk is already reserved on while it is still eligible; otherwise choose again and drop the stale reservation.
     let node: NodeRecord | undefined; const kept = replicas.find(replica => replica.state === 'RESERVED');
     if (kept) {
       const current = this.store.getNode(kept.nodeId); const advertisement = current && this.store.getNodeService(current.nodeId, SERVICE);
-      if (current && advertisement && !current.revoked && this.deps.status(current) === 'ONLINE' && current.resources?.contribution !== 'PAUSED' && advertisement.maxChunkBytes >= wanted.size) node = current;
+      if (current && advertisement && (!direct || advertisement.transferEndpoint) && !current.revoked && this.deps.status(current) === 'ONLINE' && current.resources?.contribution !== 'PAUSED' && advertisement.maxChunkBytes >= wanted.size) node = current;
     }
     if (!node) {
-      node = this.choose(this.eligible(wanted.size));
+      node = this.choose(this.eligible(wanted.size, undefined, direct));
       if (!node) reject(503, 'NO_CAPACITY');
       for (const replica of replicas) if (replica.state === 'RESERVED') this.store.deleteReplica(app.id, wanted.chunkId, replica.nodeId);
     }
@@ -188,7 +192,7 @@ export class StorageControl {
     const chunk: ChunkRecord = existing ? { ...existing, updatedAt: now } : { applicationId: app.id, chunkId: wanted.chunkId, size: wanted.size, class: wanted.class, state: 'PENDING', createdAt: now, updatedAt: now, expiresAt: null };
     this.store.saveChunk(chunk);
     if (!this.store.getReplica(app.id, wanted.chunkId, node.nodeId)) this.store.saveReplica({ applicationId: app.id, chunkId: wanted.chunkId, nodeId: node.nodeId, state: 'RESERVED', size: wanted.size, reservedAt: now, storedAt: null, verifiedAt: null });
-    return this.issue(app, keyring, chunk, node, 'put', holderKey);
+    return this.issue(app, keyring, chunk, node, 'put', holderKey, direct);
   }
 
   // ---- Tickets for an existing chunk -----------------------------------------------------------------------------------------------------------------------------------------------
@@ -202,13 +206,13 @@ export class StorageControl {
       if (request.operation === 'put') {
         if (chunk.state === 'STORED') return { chunkId: chunk.chunkId, state: 'STORED', grant: null };
         if (chunk.state === 'DELETING') reject(409, 'CHUNK_DELETING');
-        return { chunkId: chunk.chunkId, state: 'PENDING', grant: this.reserveAndIssue(app, keyring, chunk, { chunkId: chunk.chunkId, size: chunk.size, class: chunk.class }, request.holderKey) };
+        return { chunkId: chunk.chunkId, state: 'PENDING', grant: this.reserveAndIssue(app, keyring, chunk, { chunkId: chunk.chunkId, size: chunk.size, class: chunk.class }, request.holderKey, request.directTransfer) };
       }
       const stored = this.store.listReplicas(app.id, chunk.chunkId).filter(replica => replica.state === 'STORED');
       if (request.operation === 'get') {
         if (chunk.state === 'DELETING') reject(409, 'CHUNK_DELETING');
         if (chunk.state !== 'STORED') reject(409, 'CHUNK_NOT_STORED');
-        return { chunkId: chunk.chunkId, state: 'STORED', grant: this.issue(app, keyring, chunk, this.reachable(stored), 'get', request.holderKey) };
+        return { chunkId: chunk.chunkId, state: 'STORED', grant: this.issue(app, keyring, chunk, this.reachable(stored), 'get', request.holderKey, request.directTransfer) };
       }
       // delete
       if (chunk.state === 'PENDING') {
@@ -221,7 +225,7 @@ export class StorageControl {
       const node = this.reachable(stored);
       this.supersede(app.id, chunk.chunkId, 'delete');
       const deleting: ChunkRecord = { ...chunk, state: 'DELETING', updatedAt: this.now }; this.store.saveChunk(deleting);
-      return { chunkId: chunk.chunkId, state: 'DELETING', grant: this.issue(app, keyring, deleting, node, 'delete', request.holderKey) };
+      return { chunkId: chunk.chunkId, state: 'DELETING', grant: this.issue(app, keyring, deleting, node, 'delete', request.holderKey, request.directTransfer) };
     });
   }
   /** The node holding a stored copy, if it can be reached now. A copy on a node that is merely offline is unavailable, not lost. */
@@ -253,17 +257,36 @@ export class StorageControl {
     else if (transfer.operation === 'delete' && chunk.state === 'DELETING') this.store.saveChunk({ ...chunk, state: 'STORED', updatedAt: this.now });
   }
 
-  // ---- Node evidence (internal in alpha.2: no route accepts these until bytes can move) -------------------------------------------------------------------------------------------
+  // ---- Node evidence (authenticated metadata routes in alpha.3) -------------------------------------------------------------------------------------------
   private nodeFor(nodeId: string): NodeRecord { const node = this.store.getNode(nodeId); if (!node || node.revoked) reject(401, 'UNAUTHORIZED_NODE'); return node; }
   /** The target node accepted the ticket. A transfer id begins at most once: a second begin is refused, which is the control plane's half of single-use. */
-  begin(nodeId: string, transferId: string): TransferRecord {
+  begin(nodeId: string, transferId: string, binding?: TransferBinding): TransferRecord {
     this.nodeFor(nodeId); this.settle(transferId);
     return this.store.transaction(() => {
       const found = this.live(transferId); if (!found) reject(404, 'NOT_FOUND');
       if (found.nodeId !== nodeId) reject(403, 'WRONG_NODE');
       if (found.state === 'IN_PROGRESS' || found.state === 'COMPLETED') reject(409, 'TICKET_USED');
       if (found.state !== 'AUTHORIZED') reject(409, 'TRANSFER_FINAL');
+      this.authorizeCurrent(found);
+      if (binding && Object.entries(binding).some(([key, value]) => found[key as keyof TransferRecord] !== value)) reject(403, 'TRANSFER_MISMATCH');
       return this.move(found, 'IN_PROGRESS', null, { startedAt: this.now });
+    });
+  }
+  private authorizeCurrent(transfer: TransferRecord): void {
+    const app = this.store.getApplication(transfer.applicationId);
+    if (!app || app.revoked || !(app.allowedServices ?? []).includes(SERVICE)) reject(403, 'TRANSFER_REVOKED');
+  }
+  /** Commit intent is metadata only. It preserves a bounded reconciliation window for durable node receipts. */
+  check(nodeId: string, transferId: string, prepare = false): TransferRecord {
+    this.nodeFor(nodeId);
+    return this.store.transaction(() => {
+      const found = this.store.getTransfer(transferId); if (!found) reject(404, 'NOT_FOUND');
+      if (found.nodeId !== nodeId) reject(403, 'WRONG_NODE');
+      if (found.state !== 'IN_PROGRESS') reject(409, 'TRANSFER_FINAL');
+      this.authorizeCurrent(found);
+      if (this.now >= found.expiresAt + TRANSFER_PROGRESS_GRACE_MS && found.reason !== 'COMMIT_PREPARED') reject(409, 'TRANSFER_FINAL');
+      if (prepare && found.reason !== 'COMMIT_PREPARED') { const next = { ...found, reason: 'COMMIT_PREPARED' }; this.store.saveTransfer(next); return next; }
+      return found;
     });
   }
   /** The node reports failure of a transfer it had accepted or was authorized for. */
@@ -280,14 +303,24 @@ export class StorageControl {
    * The authoritative completion of a put or a delete: only the target node, authenticated as itself, can send it, and only evidence that matches what was authorized promotes a chunk to
    * STORED (or removes it). Completing twice with the same evidence is a no-op; anything else about a finished transfer is refused.
    */
-  complete(nodeId: string, input: unknown): TransferRecord {
+  complete(nodeId: string, input: unknown, requireBegin = false): TransferRecord {
     const receipt = TransferReceiptSchema.parse(input); this.nodeFor(nodeId); this.settle(receipt.transferId);
     return this.store.transaction(() => {
       const found = this.live(receipt.transferId); if (!found) reject(404, 'NOT_FOUND');
       if (found.nodeId !== nodeId || receipt.nodeId !== nodeId) reject(403, 'WRONG_NODE');
       if (found.operation !== receipt.operation || found.applicationId !== receipt.applicationId || found.chunkId !== receipt.chunkId) reject(409, 'TRANSFER_MISMATCH');
-      if (found.state === 'COMPLETED') return found;
+      if (found.state === 'COMPLETED') {
+        if (found.evidence?.bytes !== receipt.bytes || found.evidence?.sha256 !== receipt.sha256 || found.evidence?.nodeCompletedAt !== receipt.completedAt) reject(409, 'TRANSFER_MISMATCH');
+        return found;
+      }
+      if (requireBegin && found.state !== 'IN_PROGRESS') reject(409, 'TRANSFER_FINAL');
       if (found.state !== 'AUTHORIZED' && found.state !== 'IN_PROGRESS') reject(409, 'TRANSFER_FINAL');
+      this.authorizeCurrent(found);
+      if (receipt.completedAt < (found.startedAt ?? found.issuedAt) - TICKET_MAX_SKEW_MS || receipt.completedAt > this.now + TICKET_MAX_SKEW_MS) reject(409, 'TRANSFER_MISMATCH');
+      if (found.operation === 'get') {
+        if (receipt.bytes !== found.maxBytes || receipt.sha256 !== found.chunkId.slice(4)) reject(409, 'TRANSFER_MISMATCH');
+        return this.move(found, 'COMPLETED', null, { completedAt: this.now, evidence: { bytes: receipt.bytes, sha256: receipt.sha256, nodeCompletedAt: receipt.completedAt } });
+      }
       const chunk = this.store.getChunk(found.applicationId, found.chunkId); if (!chunk) reject(409, 'TRANSFER_FINAL');
       if (receipt.sha256 !== found.chunkId.slice(4)) reject(409, 'HASH_MISMATCH');
       const evidence = { bytes: receipt.bytes, sha256: receipt.sha256, nodeCompletedAt: receipt.completedAt };
@@ -310,7 +343,10 @@ export class StorageControl {
   /** Moves transfers whose time ran out: an unused ticket expires, one the node began but never finished fails after the grace period. Returns how many changed. */
   expireOverdue(): number {
     let changed = 0;
-    for (const transfer of this.store.listOverdueTransfers(this.now, TRANSFER_PROGRESS_GRACE_MS)) { this.move(transfer, transfer.state === 'AUTHORIZED' ? 'EXPIRED' : 'FAILED', transfer.state === 'AUTHORIZED' ? null : 'TIMEOUT'); changed++; }
+    for (const transfer of this.store.listOverdueTransfers(this.now, TRANSFER_PROGRESS_GRACE_MS)) {
+      if (transfer.reason === 'COMMIT_PREPARED' && this.now < transfer.expiresAt + TRANSFER_RETENTION_MS) continue;
+      this.move(transfer, transfer.state === 'AUTHORIZED' ? 'EXPIRED' : 'FAILED', transfer.state === 'AUTHORIZED' ? null : 'TIMEOUT'); changed++;
+    }
     return changed;
   }
   /** Runs at most once per `STORAGE_SWEEP_MS`: expiry, withdrawal of abandoned placements, deletion of old finished transfers and of stale advertisements. */
@@ -336,6 +372,7 @@ export class StorageControl {
       chunks: totals, transfers: { open: counts.AUTHORIZED + counts.IN_PROGRESS, last24h: { completed: counts.COMPLETED, failed: counts.FAILED, expired: counts.EXPIRED, revoked: counts.REVOKED } } };
   }
   /** The public verification keys for a node. Only an authenticated node may ask (the route), only public halves are returned. */
+  transferClock(coordinatorId: string) { return { coordinatorId, now: this.now }; }
   transferKeys(coordinatorId: string) { const keyring = this.deps.keyring ?? reject(503, 'STORAGE_UNAVAILABLE'); return { coordinatorId, keys: keyring.verificationKeys() }; }
   /** A refused rotation (four live keys already) is a 409; a keyring that cannot be written is a 503. Neither leaks a library message. */
   async rotateKeys() {

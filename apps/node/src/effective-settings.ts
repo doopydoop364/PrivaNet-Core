@@ -7,6 +7,7 @@ import type { ResolvedPolicy } from './policy-store.js';
 import { readEnrollmentRecordSync } from './enrollment-record.js';
 import { existsSync } from 'node:fs';
 import { DEFAULT_PANEL_PORT } from './panel-token.js';
+import { transferConfig, TRANSFER_ENV } from './store/transfer-config.js';
 
 /**
  * One place that answers "what is this node actually using, and where did that come from?", for the panel, the CLI, the support bundle and `config check`.
@@ -32,6 +33,7 @@ export interface EffectiveSettings {
   panel: { enabled: boolean; port: number; source: 'environment' | 'default'; editableHere: false };
   /** The local chunk store's switches (the store itself is reported by `storage status`). Governed by the same policy source and lock as every other limit. */
   storage: { enabled: boolean; maxBytes: number; reserveFreeBytes: number; source: 'saved' | 'installer-file' | 'default'; locked: boolean; networkAccessible: false };
+  directTransfer: { enabled: boolean; bindAddress: string; port: number; endpoint: string; maxConcurrent: number; maxConcurrentPuts: number; certificateConfigured: boolean; keyConfigured: boolean; environmentLocks: string[] };
   name: { value: string | null; source: 'saved' | 'none' };
   pause: { active: boolean; kind: string | null; until: number | null };
   updates: { automatic: false };
@@ -60,6 +62,7 @@ export function computeEffectiveSettings(input: SettingsInputs): EffectiveSettin
   const url = env.PRIVANODE_COORDINATOR_URL ?? input.enrolled?.coordinatorUrl;
   const panelPort = Number(env.PRIVANODE_PANEL_PORT ?? DEFAULT_PANEL_PORT);
   const pause = activePause(local.pause, input.now, input.bootTime);
+  const direct = transferConfig(input.policy.policy, env);
   return {
     jobSlots: { value: input.runningJobSlots ?? choice.value, source: choice.source, saved: local.jobSlots ?? null, locked: slotsFromEnv, appliesAtStart: true,
       restartRequired: input.runningJobSlots !== undefined && !slotsFromEnv && local.jobSlots !== undefined && local.jobSlots !== input.runningJobSlots },
@@ -70,6 +73,8 @@ export function computeEffectiveSettings(input: SettingsInputs): EffectiveSettin
     panel: { enabled: env.PRIVANODE_PANEL !== 'off', port: Number.isInteger(panelPort) ? panelPort : DEFAULT_PANEL_PORT, source: env.PRIVANODE_PANEL !== undefined || env.PRIVANODE_PANEL_PORT !== undefined ? 'environment' : 'default', editableHere: false },
     storage: { enabled: input.policy.policy.storage.enabled, maxBytes: input.policy.policy.storage.maxBytes, reserveFreeBytes: input.policy.policy.storage.reserveFreeBytes,
       source: input.policy.source.kind === 'saved' ? 'saved' : input.policy.source.kind === 'env-file' ? 'installer-file' : 'default', locked: policyLocked, networkAccessible: false },
+    directTransfer: { enabled: direct.enabled, bindAddress: direct.bindAddress, port: direct.port, endpoint: direct.endpoint, maxConcurrent: direct.maxConcurrent, maxConcurrentPuts: direct.maxConcurrentPuts,
+      certificateConfigured: direct.certificateFile !== '', keyConfigured: direct.keyFile !== '', environmentLocks: Object.entries(TRANSFER_ENV).filter(([, name]) => env[name] !== undefined).map(([key]) => key) },
     name: { value: local.name ?? null, source: local.name === undefined ? 'none' : 'saved' },
     pause: { active: pause !== undefined, kind: pause?.kind ?? null, until: pause?.until ?? null },
     updates: { automatic: false },
@@ -84,7 +89,8 @@ export function renderSettings(s: EffectiveSettings): string {
     `Job slots      ${s.jobSlots.value}${by(s.jobSlots.source, s.jobSlots.locked)}${s.jobSlots.restartRequired ? `; saved ${s.jobSlots.saved}, applies at the next start` : ''}`,
     `Policy         ${s.policy.preset}${by(s.policy.source)}${s.policy.locked ? `; LOCKED by ${s.policy.lockedBy}: edits from the panel and the CLI are refused${s.policy.savedFileIgnored ? ', and the saved policy file is ignored' : ''}` : ''}`,
     `Capabilities   ${s.capabilities.advertised.join(', ') || 'none'}${by(s.capabilities.source)}${s.capabilities.disabledByOwner.length ? `; switched off by you: ${s.capabilities.disabledByOwner.join(', ')}` : ''}`,
-    `Storage        ${s.storage.enabled ? `ON: up to ${gib(s.storage.maxBytes)}, keeping ${gib(s.storage.reserveFreeBytes)} of disk free` : 'off'}${by(s.storage.source)}${s.policy.locked ? '; locked with the policy' : ''}; local only (no network access)`,
+    `Storage        ${s.storage.enabled ? `ON: up to ${gib(s.storage.maxBytes)}, keeping ${gib(s.storage.reserveFreeBytes)} of disk free` : 'off'}${by(s.storage.source)}${s.policy.locked ? '; locked with the policy' : ''}; opaque chunks`,
+    `Transfer       ${s.directTransfer.enabled ? `TLS listener configured on ${s.directTransfer.bindAddress}:${s.directTransfer.port}; endpoint ${s.directTransfer.endpoint}` : 'off (no network access)'}; concurrent ${s.directTransfer.maxConcurrent}, PUTs ${s.directTransfer.maxConcurrentPuts}${s.directTransfer.environmentLocks.length ? `; environment locks: ${s.directTransfer.environmentLocks.join(', ')}` : ''}`,
     `Coordinator    ${s.coordinator.host ?? 'unknown'}${by(s.coordinator.source)}; not editable here`,
     `Panel          ${s.panel.enabled ? `on, port ${s.panel.port}` : 'off'}${by(s.panel.source)}; set in the environment`,
     `Name           ${s.name.value ?? '(none)'}${s.name.source === 'saved' ? ' (saved by you; stays on this machine)' : ''}`,

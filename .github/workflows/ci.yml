@@ -52,6 +52,7 @@ jobs:
       # PRIVANET_REQUIRE_LAN: a skipped test counts as a pass, so without it a missing tool or privilege would leave this job green with no deployment-validation coverage.
       # Passed through `sudo env` because sudo drops the caller's environment.
       - run: sudo env "PATH=$PATH" PRIVANET_REQUIRE_LAN=1 npm run test:lan
+      - run: sudo env "PATH=$PATH" PRIVANET_REQUIRE_LAN=1 npm run test:transfer:lan
   proxy:
     # The public-hostname route rules (deploy/caddy/public-routes.caddy) in front of a real Coordinator, run by a real Caddy, and the exposure checker run against them from outside (docs/PUBLIC_NODE.md).
     runs-on: ubuntu-latest

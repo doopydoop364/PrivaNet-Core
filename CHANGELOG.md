@@ -7,6 +7,26 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 
 ## [Unreleased]
 
+## [0.4.0-alpha.3] - 2026-10-03
+
+Phase 4.0-alpha.3 now moves generic opaque chunk bytes directly application ↔ storage node. The Coordinator carries only authorization and metadata. Both capacity and the TLS listener remain opt-in/default-off; protocol stays 1. [Built reference](docs/DIRECT_TRANSFER.md), [design decisions](docs/PHASE4_DESIGN.md#17-40-alpha3-as-built-and-what-changed-from-this-design), [validation/measurements](docs/ALPHA3_IMPLEMENTATION_STATUS.md).
+
+### Added
+- Closed TLS PUT/GET/DELETE listener on the explicit bind address; bounded headers, connections, challenges, concurrency, requests, idle and operation times; streaming owner bandwidth/monthly limits.
+- Coordinator-validated endpoint/certificate pin/private-key possession proof, exact pinned SDK transport supporting private/self-signed certificates, and fresh per-transfer holder keys using unchanged alpha.2 ticket/proof messages.
+- Persisted checksummed replay protection, bounded key refresh/unknown-kid backoff/rotation overlap and authenticated Coordinator clock estimate.
+- Authenticated begin/check/prepare/fail/receipt routes, exact idempotent node completion, signed post-integrity GET acknowledgement, bounded durable write-ahead receipt retry and seven-day lost-receipt/restart reconciliation.
+- SDK `store`, `fetch`, `delete`, application-isolated physical chunks through the existing shared ChunkStore, owner panel/CLI/config/effective-setting/support controls and aggregate transfer status.
+- Additive migration 3 and explicit direct-transfer negotiation preserving old strict response shapes; alpha.3 compatibility tests, failure/recovery tests, staged three-host network-namespace payload-bypass test and TLS throughput benchmark.
+
+### Fixed
+- Alpha.1 simultaneous initial reservations now enforce concurrency/quota/disk room after asynchronous filesystem queries. Commit directory ancestry is flushed, and owner policy is rechecked during streaming and commit.
+- Corrupt network allowance state fails closed instead of silently reopening the allowance.
+- Real-system installer tests refuse a pre-existing deployment before registering destructive cleanup; failed LAN workloads terminate their sampler during teardown.
+
+### Scope
+- No replication/repair/possession challenges (Phase 5), PrivaDrive files/folders/sharing/encryption semantics, arbitrary filesystem API, markets/payments, NAT traversal or byte relay. Unrelated crawler status/summary changes remain in their existing release history.
+
 ## [0.4.0-alpha.2] - 2026-10-02
 
 Phase 4.0-alpha.2: the storage **control plane** and transfer authorization. **No chunk byte moves and none can:** there is no transfer listener, no `PUT`/`GET /v1/chunks/...`, no endpoint in any message, no replication and nothing carried by the Coordinator. The protocol version stays 1 (every new field is optional and additive; the schemas older nodes and tools parse are unchanged, asserted against 0.4.0-alpha.1's real wire schemas). Design, exact signed bytes and the changes from the original design: [docs/PHASE4_DESIGN.md](docs/PHASE4_DESIGN.md#16-40-alpha2-as-built-and-what-changed-from-this-design).

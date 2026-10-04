@@ -1,3 +1,4 @@
+import { transferConfig } from './store/transfer-config.js';
 import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { PrivaNode } from './daemon.js';
@@ -64,6 +65,7 @@ async function main() {
   // The owner's saved policy (from the panel or `policy import`) wins over the installer's file while it is good; a damaged or newer one is not applied and not overwritten.
   const resolved = await resolvePolicy(config.stateDir, process.env.PRIVANODE_POLICY_FILE, { locked: process.env.PRIVANODE_POLICY_LOCKED === 'true' }).catch(() => ({ policy: installedPolicy, source: { kind: 'defaults' } as const }));
   const policy = resolved.policy;
+  try { transferConfig(policy, process.env); } catch { log({ event: 'node.config_invalid', code: 'TRANSFER_CONFIG_INVALID' }); process.exitCode = EXIT_CONFIG; return; }
   if ('problem' in resolved && resolved.problem) log({ event: 'node.policy_invalid', code: resolved.problem.code });
   const transfer = new TransferMeter({ stateDir: config.stateDir, ratePerSec: policy.maxBandwidthBytesPerSec, monthlyBytes: policy.monthlyTransferBytes });
   const checkpoints = new CheckpointStore(join(config.stateDir, 'checkpoints'));
@@ -78,15 +80,17 @@ async function main() {
   const offer: { current: () => ServicesAdvertisement | undefined } = { current: () => undefined };
   const node = new PrivaNode({ ...config, jobSlots: slots.value, handlers, engine, transfer, checkpoints, log, services: () => offer.current() });
   const history = new ResourceHistory(config.stateDir);
-  // The local chunk store (off unless the owner enables it): a library inside this process, with no network or Coordinator interface in this version.
-  const storage = new StorageService({ stateDir: config.stateDir, policy: () => control.view.policy ?? resolved.policy, inputs: { draining: () => node.snapshot.draining, engine }, log });
+  // Capacity and the direct TLS listener are separate explicit opt-ins, sharing one ChunkStore.
+  const storage = new StorageService({ stateDir: config.stateDir, policy: () => control.view.policy ?? resolved.policy, inputs: { draining: () => node.snapshot.draining, engine }, log, direct: { node, meter: transfer, env: process.env } });
   offer.current = () => { const advertisement = storage.advertisement(); return advertisement ? { 'storage.chunk.v1': advertisement } : undefined; };
-  const control = new LocalControl({ stateDir: config.stateDir, envPolicyFile: process.env.PRIVANODE_POLICY_FILE, node, engine, transfer, history, log, jobSlots: { running: slots.value, fromEnvironment: slots.source === 'environment' }, policyLocked: process.env.PRIVANODE_POLICY_LOCKED === 'true', onPolicy: policy => { void storage.apply(policy); }, onChange: () => { void publish(); } });
+  const control = new LocalControl({ stateDir: config.stateDir, envPolicyFile: process.env.PRIVANODE_POLICY_FILE, node, engine, transfer, history, log, jobSlots: { running: slots.value, fromEnvironment: slots.source === 'environment' }, transferEnv: process.env, policyLocked: process.env.PRIVANODE_POLICY_LOCKED === 'true', onPolicy: policy => { void storage.apply(policy).catch(() => log({ event: "storage.unavailable", code: "TRANSFER_CONFIG_INVALID" })); }, onChange: () => { void publish(); } });
   // The snapshot `privanet-node status` reads: private, replaced atomically, no secrets (see status-document.ts).
   const publish = async () => {
     try { await replacePrivateFile(join(await privateDirectory(config.stateDir), STATUS_FILE), JSON.stringify({ version: 1, publishedAt: Date.now(), status: buildStatus({ node, engine, control, transfer, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities, storage: storage.status }) })); } catch { /* status is a convenience */ }
   };
-  await control.init(resolved); control.start(); await storage.start();
+  await control.init(resolved);
+  try { await storage.start(); } catch (error) { control.stop(); await storage.stop(); throw error; }
+  control.start();
   const publisher = setInterval(() => { void publish(); }, STATUS_PUBLISH_MS); publisher.unref(); void publish();
   let restartRequested = false;
   const abort = new AbortController();
@@ -94,7 +98,7 @@ async function main() {
   let forced: NodeJS.Timeout | undefined;
   const stop = () => {
     if (abort.signal.aborted) { node.abortNow(); return; }
-    log({ event: 'node.draining' }); abort.abort(); forced = setTimeout(() => node.abortNow(), drainTimeoutMs); forced.unref();
+    log({ event: 'node.draining' }); node.drain(); abort.abort(); forced = setTimeout(() => node.abortNow(), drainTimeoutMs); forced.unref();
   };
   /** The only privileged actions the local panel may trigger (named operations, never commands). */
   const actions = { drainAndStop: () => stop(), restart: () => { restartRequested = true; stop(); } };
@@ -119,7 +123,7 @@ async function main() {
   watcher.unref();
   // However the run ends (a drain, or a refusal such as a changed Coordinator binding), everything this process started must be stopped, or the panel's listener and the timers would keep it alive.
   try { await node.run(abort.signal); } finally {
-    clearTimeout(forced); clearInterval(watcher); clearInterval(publisher); control.stop(); await storage.stop(); await panel?.close().catch(() => undefined);
+    clearTimeout(forced); clearInterval(watcher); clearInterval(publisher); control.stop(); try { await storage.stop(); } finally { await panel?.close().catch(() => undefined); }
     try { unlinkSync(join(config.stateDir, STATUS_FILE)); } catch { /* none */ }
   }
   if (restartRequested) process.exitCode = EXIT_RESTART;

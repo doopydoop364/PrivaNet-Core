@@ -68,9 +68,10 @@ export function sanitizedConfig(env: NodeJS.ProcessEnv): Record<string, string> 
   return out;
 }
 export function sanitizedPolicy(resolved: ResolvedPolicy) {
-  const { fetch, ...rest } = resolved.policy;
+  const { fetch, storage, ...rest } = resolved.policy;
+  const { certificateFile, keyFile, ...direct } = storage.transfer;
   return { source: resolved.source.kind === 'defaults' ? 'defaults' : `${resolved.source.kind}`, preset: detectPreset(resolved.policy), problem: resolved.problem ? { code: resolved.problem.code } : null,
-    policy: { ...rest, fetch: { denyHostsCount: fetch.denyHosts.length, allowHostsCount: fetch.allowHosts?.length ?? null, minHostDelayMs: fetch.minHostDelayMs, maxRequestsPerMinute: fetch.maxRequestsPerMinute, hardTimeoutMs: fetch.hardTimeoutMs, unsafeLocal: fetch.unsafeLocal ? 'PRESENT (SSRF protection relaxed by the owner)' : 'absent' } } };
+    policy: { ...rest, storage: { ...storage, transfer: { ...direct, certificateConfigured: !!certificateFile, keyConfigured: !!keyFile } }, fetch: { denyHostsCount: fetch.denyHosts.length, allowHostsCount: fetch.allowHosts?.length ?? null, minHostDelayMs: fetch.minHostDelayMs, maxRequestsPerMinute: fetch.maxRequestsPerMinute, hardTimeoutMs: fetch.hardTimeoutMs, unsafeLocal: fetch.unsafeLocal ? 'PRESENT (SSRF protection relaxed by the owner)' : 'absent' } } };
 }
 
 export interface BundleInput {

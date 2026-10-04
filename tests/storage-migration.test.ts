@@ -40,7 +40,7 @@ test('a version 1 database upgrades in place to version 2: nothing existing chan
   const store = new SqliteStore(path); // the full migration list
   assert.equal(store.coordinatorId, old.coordinatorId);
   const db = new DatabaseSync(path, { readOnly: true });
-  assert.deepEqual(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all().map(row => Number(row.version)), [1, 2]);
+  assert.deepEqual(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all().map(row => Number(row.version)), [1, 2, 3]);
   for (const name of ['chunk', 'replica', 'transfer', 'node_service']) { assert(tables(db).includes(name), name); assert.equal(Number(db.prepare(`SELECT COUNT(*) AS n FROM ${name}`).get()?.n), 0); }
   for (const [name, rows] of Object.entries(snapshot)) assert.deepEqual(db.prepare(`SELECT * FROM ${name} ORDER BY 1`).all(), rows, `${name} changed`);
   assert.deepEqual(db.prepare("SELECT value FROM metadata WHERE key='coordinator_id'").get(), ids); db.close();
@@ -65,15 +65,15 @@ test('migrations are applied once, in order, inside a transaction: a failing ver
   assert.throws(() => new SqliteStore(path, broken));
   const db = new DatabaseSync(path, { readOnly: true }); assert.deepEqual(db.prepare('SELECT version FROM schema_migrations').all().map(row => Number(row.version)), [1]); for (const name of ['chunk', 'transfer', 'replica', 'node_service']) assert.equal(tables(db).includes(name), false, name); db.close();
   const reopened = new SqliteStore(path, V1); const core = new Coordinator(reopened, { staleMs: 15000, offlineMs: 60000 }, () => old.now); assert.equal(core.listNodes().length, 1); reopened.close();
-  const again = new SqliteStore(path); again.close(); const check = new DatabaseSync(path, { readOnly: true }); try { assert.equal(check.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get()?.n, 2); } finally { check.close(); } // and the real migration applies afterwards (every handle is closed: Windows cannot delete an open database)
+  const again = new SqliteStore(path); again.close(); const check = new DatabaseSync(path, { readOnly: true }); try { assert.equal(check.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get()?.n, 3); } finally { check.close(); } // and the real migration applies afterwards (every handle is closed: Windows cannot delete an open database)
 });
 test('downgrade is refused honestly: an older Coordinator will not open a version 2 database, and an edited applied migration is detected', async t => {
   const path = join(await tmp(t), 'coordinator.sqlite'); new SqliteStore(path).close();
   assert.throws(() => new SqliteStore(path, V1), /schema is newer than service/);
-  const edited = [{ version: 1, sql: migrations[0].sql }, { version: 2, sql: `${migrations[1].sql}\n-- edited` }]; assert.throws(() => new SqliteStore(path, edited), /Applied migration changed/);
-  const editedFirst = [{ version: 1, sql: `${migrations[0].sql}\n-- edited` }, { version: 2, sql: migrations[1].sql }]; assert.throws(() => new SqliteStore(path, editedFirst), /Applied migration changed/);
+  const edited = [{ version: 1, sql: migrations[0].sql }, { version: 2, sql: `${migrations[1].sql}\n-- edited` }, ...migrations.slice(2)]; assert.throws(() => new SqliteStore(path, edited), /Applied migration changed/);
+  const editedFirst = [{ version: 1, sql: `${migrations[0].sql}\n-- edited` }, { version: 2, sql: migrations[1].sql }, ...migrations.slice(2)]; assert.throws(() => new SqliteStore(path, editedFirst), /Applied migration changed/);
   assert.throws(() => new SqliteStore(path, [migrations[0], { version: 3, sql: 'SELECT 1' }]));
-  assert.equal(hash(migrations[0]?.sql ?? '').length, 64); assert.equal(migrations.length, 2);
+  assert.equal(hash(migrations[0]?.sql ?? '').length, 64); assert.equal(migrations.length, 3);
   new SqliteStore(path).close(); // the right list still opens it
 });
 test('version 1 migration text is byte-identical to the previous release (its checksum is what an upgraded database holds)', t => {

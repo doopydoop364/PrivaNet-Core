@@ -3,10 +3,10 @@ import { constants } from 'node:fs';
 import { lstat, open, readdir, rename, statfs, unlink } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import type { Stats } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import type { Readable } from 'node:stream';
 import { isMissing, privateDirectory } from '@privanet/shared';
-import { chunkDigest, chunkPath, isDigestName, isShardName } from './chunk-id.js';
+import { applicationChunksDir, chunkDigest, chunkPath, isDigestName, isShardName } from './chunk-id.js';
 import { StoreError } from './errors.js';
 import { DEFAULT_STALE_INCOMING_MS, MAX_CHUNK_BYTES, MAX_IN_FLIGHT_PUTS } from './limits.js';
 
@@ -86,8 +86,13 @@ export async function scanStore(root: string, options: { maxChunkBytes?: number;
   result.present = true;
   const top = await dir(chunks);
   if (top === 'bad') { result.unsafe = true; } else if (top === 'dir') {
-    for (const a of await names(chunks)) {
-      const pa = join(chunks, a);
+    const roots = [chunks];
+    for (const name of await names(chunks)) if (/^app_[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(name)) {
+      const path = join(chunks, name); if (await dir(path) === 'dir') roots.push(path); else result.unsafe = true;
+    }
+    for (const namespace of roots) for (const a of await names(namespace)) {
+      if (namespace === chunks && a.startsWith('app_') && roots.includes(join(chunks, a))) continue;
+      const pa = join(namespace, a);
       if (!isShardName(a)) { result.anomalies++; if ((await lstat(pa).catch(() => undefined))?.isSymbolicLink()) result.unsafe = true; continue; }
       const da = await dir(pa); if (da === 'bad') { if (!result.unsafe) result.anomalies++; continue; } if (da === 'absent') continue;
       for (const b of await names(pa)) {
@@ -196,7 +201,7 @@ export class ChunkStore {
    * SHA-256, fsyncs, and commits by one atomic rename. Returns `stored: false` when an identical, valid chunk was already there (the retry case): nothing is rewritten or recounted.
    * On any failure the partial file is removed and nothing is committed.
    */
-  async put(id: string, source: AsyncIterable<Uint8Array>, declaredSize: number, options: { signal?: AbortSignal } = {}): Promise<{ stored: boolean; bytes: number }> {
+  async put(id: string, source: AsyncIterable<Uint8Array>, declaredSize: number, options: { signal?: AbortSignal; applicationId?: string; beforeCommit?: () => Promise<void>; commitGate?: () => void; onCommitted?: () => void } = {}): Promise<{ stored: boolean; bytes: number }> {
     const hex = chunkDigest(id);
     if (!Number.isSafeInteger(declaredSize) || declaredSize < 1) throw new StoreError('INVALID_SIZE');
     if (declaredSize > this.max) throw new StoreError('TOO_LARGE');
@@ -204,10 +209,15 @@ export class ChunkStore {
     const verdict = this.gate?.(); if (verdict && !verdict.allowed) throw new StoreError('UNAVAILABLE', verdict.reason);
     if (this.inFlight >= this.maxPuts) throw new StoreError('BUSY');
     // Quota and disk, before any byte is read. A chunk that is already stored needs no quota (it adds nothing), but it still needs the disk room for the partial.
-    const final = chunkPath(this.chunksDir, id);
+    const namespace = applicationChunksDir(this.chunksDir, options.applicationId);
+    const final = chunkPath(this.chunksDir, id, options.applicationId);
     const existing = await lstat(final).then(stat => stat, () => undefined);
     const already = existing !== undefined && sound(existing, this.max);
-    const { quotaRoom, diskRoom } = this.parts(await this.free());
+    const free = await this.free();
+    // Reserve synchronously after the final asynchronous query: parallel calls must see one another's quota, disk reservation and concurrency usage.
+    if (this.closedFlag) throw new StoreError('UNAVAILABLE', 'CLOSED');
+    if (this.inFlight >= this.maxPuts) throw new StoreError('BUSY');
+    const { quotaRoom, diskRoom } = this.parts(free);
     if ((!already && declaredSize > quotaRoom) || declaredSize > diskRoom) throw new StoreError('STORAGE_FULL');
     this.reserved += declaredSize; this.inFlight++;
     const partialName = `${randomBytes(16).toString('hex')}.part`; const partial = join(this.incomingDir, partialName); this.active.add(partialName);
@@ -218,6 +228,7 @@ export class ChunkStore {
       await this.step('partial-created');
       const hash = createHash('sha256'); let writes = 0;
       for await (const piece of source) {
+        const currentGate = this.gate?.(); if (currentGate && !currentGate.allowed) throw new StoreError('UNAVAILABLE', currentGate.reason);
         if (options.signal?.aborted) throw new StoreError('ABORTED');
         const buf = piece instanceof Buffer ? piece : Buffer.from(piece.buffer, piece.byteOffset, piece.byteLength);
         if (written + buf.length > declaredSize) throw new StoreError('SIZE_MISMATCH');
@@ -236,22 +247,34 @@ export class ChunkStore {
       await handle.sync(); await handle.close(); handle = undefined;
       await this.step('synced');
       const outcome = await this.critical(async () => {
+        await options.beforeCommit?.();
+        const currentGate = this.gate?.(); if (currentGate && !currentGate.allowed) throw new StoreError('UNAVAILABLE', currentGate.reason);
+        if (options.signal?.aborted || this.closedFlag) throw new StoreError('ABORTED');
         // Commit: re-check the disk (the partial now really occupies it) and the quota, then one atomic rename.
         const nowFree = await this.free();
         const current = await lstat(final).then(stat => stat, () => undefined);
         if (current !== undefined && (current.isSymbolicLink() || !current.isFile())) throw new StoreError('STORE_UNSAFE');
         const counted = current !== undefined && sound(current, this.max);
         if (nowFree === null || nowFree < this.limits.reserveFreeBytes) throw new StoreError('STORAGE_FULL');
-        if (counted && current !== undefined && current.size === declaredSize && await this.matches(final, hex, declaredSize)) return { stored: false };
+        if (counted && current !== undefined && current.size === declaredSize && await this.matches(final, hex, declaredSize)) {
+          options.commitGate?.(); const duplicateGate = this.gate?.();
+          if (duplicateGate && !duplicateGate.allowed) throw new StoreError('UNAVAILABLE', duplicateGate.reason);
+          if (options.signal?.aborted || this.closedFlag) throw new StoreError('ABORTED');
+          return { stored: false };
+        }
         const replaced = counted && current !== undefined ? current.size : 0;
         if (this.committedBytes - replaced + this.orphanBytes + this.reserved > this.limits.maxBytes) throw new StoreError('STORAGE_FULL');
-        await ensureDirectory(join(this.chunksDir, hex.slice(0, 2))); await ensureDirectory(join(this.chunksDir, hex.slice(0, 2), hex.slice(2, 4)));
+        await ensureDirectory(namespace); await ensureDirectory(join(namespace, hex.slice(0, 2))); await ensureDirectory(join(namespace, hex.slice(0, 2), hex.slice(2, 4)));
+        await this.syncDirectory(this.chunksDir); await this.syncDirectory(namespace); await this.syncDirectory(join(namespace, hex.slice(0, 2)));
         await this.step('shard-ready');
-        await rename(partial, final); committed = true;
+        options.commitGate?.(); const finalGate = this.gate?.();
+        if (finalGate && !finalGate.allowed) throw new StoreError('UNAVAILABLE', finalGate.reason);
+        if (options.signal?.aborted || this.closedFlag) throw new StoreError('ABORTED');
+        await rename(partial, final); committed = true; options.onCommitted?.();
         // From here the chunk is committed and correct. The counters are updated before anything else can fail, so a failure injected after the rename cannot leave them wrong.
         if (counted && current !== undefined) { this.committedBytes -= current.size; this.chunkCount--; }
         this.committedBytes += declaredSize; this.chunkCount++;
-        await this.syncDirectory(join(this.chunksDir, hex.slice(0, 2), hex.slice(2, 4)));
+        await this.syncDirectory(join(namespace, hex.slice(0, 2), hex.slice(2, 4)));
         return { stored: true };
       });
       if (outcome.stored) { await this.step('renamed'); await this.step('accounted'); }
@@ -277,9 +300,16 @@ export class ChunkStore {
       return hash.digest('hex') === hex;
     } catch { return false; } finally { await handle?.close().catch(() => undefined); }
   }
+  /** Flush commit-directory ancestry before recovering a write-ahead transfer intent. */
+  async confirmDurability(id: string, applicationId?: string): Promise<void> {
+    const hex = chunkDigest(id); const namespace = applicationChunksDir(this.chunksDir, applicationId);
+    for (const path of [this.chunksDir, namespace, join(namespace, hex.slice(0, 2)), join(namespace, hex.slice(0, 2), hex.slice(2, 4))]) {
+      try { await this.syncDirectory(path); } catch (error) { if (!isMissing(error)) throw error; }
+    }
+  }
   private async syncDirectory(path: string): Promise<void> {
     if (!posix) return;
-    try { const dir = await open(path, constants.O_RDONLY); try { await dir.sync(); } finally { await dir.close(); } } catch { /* a directory fsync is best effort */ }
+    try { const dir = await open(path, constants.O_RDONLY); try { await dir.sync(); } finally { await dir.close(); } } catch (error) { if (isMissing(error)) throw error; throw mapError(error); }
   }
 
   // ---- get, has, delete ----
@@ -292,8 +322,8 @@ export class ChunkStore {
    * Opens a committed chunk for reading. The whole file is verified against its identifier **before** any byte is returned: a chunk that does not hash to its name is never served.
    * A file that fails is removed (it is not what its name says; the correct bytes can simply be stored again) and reported once as INTEGRITY, after which it is NOT_FOUND.
    */
-  async get(id: string): Promise<{ size: number; stream: Readable }> {
-    const hex = chunkDigest(id); const path = chunkPath(this.chunksDir, id);
+  async get(id: string, applicationId?: string): Promise<{ size: number; stream: Readable }> {
+    const hex = chunkDigest(id); const path = chunkPath(this.chunksDir, id, applicationId);
     let stat: Stats; try { stat = await lstat(path); } catch (error) { if (isMissing(error)) throw new StoreError('NOT_FOUND'); throw new StoreError('IO'); }
     if (stat.isSymbolicLink() || !stat.isFile()) throw new StoreError('STORE_UNSAFE');
     if (posix && ((stat.mode & 0o077) !== 0 || stat.uid !== uid())) throw new StoreError('STORE_UNSAFE');
@@ -319,14 +349,18 @@ export class ChunkStore {
     return Buffer.concat(parts);
   }
   /** Removes a committed chunk. Idempotent: an absent chunk is success. Never touches a link or anything that is not a regular file. */
-  async delete(id: string): Promise<{ deleted: boolean }> {
-    chunkDigest(id); const path = chunkPath(this.chunksDir, id);
+  async delete(id: string, applicationId?: string, options: { beforeCommit?: () => Promise<void>; commitGate?: () => void; onCommitted?: () => void } = {}): Promise<{ deleted: boolean }> {
+    chunkDigest(id); const path = chunkPath(this.chunksDir, id, applicationId);
     return this.critical(async () => {
-      let stat: Stats; try { stat = await lstat(path); } catch (error) { if (isMissing(error)) return { deleted: false }; throw new StoreError('IO'); }
+      await options.beforeCommit?.();
+      let stat: Stats; try { stat = await lstat(path); } catch (error) { if (isMissing(error)) { options.commitGate?.(); return { deleted: false }; } throw new StoreError('IO'); }
       if (stat.isSymbolicLink() || !stat.isFile()) throw new StoreError('STORE_UNSAFE');
       const counted = sound(stat, this.max);
-      try { await unlink(path); } catch (error) { if (isMissing(error)) return { deleted: false }; throw mapError(error); }
+      options.commitGate?.();
+      try { await unlink(path); } catch (error) { if (isMissing(error)) { options.commitGate?.(); return { deleted: false }; } throw mapError(error); }
+      options.onCommitted?.();
       if (counted) { this.committedBytes = Math.max(0, this.committedBytes - stat.size); this.chunkCount = Math.max(0, this.chunkCount - 1); }
+      await this.syncDirectory(dirname(path));
       return { deleted: true };
     });
   }

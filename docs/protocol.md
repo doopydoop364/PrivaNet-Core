@@ -1,6 +1,6 @@
 # Protocol v1
 
-All routes use `/v1/`; clients send `X-PrivaNet-Protocol: 1`, and responses return
+Coordinator routes use `/v1/`; clients send `X-PrivaNet-Protocol: 1`, and responses return
 that header. Strict schemas reject extra fields, malformed identifiers,
 unsupported capabilities/types and payloads. Version mismatch is HTTP 426 with
 `PROTOCOL_MISMATCH`; no silent fallback. Health exchanges protocol/service version
@@ -158,9 +158,17 @@ Metadata only: no message here carries chunk bytes, a path, an address or an end
   - `POST /v1/storage/tickets` `{ operation: "put" | "get" | "delete", chunkId, holderKey }`: a ticket for an existing chunk; `get` needs a stored, reachable copy, `delete` marks the chunk DELETING.
   - `GET /v1/storage/chunks/{chunkId}`: `{ chunkId, size, class, state, createdAt, available }` for the caller's own chunk. A missing chunk and another application's chunk are the same 404.
   - `POST /v1/storage/transfers/{transferId}/abort`: withdraw an authorization the node has not begun.
-- **Nodes**: `GET /v1/node/transfer-keys` (node session) returns `{ coordinatorId, keys: [{ kid, publicKey, notAfter }] }`, public halves only; a node keeps them only if `coordinatorId` is the one it is bound to. An older Coordinator answers 404. There is **no** node route for receipts or transfer begin yet (alpha.3).
+- **Nodes**: `GET /v1/node/transfer-keys` (node session) returns `{ coordinatorId, keys: [{ kid, publicKey, notAfter }] }`, public halves only; a node keeps them only if `coordinatorId` is the one it is bound to. An older Coordinator answers 404. Alpha.3 adds authenticated node begin/check/prepare/fail and receipt routes, described below.
   Unreleased groundwork: nodes now check for key refresh on offering heartbeats at a bounded 30-second interval and retain cached trusted keys across temporary fetch failures. Unknown-key refresh is available to the future listener through a globally throttled, single-flight hook (five-second minimum, up to two-minute outage backoff). Identity mismatch clears trust. No session or key-list schema changed; no new route moves bytes.
 - **Administrator**: `GET /v1/admin/storage` (aggregates), `POST /v1/admin/storage/keys/rotate`.
 - **Ticket**: 234 bytes, base64url, signed over a domain-separated fixed layout; at most 120 s; bound to operation, application, chunk, target node, size and a per-transfer holder key. Exact bytes: [PHASE4_DESIGN section 16](PHASE4_DESIGN.md#16-40-alpha2-as-built-and-what-changed-from-this-design).
 - **Errors** (fixed codes): 403 `SERVICE_FORBIDDEN`; 400 `INVALID_REQUEST`, `INVALID_HOLDER_KEY`; 404 `NOT_FOUND`; 409 `SIZE_CONFLICT`, `CHUNK_DELETING`, `CHUNK_NOT_STORED`, `CHUNK_UNAVAILABLE`, `TRANSFER_IN_PROGRESS`; 429 `APPLICATION_CHUNK_LIMIT`, `APPLICATION_BYTE_LIMIT`, `TRANSFER_LIMIT`, `TICKET_RATE_LIMIT`; 503 `NO_CAPACITY`, `NODE_UNAVAILABLE`, `STORAGE_UNAVAILABLE` (no usable signing key).
 - **Database**: migration 2 adds `chunk`, `replica`, `transfer` and `node_service`. An older Coordinator refuses the upgraded database; restore a pre-upgrade backup to go back.
+
+## Additions in 0.4.0-alpha.3 (protocol remains 1)
+
+The finalized [direct-transfer exchange](DIRECT_TRANSFER.md#final-wire-exchange) reuses alpha.2 binary tickets and holder messages unchanged. Optional `directTransfer: true` in placement/ticket requests negotiates endpoint-bearing grants; older requests retain the strict alpha.2 shape. Heartbeat offers optionally include `transferEndpoint` (canonical HTTPS origin, DER certificate, leaf SHA-256 fingerprint, TLS-private-key proof bound to node ID/origin/pin). Coordinator validation never fetches a node URL.
+
+The node exposes only TLS PUT/GET/DELETE `/v1/chunks/{chunkId}`. Same-method zero-body holder challenge, proof headers and exact Content-Length precede bytes. GET completion additionally requires a signed response-challenge acknowledgement after SDK SHA-256 verification. Unknown paths/methods, ranges, encodings, duplicate security headers and Transfer-Encoding fail closed. Tickets are headers, never URLs.
+
+Authenticated node routes now exist: `/v1/node/storage/transfers/{id}/begin|check|prepare|fail`, `/v1/node/storage/receipts` and `/v1/node/transfer-clock`. Begin carries bounded verified ticket facts checked against persisted authorization, check/prepare `{}`, fail a fixed reason. GET joins PUT/DELETE in the receipt schema. A node receipt is authoritative, exact duplicate delivery is idempotent and terminal/reordered evidence cannot revive transfers. Durable PREPARED intents and seven-day bounded commit reconciliation close lost-receipt/restart gaps. Migration 3 adds nullable endpoint JSON; session/key/admin response shapes remain unchanged. See the direct-transfer reference for exact bounds, key refresh, clock/skew and compatibility behavior.

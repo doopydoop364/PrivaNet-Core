@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { AckSchema, JOB_TYPES, RenewResponseSchema, CapabilitiesSchema, ChallengeSchema, HealthSchema, LeaseResponseSchema, NodeSelfSchema, PROTOCOL_VERSION, SERVICE_VERSION, SessionSchema, MAX_JOB_SLOTS, TransferKeysSchema } from '@privanet/protocol';
-import type { JobType, ServicesAdvertisement, Session, TransferKeys } from '@privanet/protocol';
+import { AckSchema, JOB_TYPES, RenewResponseSchema, CapabilitiesSchema, ChallengeSchema, HealthSchema, LeaseResponseSchema, NodeSelfSchema, PROTOCOL_VERSION, SERVICE_VERSION, SessionSchema, MAX_JOB_SLOTS, TransferKeysSchema, TransferClockSchema } from '@privanet/protocol';
+import type { JobType, ServicesAdvertisement, Session, TransferKeys, TransferBinding, TransferReceipt } from '@privanet/protocol';
 import { ApiError, Transport } from '@privanet/shared';
 import type { TransportOptions } from '@privanet/shared';
 import { BindingChangedError, bindCoordinator, loadIdentity, signProof } from './identity.js';
@@ -73,12 +73,20 @@ export class PrivaNode {
   /** Set when the Coordinator rejects the `services` member (an older Coordinator): the node then offers nothing and says so once, and tries again after an hour (the Coordinator may have been upgraded) without needing a restart. */
   private servicesBlockedUntil = 0;
   /** Authenticated, identity-bound verification keys, refreshed while storage is offered. */
+  private transferClockOffset = 0;
+  get transferNow(): number { return Date.now() + this.transferClockOffset; }
   private ticketKeyCache: TransferKeyCache | undefined;
   private readonly wakeIdle = new AbortController();
   private readonly log: NonNullable<NodeOptions['log']>;
   private identity: Identity | undefined;
   private session: Session | undefined;
   private lastHeartbeat = 0;
+  private registeredTransfer: { url: string; certFingerprint: string } | undefined;
+  /** A recent accepted heartbeat registered this exact listener identity. */
+  transferEndpointRegistered(endpoint: { url: string; certFingerprint: string }): boolean {
+    return !this.draining && Date.now() - this.lastHeartbeat <= Math.max(15000, this.heartbeatMs * 3)
+      && this.registeredTransfer?.url === endpoint.url && this.registeredTransfer.certFingerprint === endpoint.certFingerprint;
+  }
   private enrollmentToken: string | undefined;
   private busy = false;
   private currentJobs = 0;
@@ -141,8 +149,11 @@ export class PrivaNode {
     this.ticketKeyCache ??= new TransferKeyCache(health.coordinatorId, async () => {
       const current = this.session;
       if (!current || current.expiresAt <= Date.now()) throw new Error('No node session');
-      return this.transport.request('GET', '/v1/node/transfer-keys', TransferKeysSchema, undefined, current.token);
-    });
+      const keys = await this.transport.request('GET', '/v1/node/transfer-keys', TransferKeysSchema, undefined, current.token);
+      const before = Date.now();
+      try { const clock = await this.transport.request('GET', '/v1/node/transfer-clock', TransferClockSchema, undefined, current.token); const after = Date.now(); if (clock.coordinatorId === health.coordinatorId && after - before <= 5000) this.transferClockOffset = Math.round(clock.now - (before + after) / 2); } catch { /* alpha.2 has no clock route; retain the prior bounded estimate */ }
+      return keys;
+    }, undefined, () => this.log({ event: 'node.transfer_keys_rejected', code: 'COORDINATOR_MISMATCH' }));
     this.log({ event: purpose === 'enroll' ? 'node.enrolled' : 'node.authenticated' });
   }
   /** Best effort: the owner-side label of this node (an existing authenticated read of its own record). A failure just leaves it unknown. */
@@ -155,7 +166,19 @@ export class PrivaNode {
    * Best effort, and only for a node that offers a service: the public keys that verify tickets, from an authenticated route of its own Coordinator. A different Coordinator's keys are never
    * kept (the answer must name the Coordinator this node is bound to), an older Coordinator's 404 just means "no storage control plane here", and nothing here can fail the node.
    */
+  async refreshTransferKeys(): Promise<void> { await this.ticketKeyCache?.refresh(); }
   async refreshTransferKeysForTicket(wire: string, coordinatorNow: number): Promise<void> { await this.ticketKeyCache?.refreshForTicket(wire, coordinatorNow); }
+  /** Metadata-only calls over the existing node session; reconnects retain the persisted Coordinator binding. */
+  async storageAction(id: string, action: 'begin' | 'check' | 'prepare' | 'fail', reason?: string, binding?: TransferBinding): Promise<void> {
+    await this.ensureSession();
+    try { await this.transport.request('POST', `/v1/node/storage/transfers/${id}/${action}`, AckSchema, action === 'fail' ? { reason } : action === 'begin' ? binding : {}, this.session?.token); }
+    catch (error) { if (error instanceof ApiError && error.status === 401) this.session = undefined; throw error; }
+  }
+  async storageReceipt(receipt: TransferReceipt): Promise<void> {
+    await this.ensureSession();
+    try { await this.transport.request('POST', '/v1/node/storage/receipts', AckSchema, receipt, this.session?.token); }
+    catch (error) { if (error instanceof ApiError && error.status === 401) this.session = undefined; throw error; }
+  }
   private lastState = '';
   private heartbeat(force = false): Promise<void> {
     // Concurrent lanes and the per-job renewers all ask for heartbeats: share one in-flight request.
@@ -167,7 +190,8 @@ export class PrivaNode {
     const report = this.options.engine?.report;
     // Whether storage is offered is part of the state that triggers an immediate heartbeat, so a withdrawn offer (a store that went unhealthy, an owner pause) reaches the Coordinator at once; the amounts are only hints and ride the ordinary heartbeats.
     const offered = Date.now() >= this.servicesBlockedUntil ? this.options.services?.() : undefined; const services = offered && Object.keys(offered).length > 0 ? offered : undefined;
-    const state = `${this.draining}/${report?.contribution}/${report?.pressure}/${this.capabilities.join(',')}/${services?.['storage.chunk.v1'] ? 'storage' : ''}`;
+    const endpoint = services?.['storage.chunk.v1']?.transferEndpoint;
+    const state = `${this.draining}/${report?.contribution}/${report?.pressure}/${this.capabilities.join(',')}/${services?.['storage.chunk.v1'] ? 'storage' : ''}/${endpoint?.url ?? ''}/${endpoint?.certFingerprint ?? ''}`;
     if (!this.session || (!force && state === this.lastState && Date.now() - this.lastHeartbeat < this.heartbeatMs)) return;
     this.lastState = state;
     try {
@@ -178,6 +202,7 @@ export class PrivaNode {
       }, this.session.token);
       if (services) void this.ticketKeyCache?.refresh();
     } catch (error) {
+      this.registeredTransfer = undefined;
       // An older Coordinator rejects the `services` member (its heartbeat schema is strict). Tried first, before the slots fallback below: a node that merely offers storage must neither stop nor lose its slots.
       if (services && error instanceof ApiError && error.status === 400) {
         this.servicesBlockedUntil = Date.now() + 3600000; this.log({ event: 'node.services_unsupported' }); this.lastState = ''; return this.sendHeartbeat(true);
@@ -188,6 +213,7 @@ export class PrivaNode {
       }
       throw error;
     }
+    this.registeredTransfer = endpoint ? { url: endpoint.url, certFingerprint: endpoint.certFingerprint } : undefined;
     this.lastHeartbeat = Date.now(); this.contacted();
   }
   /** Stop asking for work; the next heartbeat tells the Coordinator this node is draining. */

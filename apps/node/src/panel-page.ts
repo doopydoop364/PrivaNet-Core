@@ -82,12 +82,13 @@ function renderStatus(s) {
       h('tr', null, h('td', { text: 'Power / battery' }), h('td', { text: String(me.power) }), h('td', { text: 'on battery: ' + cfg.onBattery })),
       h('tr', null, h('td', { text: 'Your own CPU use' }), h('td', { text: Math.round(me.ownerCpuPercent) + '%' }), h('td', { text: 'free memory above your reserve: ' + bytes(me.memoryHeadroomBytes) })))));
   var st = s.storage;
-  if (st) root.appendChild(h('div', { class: 'card' }, h('h3', { text: 'Local storage' }), h('p', { class: 'note', text: 'A store of opaque chunks on this machine. It opens no port, and nothing can send a chunk to it yet. When it is healthy, this node tells the Coordinator how much room it has, so a later version can place data here; there is deliberately no file browser.' }),
+  if (st) root.appendChild(h('div', { class: 'card' }, h('h3', { text: 'Local storage' }), h('p', { class: 'note', text: 'Opaque chunk capacity and direct TLS transfer are separate opt-ins. Applications exchange bytes directly with this node. The Coordinator receives only authorization and metadata.' }),
     h('table', null,
       h('tr', null, h('th', { text: 'State' }), h('td', { text: (st.enabled ? st.state : 'OFF') + (st.reasons.length ? ' (' + st.reasons.join(', ') + ')' : '') + (st.error ? ' [' + st.error + ']' : '') + '; health ' + st.health + (st.flags.length ? ' (' + st.flags.join(', ') + ')' : '') })),
       h('tr', null, h('th', { text: 'Used' }), h('td', { text: st.chunkCount + ' chunk(s), ' + bytes(st.committedBytes) + (st.incomingBytes ? '; ' + bytes(st.incomingBytes) + ' of unfinished writes' : '') })),
       h('tr', null, h('th', { text: 'Your limits' }), h('td', { text: 'at most ' + bytes(st.maxBytes) + '; always leaves ' + bytes(st.reserveFreeBytes) + ' of the disk free' })),
       h('tr', null, h('th', { text: 'Room now' }), h('td', { text: st.enabled ? bytes(st.allowedBytes) : 'none (storage is off)' })))));
+  if (st && st.transfer) root.appendChild(h('div', { class: 'card' }, h('h3', { text: 'Direct transfer listener' }), h('p', { text: st.transfer.listener + '; endpoint ' + (st.transfer.advertised ? 'advertised (reachability depends on your network)' : 'not advertised') + (st.transfer.error ? '; ' + st.transfer.error : '') }), h('p', { text: 'Active PUT / GET / DELETE: ' + st.transfer.active.put + ' / ' + st.transfer.active.get + ' / ' + st.transfer.active.delete + '; completed ' + st.transfer.completed + '; failed ' + st.transfer.failed }), h('p', { text: bytes(st.transfer.bytes) + ' transferred; ' + st.transfer.queuedReceipts + ' receipts awaiting acknowledgement' })));
   c.problems.forEach(function (p) { root.appendChild(h('div', { class: 'card err' }, h('strong', { text: 'PROBLEM ' + p.code }), h('div', { text: p.issues.join('; ') }))); });
   if (c.restartRequired.length) root.appendChild(h('div', { class: 'card' }, 'Restart needed for: ' + c.restartRequired.join(', ')));
   var msg = h('div', { id: 'statusmsg' });
@@ -121,8 +122,13 @@ function renderContribute(d) {
   var storageBox = h('input', { type: 'checkbox', checked: !!p.storage.enabled, 'aria-label': 'Turn the local store on', disabled: !!d.locked, on: { change: function () { dirty = true; } } });
   var storageQuota = h('input', { type: 'number', step: 'any', value: String(+(p.storage.maxBytes / 1073741824).toFixed(3)), 'aria-label': 'Most storage to use (GiB)', disabled: !!d.locked, on: { input: function () { dirty = true; } } });
   var storageReserve = h('input', { type: 'number', step: 'any', value: String(+(p.storage.reserveFreeBytes / 1073741824).toFixed(3)), 'aria-label': 'Disk always left free beside storage (GiB)', disabled: !!d.locked, on: { input: function () { dirty = true; } } });
-  form.appendChild(h('div', null, h('h4', { text: 'Local storage (off by default)' }), h('p', { class: 'note', text: 'A store of opaque chunks. It opens no port and nothing can send a chunk to it yet; while it is on and healthy, this node tells the Coordinator how much room it has. Lowering a limit never deletes anything.' }),
+  form.appendChild(h('div', null, h('h4', { text: 'Local storage (off by default)' }), h('p', { class: 'note', text: 'Opaque chunk capacity alone opens no listener. Direct TLS transfers require a separate explicit setting and reachable endpoint. Lowering a limit never deletes anything.' }),
     h('label', null, storageBox, ' Turn the local store on'), h('label', null, 'Most to store (GiB) ', storageQuota), h('label', null, 'Disk always left free (GiB) ', storageReserve)));
+  var transferInputs = {}; var trp = p.storage.transfer; var trShown = d.effectiveTransfer || trp;
+  var transferFields = [['enabled', 'Enable direct TLS listener', 'checkbox'], ['bindAddress', 'Bind address (literal IP)', 'text'], ['port', 'Listener port', 'number'], ['endpoint', 'Advertised HTTPS origin', 'text'], ['certificateFile', 'Certificate file on this machine', 'text'], ['keyFile', 'Private key file on this machine', 'text'], ['maxConcurrent', 'Maximum transfers at once', 'number'], ['maxConcurrentPuts', 'Maximum PUTs at once', 'number']];
+  form.appendChild(h('h4', { text: 'Direct TLS transfer (off by default)' }));
+  form.appendChild(h('p', { class: 'note', text: 'Certificate and key must already exist locally; this panel never uploads or reads their contents. Bandwidth and monthly allowance above apply to direct transfers. Environment-set fields are locked.' }));
+  transferFields.forEach(function (f) { var locked = !!d.locked || (d.transferEnvironmentLocks || []).indexOf(f[0]) >= 0; var input = h('input', { type: f[2], value: f[2] === 'checkbox' ? '' : String(trShown[f[0]]), checked: f[2] === 'checkbox' && !!trShown[f[0]], disabled: locked, 'aria-label': f[1], on: { input: function () { dirty = true; } } }); transferInputs[f[0]] = input; form.appendChild(h('label', null, f[1] + (locked ? ' (locked)' : '') + ' ', input)); });
   var selects = {};
   [['defaultLevel', 'Mode when no schedule rule applies', ['OFF', 'MINIMAL', 'ADAPTIVE', 'FULL']], ['maxDiskIo', 'Disk-I/O class', ['none', 'low', 'medium', 'high']], ['onBattery', 'On battery', ['normal', 'reduce', 'disable']]].forEach(function (s) {
     var sel = h('select', { 'aria-label': s[1], on: { change: function () { dirty = true; } } }, s[2].map(function (o) { return h('option', { value: o, text: o, selected: p[s[0]] === o }); })); selects[s[0]] = sel; form.appendChild(h('label', null, s[1] + ' ', sel)); });
@@ -143,7 +149,8 @@ function renderContribute(d) {
     for (var k in inputs) { var v = fromUi(inputs[k][1], inputs[k][0].value); if (v !== null && (typeof v !== 'number' || isNaN(v))) bad = k; next[k] = v; }
     for (var s in selects) next[s] = selects[s].value; next.schedule = rules;
     var sq = Math.round(parseFloat(storageQuota.value) * 1073741824); var sr = Math.round(parseFloat(storageReserve.value) * 1073741824); if (!isFinite(sq) || !isFinite(sr) || sq < 0 || sr < 0) bad = 'storage';
-    next.storage = { enabled: !!storageBox.checked, maxBytes: sq, reserveFreeBytes: sr };
+    next.storage = { enabled: !!storageBox.checked, maxBytes: sq, reserveFreeBytes: sr, transfer: JSON.parse(JSON.stringify(trp)) };
+    transferFields.forEach(function (f) { if (!transferInputs[f[0]].disabled) next.storage.transfer[f[0]] = f[2] === 'checkbox' ? transferInputs[f[0]].checked : f[2] === 'number' ? Number(transferInputs[f[0]].value) : transferInputs[f[0]].value; });
     if (bad) { toast(msg, 'Check the value for ' + bad + '.', true); return; }
     act('/api/policy', { policy: next }, msg, function (b) { dirty = false; toast(msg, 'Saved and applied.' + (b.findings.length ? ' ' + b.findings.map(function (x) { return x.severity.toUpperCase() + ': ' + x.message; }).join(' ') : '') + (b.restartRequired.length ? ' Restart needed for: ' + b.restartRequired.join(', ') : '')); }); } } });
   var reset = h('button', { text: 'Discard unsaved changes', on: { click: function () { dirty = false; refresh(); } } });

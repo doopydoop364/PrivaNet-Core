@@ -19,7 +19,7 @@ export class TransferKeyCache {
   private nextPeriodic = 0;
   private nextUnknown = 0;
   private failures = 0;
-  constructor(private readonly coordinatorId: string, private readonly fetchKeys: () => Promise<unknown>, private readonly monotonicNow: () => number = () => performance.now()) {}
+  constructor(private readonly coordinatorId: string, private readonly fetchKeys: () => Promise<unknown>, private readonly monotonicNow: () => number = () => performance.now(), private readonly rejected?: () => void) {}
 
   get keys(): TransferKeys['keys'] | null { return this.cached?.map(key => ({ ...key })) ?? null; }
 
@@ -47,7 +47,7 @@ export class TransferKeyCache {
   private async fetch(): Promise<void> {
     try {
       const response = TransferKeysSchema.parse(await this.fetchKeys());
-      if (response.coordinatorId !== this.coordinatorId) { this.cached = null; throw new Error(); }
+      if (response.coordinatorId !== this.coordinatorId) { this.cached = null; this.rejected?.(); throw new Error(); }
       if (new Set(response.keys.map(key => key.kid)).size !== response.keys.length) throw new Error();
       for (const key of response.keys) { canonicalPublicKey(key.publicKey); if (transferKeyId(key.publicKey) !== key.kid) throw new Error(); }
       this.cached = response.keys; this.failures = 0;

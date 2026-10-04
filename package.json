@@ -1,6 +1,6 @@
 {
   "name": "privanet",
-  "version": "0.4.0-alpha.2",
+  "version": "0.4.0-alpha.3",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -27,7 +27,10 @@
     "backup": "node scripts/backup.mjs",
     "smoke:registry": "node scripts/registry-smoke.mjs",
     "test:installer": "npm run build && node --test --test-concurrency=1 tests/dist/installer.test.js",
-    "test:proxy": "npm run build && node --test --test-concurrency=1 tests/dist/public-proxy.proxy.js"
+    "test:proxy": "npm run build && node --test --test-concurrency=1 tests/dist/public-proxy.proxy.js",
+    "test:transfer": "npm run build && node --test --test-concurrency=1 tests/dist/direct-transfer.test.js tests/dist/direct-transfer-failures.test.js tests/dist/transfer-replay-state.test.js tests/dist/transfer-key-cache.test.js tests/dist/transfer-receipt-queue.test.js tests/dist/transfer-compat.test.js",
+    "test:transfer:lan": "npm run build && node --test tests/dist/direct-transfer.netns.js",
+    "test:transfer:bench": "npm run build && node --test tests/dist/direct-transfer.bench.js"
   },
   "dependencies": {
     "zod": "^4.6.5"

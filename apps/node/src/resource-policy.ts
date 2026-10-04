@@ -71,6 +71,12 @@ export const ResourcePolicySchema = z.strictObject({
     enabled: z.boolean().default(false),
     maxBytes: bytes.default(1 * GiB),
     reserveFreeBytes: bytes.default(10 * GiB),
+    transfer: z.strictObject({
+      enabled: z.boolean().default(false), bindAddress: z.string().min(2).max(64).default('127.0.0.1'),
+      port: z.number().int().min(1).max(65535).default(4050),
+      endpoint: z.string().max(512).default(''), certificateFile: z.string().max(1024).default(''), keyFile: z.string().max(1024).default(''),
+      maxConcurrent: z.number().int().min(1).max(64).default(8), maxConcurrentPuts: z.number().int().min(1).max(8).default(2),
+    }).prefault({}),
   }).prefault({}),
   /** How long HIGH pressure must persist before running preemptible jobs are handed back. */
   preemptAfterMs: z.number().int().min(0).max(600000).default(10000),

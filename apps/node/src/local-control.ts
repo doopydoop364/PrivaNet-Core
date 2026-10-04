@@ -1,3 +1,4 @@
+import { TRANSFER_ENV } from './store/transfer-config.js';
 import { statSync } from 'node:fs';
 import { MAX_JOB_SLOTS } from '@privanet/protocol';
 import type { JobType } from '@privanet/protocol';
@@ -15,6 +16,7 @@ import { policyFindings } from './config-check.js';
 import { ResourceHistory } from './history.js';
 
 export interface LocalControlOptions {
+  transferEnv?: NodeJS.ProcessEnv;
   stateDir: string; envPolicyFile?: string | undefined; node: PrivaNode; engine: ResourceEngine; transfer?: TransferMeter | undefined;
   history?: ResourceHistory | undefined; clock?: () => number; log?: (entry: { event: string; code?: string }) => void;
   /** Used to decide when the machine has rebooted (a "until reboot" pause); injectable for tests. */
@@ -111,7 +113,8 @@ export class LocalControl {
   private assertPolicyEditable(): void { if (this.options.policyLocked) throw new PolicyError('POLICY_LOCKED_BY_ENVIRONMENT'); }
   async savePolicy(policy: ResourcePolicy, context: { jobSlots: number; capabilities: JobType[] }): Promise<{ findings: ReturnType<typeof policyFindings> }> {
     this.assertPolicyEditable();
-    const findings = policyFindings(policy, context);
+    for (const [key, name] of Object.entries(TRANSFER_ENV)) if (this.options.transferEnv?.[name] !== undefined && JSON.stringify(policy.storage.transfer[key as keyof typeof TRANSFER_ENV]) !== JSON.stringify(this.resolved?.policy.storage.transfer[key as keyof typeof TRANSFER_ENV])) throw new PolicyError("POLICY_LOCKED_BY_ENVIRONMENT");
+    const findings = policyFindings(policy, { ...context, ...(this.options.transferEnv ? { transferEnv: this.options.transferEnv } : {}) });
     if (findings.some(finding => finding.severity === 'error')) throw new PolicyError('POLICY_FILE_INVALID', findings.filter(finding => finding.severity === 'error').map(finding => finding.message));
     await savePolicyFile(this.options.stateDir, policy, detectPreset(policy), this.clock());
     await this.sync(); await this.reloadPolicy(); this.stamps.policy = policyStamp(this.options.stateDir); this.options.onChange?.();
