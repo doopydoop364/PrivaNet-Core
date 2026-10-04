@@ -43,6 +43,7 @@ test('three isolated hosts: direct TLS PUT/GET/DELETE and zero Coordinator chunk
   assert.equal(traffic.oversizedBodies, 0, 'every Coordinator request remains bounded metadata');
   assert(traffic.requestBytes + traffic.responseBytes < result.bytes / 16, 'all Coordinator plaintext traffic is smaller than 1/16 of one chunk, even including enrollment/keys/receipts');
   const counters = await lan.server.run('iptables', ['-L', 'INPUT', '-v', '-n', '-x']);
-  assert.match(counters, /\b0\s+0\s+DROP\s+tcp[^\n]*dpt:4050/, 'Host C receives no data-plane TCP packets');
+  // With -n, iptables versions may print TCP's protocol number (6) rather than its name.
+  assert.match(counters, /^\s*0\s+0\s+DROP\s+(?:tcp|6)\s[^\n]*dpt:4050\b/m, 'Host C receives no data-plane TCP packets');
   t.diagnostic(`Host A=${lan.web.ip}; B=${lan.desktop.ip}; C=${lan.server.ip}; PUT+GET payload=${result.bytes * 2}; Coordinator payloadBytes=${traffic.payloadBytes}; metadata=${traffic.requestBytes + traffic.responseBytes} bytes in ${traffic.requests} requests`);
 });
