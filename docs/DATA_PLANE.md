@@ -1,6 +1,6 @@
 # Control plane and data plane
 
-Status: **architecture decision (ADR 006): ACCEPTED as direction. Design only: nothing in this document is implemented.** As of 0.4.0-alpha.2 the **authorization half** exists (placement metadata and Coordinator-signed transfer tickets with their state machine, [PHASE4_DESIGN section 16](PHASE4_DESIGN.md#16-40-alpha2-as-built-and-what-changed-from-this-design)); **no transfer service, node endpoint or byte-moving code exists**, and the rest is scheduled for 4.0-alpha.3. A concrete proposal that answers most of the open questions at the end of this document is in [PHASE4_DESIGN.md](PHASE4_DESIGN.md) (proposed ADR 007). Related: [architecture](architecture.md#adr-006-control-plane-and-data-plane-are-separate), [protocol](protocol.md), [security](security.md#data-plane-threats-planned), [RESOURCES](RESOURCES.md), [APPLICATION_BOUNDARY](APPLICATION_BOUNDARY.md), [RESOURCE_MARKET](RESOURCE_MARKET.md), [CREDITS](CREDITS.md), [TREASURY](TREASURY.md), [roadmap](../ROADMAP.md).
+Status: **ADR 006 accepted; the first storage data plane is implemented in v0.4.0-alpha.3.** Applications exchange opaque chunk bytes directly with authorized storage nodes over pinned TLS. The Coordinator never carries chunk bodies. [DIRECT_TRANSFER.md](DIRECT_TRANSFER.md) specifies the built wire exchange, owner settings and limitations; [PHASE4_DESIGN section 17](PHASE4_DESIGN.md#17-40-alpha3-as-built-and-what-changed-from-this-design) records design deviations. Other capabilities/later topology discussions below remain design context. Replication and repair are Phase 5, PrivaDrive semantics are outside Core, and NAT traversal/relay is not included.
 
 > **Decision.** PrivaNet separates control and data planes. The Coordinator authorizes and schedules resource use; large payloads move directly between authorized participants through narrowly scoped data-plane operations. **The Coordinator is the control plane, not the bulk-data pipe.**
 
@@ -73,11 +73,11 @@ The Coordinator carries metadata, authorization and state transitions, never the
 | 6 PrivaDrive Integration | PrivaDrive uses the generic data plane. PrivaDrive owns files, folders, metadata, sharing and encryption semantics; PrivaNet owns physical chunk storage, placement, transfer authorization and repair. |
 | 7 Measurement and Accounting | Consumes verified data-plane evidence (section 10). |
 
-Phase 4 implementation does not begin while Phase 3 is still being proven. The only permitted earlier change is a minimal interface adjustment that avoids a future breaking redesign; the review in section 12 found none.
+Phase 3 Core validation preceded Phase 4 implementation. Alpha.3 now implements application-to-node transfer; the original architecture review in section 12 found no need to change compute-result delivery.
 
 ## 5. Transfer authorization (the concept, not a wire format)
 
-A **transfer authorization** (working name: transfer ticket) is the Coordinator's statement: *"You may upload exactly this bounded object to this authorized node during this short window."* The exact wire format is deliberately not fixed. Its **security properties** are:
+A **transfer authorization** (working name: transfer ticket) is the Coordinator's statement: *"You may upload exactly this bounded object to this authorized node during this short window."* This section records the authorization concept; the implemented alpha.2 ticket and alpha.3 holder exchange are specified in [DIRECT_TRANSFER.md](DIRECT_TRANSFER.md). Its **security properties** are:
 
 | Property | Meaning |
 | --- | --- |
@@ -191,9 +191,9 @@ For PrivaSearch, `web.fetch.v1` keeps returning bounded inline digests. If measu
 
 ## 13. Connectivity
 
-Direct node connectivity is a separate future networking problem and is **not solved here**. Environments to expect: same LAN, a WireGuard or private overlay, a publicly reachable node endpoint, and later NAT traversal or a relay if needed. The architecture must not require every node to be publicly exposed. If relaying becomes necessary it is its **own bounded data-plane service** with its own limits, authorization and accounting, never the Coordinator's normal request path. **LAN is not trusted:** a transfer is authorized by ticket and identity, never by network location.
+Alpha.3 supports direct TLS to an operator-advertised, reachable storage node. Automatic NAT traversal and relay connectivity remain a separate future networking problem. Environments to expect: same LAN, a WireGuard or private overlay, a publicly reachable node endpoint, and later NAT traversal or a relay if needed. The architecture must not require every node to be publicly exposed. If relaying becomes necessary it is its **own bounded data-plane service** with its own limits, authorization and accounting, never the Coordinator's normal request path. **LAN is not trusted:** a transfer is authorized by ticket and identity, never by network location.
 
-## 14. Threats (summary; the full table is in [security](security.md#data-plane-threats-planned))
+## 14. Threats (summary; the full table is in [security](security.md#data-plane-threats))
 
 Stolen, replayed, expired, wrong-node, wrong-object, byte-limit-bypass, substituted, corrupted or incomplete transfers; malicious sender or receiver; an application or node lying about completion; endpoint spoofing and DNS or endpoint substitution; authorization leakage; concurrent duplicate uploads; races around revocation and expiry; accounting double counting; resumption abuse.
 

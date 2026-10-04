@@ -4,6 +4,7 @@ import type { ResourcePolicy } from '../resource-policy.js';
 import { ChunkStore } from './chunk-store.js';
 import type { ScanResult } from './chunk-store.js';
 import { StoreError } from './errors.js';
+import type { TransferStatus } from './transfer-service.js';
 
 /** The directory of the local chunk store inside a node's state directory. */
 export const storeRoot = (stateDir: string): string => join(stateDir, 'store');
@@ -20,7 +21,7 @@ export interface StorageStatus {
   maxBytes: number; reserveFreeBytes: number;
   committedBytes: number; chunkCount: number; incomingBytes: number; allowedBytes: number; freeBytes: number | null;
   anomalies: number; integrityFailures: number; health: 'OK' | 'DEGRADED' | 'UNSAFE' | 'DISABLED'; flags: string[];
-  networkAccessible: false; maxChunkBytes: number;
+  networkAccessible: boolean; maxChunkBytes: number; transfer?: TransferStatus;
 }
 export const emptyStorageStatus = (policy: ResourcePolicy['storage']): StorageStatus => ({ enabled: policy.enabled, state: policy.enabled ? 'READY' : 'DISABLED', reasons: [], error: null, maxBytes: policy.maxBytes, reserveFreeBytes: policy.reserveFreeBytes,
   committedBytes: 0, chunkCount: 0, incomingBytes: 0, allowedBytes: 0, freeBytes: null, anomalies: 0, integrityFailures: 0, health: policy.enabled ? 'OK' : 'DISABLED', flags: [], networkAccessible: false, maxChunkBytes: 8 * 1024 * 1024 });

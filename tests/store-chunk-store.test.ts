@@ -130,7 +130,7 @@ test('the gate stops new puts (paused, disabled, draining, schedule) with a fixe
 });
 
 test('concurrency: many puts of one chunk give one stored chunk and one count; many deletes never underflow; mixed work keeps the counters equal to the files', async t => {
-  const r = await rig(t); const store = await r.open(); const data = bytesOf(40, 20000); const id = idOf(data);
+  const r = await rig(t); const store = await r.open({ maxInFlight: 12 }); const data = bytesOf(40, 20000); const id = idOf(data);
   const results = await Promise.all(Array.from({ length: 12 }, () => store.put(id, (async function* () { yield data.subarray(0, 7000); yield data.subarray(7000); })(), data.length)));
   assert.equal(results.filter(x => x.stored).length, 1, 'exactly one writer committed'); assert.deepEqual(await store.getBuffer(id), data); assert.deepEqual(await files(r.incoming), []);
   let usage = await store.usage(); assert.deepEqual([usage.committedBytes, usage.chunkCount, usage.incomingBytes], [20000, 1, 0]);
@@ -146,6 +146,18 @@ test('too many puts at once are refused as BUSY, and a put that is running is no
   const slow = store.put(idOf(data), (async function* () { yield data.subarray(0, 1000); await gate; yield data.subarray(1000); })(), 2000);
   await new Promise(resolve => setTimeout(resolve, 50)); const other = bytesOf(51, 10); await rejects(store.putBuffer(idOf(other), other), 'BUSY');
   assert.equal(await store.sweepIncoming(-1), 0, 'a partial that belongs to a running put is never swept'); await store.rescan(); release(); assert.equal((await slow).stored, true); assert.deepEqual(await store.getBuffer(idOf(data)), data);
+});
+
+test('simultaneous initial reservations enforce the default concurrency and disk room after asynchronous queries', async t => {
+  for (const disk of [1_000_000, 2500]) {
+    const r = await rig(t); const store = await r.open({ limits: { maxBytes: 1_000_000, reserveFreeBytes: 0 }, freeBytes: async () => disk });
+    let release = () => {}; const wait = new Promise<void>(resolve => { release = resolve; }); let accepted = 0;
+    const data = bytesOf(70, 1000);
+    const attempts = Array.from({ length: 20 }, () => store.put(idOf(data), (async function* () { accepted++; await wait; yield data; })(), data.length).catch(e => e));
+    await new Promise(resolve => setTimeout(resolve, 50)); assert.equal(accepted, disk === 2500 ? 2 : 8);
+    release(); const results = await Promise.all(attempts); assert.equal(results.filter(result => !(result instanceof Error)).length, accepted);
+    assert.equal((await store.usage()).incomingBytes, 0); await store.close();
+  }
 });
 
 test('corrupt at rest: a wrong digest, a truncated file and an emptied file are never served; the bad file is removed, counted once, and the chunk can be stored again', async t => {
@@ -268,4 +280,13 @@ test('inspect: a read-only look that creates nothing and reports an absent, a he
 test('chunks are opaque and application-neutral: the store holds only the bytes, with no name, metadata file or index beside them', async t => {
   const r = await rig(t); const store = await r.open(); const d = bytesOf(160, 1000); await store.putBuffer(idOf(d), d);
   assert.deepEqual(await files(r.root), ['chunks', 'incoming']); assert.deepEqual(await files(join(r.chunks, sha(d).slice(0, 2), sha(d).slice(2, 4))), [sha(d)]);
+});
+
+
+test('idempotent existing PUT and absent DELETE still obey the final authorization/owner gate', async t => {
+  const f = await rig(t); const store = await f.open(); const bytes = bytesOf(91, 1024); const id = idOf(bytes); await store.putBuffer(id, bytes);
+  const refuse = () => { throw new Error('owner withdrew authorization'); };
+  await assert.rejects(store.put(id, (async function* () { yield bytes; })(), bytes.length, { commitGate: refuse }), (e: unknown) => isStoreError(e, 'IO'));
+  assert.deepEqual(await store.getBuffer(id), bytes); assert.equal((await store.usage()).incomingBytes, 0);
+  const absent = idOf(bytesOf(92, 1024)); await assert.rejects(store.delete(absent, undefined, { commitGate: refuse }), /owner withdrew authorization/);
 });

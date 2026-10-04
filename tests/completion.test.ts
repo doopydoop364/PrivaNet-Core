@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm, readFile, writeFile, utimes } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, utimes, symlink, lstat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -150,6 +150,15 @@ test('transfer meter waiting is abortable', async t => {
   await assert.rejects(pending);
 });
 
+test('a lower owner allowance cancels an already reserved transfer even while it is waiting for bandwidth', async t => {
+  const dir = await tmp(t); let resume = () => {}; const waiting = new Promise<void>(resolve => { resume = resolve; });
+  const meter = new TransferMeter({ stateDir: dir, ratePerSec: 1, monthlyBytes: 1000, sleep: () => waiting });
+  meter.reserve(1000); const pending = meter.throttle(1000);
+  meter.setLimits({ ratePerSec: 1, monthlyBytes: 500 }); resume();
+  await assert.rejects(pending, TransferLimitError); assert.equal(meter.allowsReservedTransfers(), false);
+  assert.equal(meter.usage().usedBytes, 1000, 'already spent/reserved accounting is never silently reduced');
+});
+
 test('checkpoints are bounded, typed, expire, and reject unsafe ids; prune removes abandoned files', async t => {
   const dir = await tmp(t); let now = 1_000_000; const store = new CheckpointStore(join(dir, 'cp'), { maxBytes: 200, maxAgeMs: 1000, clock: () => now });
   const id = '11111111-1111-4111-8111-111111111111'; const cp = store.forJob(id, 'system.hashchain.v1');
@@ -192,4 +201,31 @@ test('checkpoint context is offered only to job types registered checkpointable'
   const checkpoint = { load: () => undefined, save: () => {} };
   await executeLease({ ...lease(1), type: 'system.echo.v1', input: { message: 'm' } }, ['system.echo.v1'], undefined, handlers, { checkpoint });
   assert.equal(seen, undefined);
+});
+
+
+test('very low bandwidth with concurrent debt uses bounded cancellable timers rather than overflow', async t => {
+  const dir = await tmp(t); const controller = new AbortController(); const waits: number[] = [];
+  const meter = new TransferMeter({ stateDir: dir, ratePerSec: 1, monthlyBytes: null, sleep: async ms => { waits.push(ms); controller.abort(); } });
+  await assert.rejects(meter.throttle(4 * 1024 * 1024, controller.signal));
+  assert.deepEqual(waits, [1000]);
+});
+
+test('lowering the owner rate re-gates an already waiting stream at the new rate without double accounting', async t => {
+  const dir = await tmp(t); let now = 0; const waits: number[] = []; let changed = false;
+  const meter = new TransferMeter({ stateDir: dir, ratePerSec: 1000, monthlyBytes: null, clock: () => now, sleep: async ms => {
+    waits.push(ms); now += ms; if (!changed) { changed = true; meter.setLimits({ ratePerSec: 100, monthlyBytes: null }); }
+  } });
+  await meter.consume(2000);
+  assert.equal(waits.reduce((a, b) => a + b, 0), 20000); assert(waits.every(ms => ms <= 1000)); assert.equal(meter.usage().usedBytes, 2000);
+});
+
+
+test('corrupt monthly accounting is preserved and a dangling state symlink never reopens the allowance', async t => {
+  const dir = await tmp(t); const path = join(dir, 'transfer.json'); await writeFile(path, '{corrupt', { mode: 0o600 });
+  const meter = new TransferMeter({ stateDir: dir, ratePerSec: null, monthlyBytes: null }); assert.equal(meter.remainingBytes(), 0); assert.throws(() => meter.reserve(1), TransferLimitError); assert.equal(await readFile(path, 'utf8'), '{corrupt');
+  if (process.platform !== 'win32') {
+    await rm(path); await symlink(join(dir, 'missing-counter'), path);
+    const linked = new TransferMeter({ stateDir: dir, ratePerSec: null, monthlyBytes: null }); assert.equal(linked.remainingBytes(), 0); assert.throws(() => linked.reserve(1), TransferLimitError); assert((await lstat(path)).isSymbolicLink());
+  }
 });

@@ -369,6 +369,10 @@ const system = process.platform === 'linux' && process.getuid?.() === 0 && proce
 const systemSkip = !system && (process.env.PRIVANET_REQUIRE_INSTALLER_SYSTEM === '1' ? false : 'set PRIVANET_INSTALLER_SYSTEM=1 and run as root to exercise a real installation');
 test('a real installation: service account, ownership and modes, enrollment as that account, uninstall', { skip: systemSkip }, async t => {
   assert.equal(system, true, 'PRIVANET_REQUIRE_INSTALLER_SYSTEM=1 needs root on Linux with PRIVANET_INSTALLER_SYSTEM=1');
+  // Refuse BEFORE registering purge cleanup: a failed install must never uninstall a pre-existing deployment/account.
+  let existingAccount = false;
+  try { execFileSync('id', ['privanet-node'], { stdio: 'ignore' }); existingAccount = true; } catch { /* the disposable runner has no service account yet */ }
+  assert(!existingAccount && !existsSync('/opt/privanet-node') && !existsSync('/var/lib/privanet-node') && !existsSync('/etc/privanet/node.env'), 'real-system installer test requires a disposable clean filesystem/account database; existing installation is left untouched');
   const { sb, server, c, invite } = await reserve(t); const made = invite('System test');
   const args = ['--release-base-url', server.url, '--coordinator', c.url, '--ca-file', join(workDir, 'good.crt'), '--no-service'];
   t.after(() => { try { execFileSync('/bin/sh', [join(releaseDir, 'install-node.sh'), '--uninstall', '--purge'], { cwd: '/', stdio: 'ignore', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } }); } catch { /* nothing was installed */ } try { execFileSync('userdel', ['privanet-node'], { stdio: 'ignore' }); } catch { /* it was never created */ } });

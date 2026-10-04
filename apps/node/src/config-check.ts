@@ -11,6 +11,9 @@ import { PolicyError, assertNoUnsafeLocal, resolvePolicy } from './policy-store.
 import { readLocalState } from './local-state.js';
 import { ChunkStore } from './store/chunk-store.js';
 import { storeRoot } from './store/status.js';
+import { transferConfig } from './store/transfer-config.js';
+import { readPrivateFileUpTo, transferEndpoint, bindTransferEndpoint } from '@privanet/shared';
+import { readFile } from 'node:fs/promises';
 
 export type FindingSeverity = 'error' | 'warning' | 'info';
 export interface Finding { severity: FindingSeverity; id: string; message: string; /** The setting concerned, by name. Never a value. */ setting?: string }
@@ -20,7 +23,7 @@ const GiB = 1024 ** 3;
  * Judgement about a policy beyond its schema: settings that are valid but contradict each other or can never have an effect. One implementation, used by
  * `privanet-node config check`, `policy import` and the control panel, so a policy that passes in one place passes in all of them.
  */
-export function policyFindings(policy: unknown, context: { jobSlots?: number; capabilities?: readonly JobType[] } = {}): Finding[] {
+export function policyFindings(policy: unknown, context: { jobSlots?: number; capabilities?: readonly JobType[]; transferEnv?: NodeJS.ProcessEnv } = {}): Finding[] {
   const out: Finding[] = [];
   const parsed = ResourcePolicySchema.safeParse(policy);
   if (!parsed.success) {
@@ -43,8 +46,9 @@ export function policyFindings(policy: unknown, context: { jobSlots?: number; ca
   const biggest = Math.max(0, ...(context.capabilities ?? (Object.keys(JOB_TYPES) as JobType[])).map(type => JOB_TYPES[type].resources.memoryBytes));
   if (slots > 1 && biggest * slots > p.maxMemoryBytes) out.push({ severity: 'warning', id: 'SLOTS_EXCEED_MEMORY', setting: 'PRIVANODE_JOB_SLOTS', message: `${slots} job slots at the largest declared per-job memory (${Math.round(biggest / (1024 * 1024))} MiB each) exceed maxMemoryBytes, so not every slot can be used at once.` });
   if (p.reserveDiskBytes < 1 * GiB && p.maxDiskBytes > 0) out.push({ severity: 'info', id: 'LOW_DISK_RESERVE', setting: 'reserveDiskBytes', message: 'Less than 1 GiB of free disk space is reserved for you; a full disk can hurt other programs.' });
+  try { transferConfig(p, context.transferEnv); } catch { out.push({ severity: "error", id: "TRANSFER_CONFIG_INVALID", setting: "storage.transfer", message: "Invalid direct transfer settings; provide a literal bind address, HTTPS endpoint and certificate/key paths when enabled." }); }
   if (p.storage.enabled) {
-    out.push({ severity: 'info', id: 'STORAGE_ENABLED', setting: 'storage.enabled', message: 'The chunk store is on. It opens no port and nothing can send a chunk to it yet. While it is healthy and this node is allowed to contribute, the node tells the Coordinator how much room it has (a hint, re-checked by the node at every transfer).' });
+    out.push({ severity: 'info', id: 'STORAGE_ENABLED', setting: 'storage.enabled', message: 'Opaque chunk capacity is on. A separate explicit TLS transfer setting is required to open a listener. While it is healthy and this node is allowed to contribute, the node tells the Coordinator how much room it has (a hint, re-checked by the node at every transfer).' });
     if (p.storage.maxBytes === 0) out.push({ severity: 'warning', id: 'STORAGE_QUOTA_ZERO', setting: 'storage.maxBytes', message: 'The storage quota is 0, so the store can hold nothing.' });
     if (p.storage.reserveFreeBytes < 1 * GiB) out.push({ severity: 'warning', id: 'STORAGE_LOW_RESERVE', setting: 'storage.reserveFreeBytes', message: 'Less than 1 GiB of disk space is kept free beyond the store; a full disk can disturb your own work.' });
   }
@@ -90,7 +94,16 @@ export async function checkConfig(env: NodeJS.ProcessEnv): Promise<ConfigCheck> 
     source = resolved.source.kind === 'defaults' ? 'defaults' : `${resolved.source.kind === 'saved' ? 'saved policy' : 'policy file'} (${resolved.source.path})`;
     if (resolved.source.kind === 'saved' && resolved.source.preset) preset = resolved.source.preset;
     if (resolved.problem) findings.push({ severity: 'error', id: resolved.problem.code, message: `The saved policy was not applied (${resolved.problem.code}); the ${resolved.problem.fellBackTo === 'env-file' ? 'installer policy file' : 'conservative defaults'} apply instead. ${resolved.problem.issues.join('; ')}`.trim() });
-    findings.push(...policyFindings(resolved.policy, { ...(jobSlots !== undefined ? { jobSlots } : {}), ...(capabilities ? { capabilities } : {}) }));
+    findings.push(...policyFindings(resolved.policy, { transferEnv: env, ...(jobSlots !== undefined ? { jobSlots } : {}), ...(capabilities ? { capabilities } : {}) }));
+    try {
+      const transfer = transferConfig(resolved.policy, env);
+      if (transfer.enabled) {
+        if (!resolved.policy.storage.enabled) findings.push({ severity: 'warning', id: 'TRANSFER_STORAGE_DISABLED', setting: 'storage.transfer', message: 'The transfer listener will remain closed while storage capacity is disabled.' });
+        const certificate = await readFile(transfer.certificateFile, 'utf8'); const key = await readPrivateFileUpTo(transfer.keyFile, 16384);
+        bindTransferEndpoint(transferEndpoint(transfer.endpoint, certificate), `node_${'00'.repeat(32)}`, key);
+        findings.push({ severity: 'info', id: 'TRANSFER_OPT_IN', setting: 'storage.transfer', message: 'Direct TLS transfer is explicitly enabled. The advertised endpoint must be reachable by the application; no NAT traversal or relay is included.' });
+      }
+    } catch { findings.push({ severity: 'error', id: 'TRANSFER_CONFIG_INVALID', setting: 'storage.transfer', message: 'Direct transfer settings or certificate/key are invalid, unreadable, expired or unsafe. Values are not shown.' }); }
   } catch (error) {
     findings.push({ severity: 'error', id: 'POLICY_UNREADABLE', setting: 'PRIVANODE_POLICY_FILE', message: error instanceof PolicyError ? `The policy file is not acceptable (${error.code}). ${error.issues.join('; ')}`.trim() : 'The policy file could not be read or parsed.' });
   }

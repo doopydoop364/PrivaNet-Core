@@ -68,7 +68,7 @@ export async function replacePrivateFile(path: string, value: string, options: {
   try {
     if (options.keepBackup) {
       const existing = await lstat(path).catch(() => undefined);
-      if (existing?.isFile() && !existing.isSymbolicLink()) { await copyFile(path, `${path}.bak`); }
+      if (existing?.isFile() && !existing.isSymbolicLink()) { await busyRetry(() => copyFile(path, `${path}.bak`)); }
     }
     await busyRetry(() => rename(temporary, path));
   } catch (error) { await unlink(temporary).catch(() => undefined); throw error; }

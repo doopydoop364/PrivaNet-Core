@@ -99,3 +99,7 @@ Nodes have no in-place key rotation. To replace a node key: revoke the node with
 ## Not covered
 
 High availability, multiple Coordinators, PostgreSQL, and an independent security review are not part of this runbook. See the roadmap (Phases 8 and 10 for the storage backend, Phase 11 for the independent review).
+
+## Alpha.3 direct storage deployment
+
+Compute-only installations retain their outbound operation. Direct opaque chunk transfer is a separate explicit TLS listener opt-in; storage capacity alone opens no port. Provision certificate/key paths and a reachable advertised HTTPS origin under the service account, and open only the configured transfer port as needed. The Coordinator still carries authorization/metadata only and must never proxy `/v1/chunks` bodies. No NAT relay is provided. See [DIRECT_TRANSFER.md](DIRECT_TRANSFER.md) for configuration, certificate renewal and durable-receipt recovery.

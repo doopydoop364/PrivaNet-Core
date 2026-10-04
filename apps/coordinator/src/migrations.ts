@@ -33,4 +33,6 @@ CREATE INDEX transfer_app ON transfer(application_id, state);
 CREATE TABLE node_service (
   node_id TEXT NOT NULL REFERENCES nodes(id), service TEXT NOT NULL CHECK(service IN ('storage.chunk.v1')), capacity_bytes INTEGER NOT NULL CHECK(capacity_bytes >= 0), free_bytes INTEGER NOT NULL CHECK(free_bytes >= 0),
   max_chunk_bytes INTEGER NOT NULL CHECK(max_chunk_bytes BETWEEN 1 AND 8388608), reported_at INTEGER NOT NULL, PRIMARY KEY(node_id, service)) STRICT, WITHOUT ROWID;
+` }, { version: 3, sql: `
+ALTER TABLE node_service ADD COLUMN transfer_endpoint TEXT CHECK(transfer_endpoint IS NULL OR json_valid(transfer_endpoint));
 ` }] as const;

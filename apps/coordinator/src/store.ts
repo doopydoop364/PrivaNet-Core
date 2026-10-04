@@ -15,7 +15,7 @@ const replicaOf = (row: Row): ReplicaRecord => ({ applicationId: String(row.appl
 const transferOf = (row: Row): TransferRecord => ({ id: String(row.id), operation: row.operation as TransferRecord['operation'], applicationId: String(row.application_id), chunkId: String(row.chunk_id), nodeId: String(row.node_id), kid: String(row.kid),
   holderHash: String(row.holder_hash), maxBytes: num(row.max_bytes), state: row.state as TransferState, reason: row.reason === null ? null : String(row.reason), issuedAt: num(row.issued_at), expiresAt: num(row.expires_at), startedAt: numOrNull(row.started_at), completedAt: numOrNull(row.completed_at),
   evidence: row.evidence === null ? null : JSON.parse(String(row.evidence)) as Record<string, unknown> });
-const serviceOf = (row: Row): NodeServiceRecord => ({ nodeId: String(row.node_id), service: row.service as ServiceId, capacityBytes: num(row.capacity_bytes), freeBytes: num(row.free_bytes), maxChunkBytes: num(row.max_chunk_bytes), reportedAt: num(row.reported_at) });
+const serviceOf = (row: Row): NodeServiceRecord => ({ nodeId: String(row.node_id), service: row.service as ServiceId, capacityBytes: num(row.capacity_bytes), freeBytes: num(row.free_bytes), maxChunkBytes: num(row.max_chunk_bytes), reportedAt: num(row.reported_at), ...(row.transfer_endpoint ? { transferEndpoint: JSON.parse(String(row.transfer_endpoint)) as NodeServiceRecord['transferEndpoint'] } : {}) });
 const OPEN = "state IN ('AUTHORIZED','IN_PROGRESS')";
 
 /** How long a used, revoked or expired enrollment grant stays on record after its expiry time. */
@@ -168,8 +168,8 @@ export class SqliteStore implements Store {
   }
   getNodeService(nodeId: string, service: ServiceId): NodeServiceRecord | undefined { const row = this.stmt('SELECT * FROM node_service WHERE node_id=? AND service=?').get(nodeId, service); return row ? serviceOf(row) : undefined; }
   saveNodeService(r: NodeServiceRecord): void {
-    this.stmt('INSERT INTO node_service (node_id, service, capacity_bytes, free_bytes, max_chunk_bytes, reported_at) VALUES (?,?,?,?,?,?) ON CONFLICT(node_id, service) DO UPDATE SET capacity_bytes=excluded.capacity_bytes, free_bytes=excluded.free_bytes, max_chunk_bytes=excluded.max_chunk_bytes, reported_at=excluded.reported_at')
-      .run(r.nodeId, r.service, r.capacityBytes, r.freeBytes, r.maxChunkBytes, r.reportedAt);
+    this.stmt('INSERT INTO node_service (node_id, service, capacity_bytes, free_bytes, max_chunk_bytes, reported_at, transfer_endpoint) VALUES (?,?,?,?,?,?,?) ON CONFLICT(node_id, service) DO UPDATE SET capacity_bytes=excluded.capacity_bytes, free_bytes=excluded.free_bytes, max_chunk_bytes=excluded.max_chunk_bytes, reported_at=excluded.reported_at, transfer_endpoint=excluded.transfer_endpoint')
+      .run(r.nodeId, r.service, r.capacityBytes, r.freeBytes, r.maxChunkBytes, r.reportedAt, r.transferEndpoint ? JSON.stringify(r.transferEndpoint) : null);
   }
   deleteNodeServices(nodeId: string): void { this.stmt('DELETE FROM node_service WHERE node_id=?').run(nodeId); }
   listNodeServices(service: ServiceId): NodeServiceRecord[] { return this.stmt('SELECT * FROM node_service WHERE service=? ORDER BY node_id').all(service).map(serviceOf); }

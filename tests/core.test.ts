@@ -186,7 +186,7 @@ test('checksummed migrations reject modified history and transactions roll back'
   assert.equal(store.getGrant('test'), undefined); store.close();
   // The history is the whole list (the database is at the latest version): editing any applied migration, the first or a later one, is detected.
   assert.throws(() => new SqliteStore(path, [{ version: 1, sql: migrations[0].sql + '\n-- changed' }, ...migrations.slice(1)]), /Applied migration changed/);
-  assert.throws(() => new SqliteStore(path, [migrations[0], { version: 2, sql: migrations[1].sql + '\n-- changed' }]), /Applied migration changed/);
+  assert.throws(() => new SqliteStore(path, [migrations[0], { version: 2, sql: migrations[1].sql + '\n-- changed' }, ...migrations.slice(2)]), /Applied migration changed/);
   assert.throws(() => new SqliteStore(path, [migrations[0]]), /schema is newer than service/);
 });
 

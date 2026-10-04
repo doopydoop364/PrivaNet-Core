@@ -64,7 +64,7 @@ test('placement and ticket requests take only bounded metadata: no path, node, a
   assert.equal(TicketRequestSchema.safeParse({ operation: 'get', chunkId: 'chk_x', holderKey }).success, false);
   assert.equal(TicketRequestSchema.safeParse({ operation: 'get', chunkId, holderKey: holderKey.slice(0, 59) }).success, false);
 });
-test('a grant, a key list and a receipt are strict, and the grant has no endpoint field', () => {
+test('a grant, a key list and a receipt are strict, legacy grants remain valid and receipts support all three operations', () => {
   const grant = { transferId: 'ab'.repeat(16), operation: 'put', chunkId: `chk_${'ab'.repeat(32)}`, expiresAt: 1, ticket: 'A'.repeat(312) };
   assert.equal(TransferGrantSchema.safeParse(grant).success, true);
   assert.equal(TransferGrantSchema.safeParse({ ...grant, endpoint: 'https://x' }).success, false); assert.equal(TransferGrantSchema.safeParse({ ...grant, ticket: 'A'.repeat(311) }).success, false);
@@ -72,6 +72,6 @@ test('a grant, a key list and a receipt are strict, and the grant has no endpoin
   assert.equal(TransferKeysSchema.safeParse({ coordinatorId: crypto.randomUUID(), keys: [key] }).success, true); assert.equal(TransferKeysSchema.safeParse({ coordinatorId: crypto.randomUUID(), keys: [] }).success, false);
   assert.equal(TransferKeysSchema.safeParse({ coordinatorId: crypto.randomUUID(), keys: Array(5).fill(key) }).success, false);
   const receipt = { transferId: 'ab'.repeat(16), operation: 'put', applicationId: crypto.randomUUID(), chunkId: `chk_${'ab'.repeat(32)}`, bytes: 5, sha256: 'ab'.repeat(32), nodeId: `node_${'cd'.repeat(32)}`, completedAt: 5 };
-  assert.equal(TransferReceiptSchema.safeParse(receipt).success, true); assert.equal(TransferReceiptSchema.safeParse({ ...receipt, operation: 'get' }).success, false);
+  assert.equal(TransferReceiptSchema.safeParse(receipt).success, true); assert.equal(TransferReceiptSchema.safeParse({ ...receipt, operation: 'get' }).success, true);
   assert.equal(TransferReceiptSchema.safeParse({ ...receipt, bytes: STORAGE_MAX_CHUNK_BYTES + 1 }).success, false); assert.equal(TransferReceiptSchema.safeParse({ ...receipt, extra: 1 }).success, false);
 });

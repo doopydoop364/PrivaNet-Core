@@ -53,7 +53,7 @@ the operator must deliver them securely and must not paste them into logs.
 
 Status: **planned.** No market, credits or rewards exist, so none of these attacks applies to the current code; they are recorded now so later interfaces do not make them easy. The governing rule: only Coordinator-authorised, policy-valid, verified resource consumption may generate contributor rewards, and advertising capacity must never create credits. See [RESOURCE_MARKET.md](RESOURCE_MARKET.md).
 
-| Threat | Why it matters | Planned direction |
+| Threat | Why it matters | Protection or later work |
 | --- | --- | --- |
 | Fake demand / wash activity | Consuming your own resources to look busy or farm rewards | Circulation-based ledger makes it zero-sum (minus fees); bounded subsidies; reward only policy-valid consumption |
 | Fake contribution | Claiming storage, bandwidth or compute not actually provided | Independent verification: challenges, spot checks, redundancy, two-ended accounting |
@@ -75,7 +75,7 @@ Market data itself is a privacy risk: aggregate only, with minimum participant t
 
 Status: **planned.** There is no treasury, levy, public budget or bootstrap program, so none of these apply to the current code. They are recorded so the design and later interfaces do not make them easy. See [TREASURY.md](TREASURY.md). A treasury is a shared pot of internal credits, which makes it a higher-value target than any one account.
 
-| Threat | Why it matters | Planned direction |
+| Threat | Why it matters | Protection or later work |
 | --- | --- | --- |
 | Draining public budgets with fake jobs | Attackers or a bug spend the shared fund | Per-bucket, per-period caps; per-job maximum price; only verified work is paid; anomaly alerts |
 | Fake public-crawl demand | Bogus crawl targets or submitted URLs that exist only to earn | Public queue is created by PrivaSearch policy, not by arbitrary requesters; crawl output verification; per-host and per-domain caps |
@@ -98,7 +98,7 @@ Requirements for any future treasury code: idempotency, transactional updates, e
 
 Status: **implemented in v0.3.0-alpha.1** (`apps/node/src/fetch/`; tests in `tests/fetch-*.test.ts`). These tests are not a security review; residual risks: TLS uses the system trust store, robots are advisory, a node's owner network is only as isolated as its policy. The generic `web.fetch.v1` capability described in [PRIVASEARCH_INTEGRATION.md](PRIVASEARCH_INTEGRATION.md), whose first consumer is the separate PrivaSearch application. The governing rule: the fetch job is a constrained GET for permissioned applications, never a general proxy, and it contains no application policy ([APPLICATION_BOUNDARY.md](APPLICATION_BOUNDARY.md)).
 
-| Threat | Why it matters | Planned direction |
+| Threat | Why it matters | Protection or later work |
 | --- | --- | --- |
 | SSRF to localhost, LAN, link-local or cloud metadata | A fetch job could reach internal services from a node | Reject IP literals and internal names; resolve on the node, check every address (IPv4-mapped, NAT64 and 6to4 by embedded IPv4), connect to the vetted address; re-check every redirect and the connected socket; ignore proxy environment variables; only an owner-local, default-empty CIDR allow list can relax it |
 | DNS rebinding | Name resolves to a public address at check time and a private one at connect time | Connect by the vetted address (pinned lookup), never re-resolve |
@@ -111,11 +111,11 @@ Status: **implemented in v0.3.0-alpha.1** (`apps/node/src/fetch/`; tests in `tes
 | Hostile page content | Text and links are attacker-controlled | Digests are untrusted data, escaped and length-bounded; no JavaScript, no external fetches by the node |
 | Header injection through validators | Caller-supplied conditional headers | Strict regexes on `ETag` and `Last-Modified`; no other header is caller-controlled |
 
-## Data-plane threats (planned)
+## Data-plane threats
 
-Status: **planned for the transfer path (nothing moves yet); the authorization half is implemented in 0.4.0-alpha.2 (see the next sections).** These apply to the future direct-transfer data plane ([DATA_PLANE.md](DATA_PLANE.md), ADR 006, Phase 4 and 5). Today no direct transfer exists and every payload transits the Coordinator within its 32 KiB and 512 KiB limits. The governing rule: a transfer is authorized by a narrow Coordinator-issued authorization and node identity, never by network location; LAN is not trusted.
+Status: **application-to-node transfer is implemented in v0.4.0-alpha.3; node replication/repair remains Phase 5.** These threats apply to the direct-transfer data plane ([DATA_PLANE.md](DATA_PLANE.md), ADR 006). Opaque chunk bytes travel directly application ↔ node; bounded compute-job inputs/results retain their existing Coordinator path. The governing rule: a transfer is authorized by a narrow Coordinator-issued authorization and node identity, never by network location; LAN is not trusted.
 
-| Threat | Why it matters | Planned direction |
+| Threat | Why it matters | Protection or later work |
 | --- | --- | --- |
 | Stolen transfer authorization | A leaked ticket lets someone else store or fetch | Short expiry, one operation, one resource, one node, byte bound, hash binding; the ticket is never a general node credential and is never logged |
 | Replayed authorization | A captured ticket reused to store or fetch again or something else | Non-reusable or explicitly idempotent tickets, node-side replay state, Coordinator-recorded transfer state |
@@ -127,7 +127,7 @@ Status: **planned for the transfer path (nothing moves yet); the authorization h
 | Malicious sender or receiver | Garbage sent, or data accepted and discarded | Hash verification by the receiver, receipts from both ends where needed, later possession and integrity challenges |
 | Application or node lying about completion | False evidence to gain quota, credit or a commit | Completion is a Coordinator state transition backed by evidence from the right party; nothing is billable or rewardable on an issued ticket alone |
 | Endpoint spoofing, DNS or endpoint substitution | An application sends data to an attacker's endpoint | Endpoints come only from the Coordinator and are bound to node identity (open design questions 4 and 5); applications never supply endpoints |
-| Authorization leakage through logs, referrers or URLs | Ticket exposure | Log the reference ID, not the ticket; keep tickets out of URLs where possible; short life limits damage |
+| Authorization leakage through logs, referrers or URLs | Ticket exposure | Fixed aggregate events only; tickets never appear in URLs or logs; short life limits damage |
 | Concurrent duplicate upload | Two writers for one resource | Idempotency keys, single-writer transfer state, deterministic conflict outcome |
 | Race between revocation or expiry and an in-progress transfer | Transfer completes after permission was withdrawn | Defined semantics for fail-fast versus bounded grace (open question 12), transactional transfer state |
 | Accounting double counting | Retries or resumption counted twice | Idempotent evidence keyed by reference ID and bytes verified; only verified useful bytes count (open question 13) |
@@ -165,7 +165,7 @@ Not covered in alpha.1 (later milestones): transfer authorization, replay and th
 
 ## Storage control plane and transfer tickets (Phase 4.0-alpha.2, implemented; no bytes move)
 
-The Coordinator can now record offers, place chunks and sign transfer authorizations ([PHASE4_DESIGN section 16](PHASE4_DESIGN.md#16-40-alpha2-as-built-and-what-changed-from-this-design)). **It carries no chunk bytes, and no route, listener or endpoint exists that could**; what is tested is who may be authorized to do what, and that authorization cannot be forged, widened, replayed, stolen, kept alive after revocation or turned into a stored chunk without a node's evidence. No independent review has been done, and the holder-binding handshake, the persisted replay set and the key lifecycle are the parts that most need one before alpha.3 moves data.
+The Coordinator can now record offers, place chunks and sign transfer authorizations ([PHASE4_DESIGN section 16](PHASE4_DESIGN.md#16-40-alpha2-as-built-and-what-changed-from-this-design)). **The Coordinator carries no chunk bytes; alpha.3 adds the separate authorized node TLS listener**; what is tested is who may be authorized to do what, and that authorization cannot be forged, widened, replayed, stolen, kept alive after revocation or turned into a stored chunk without a node's evidence. No independent review has been done, and the holder-binding handshake, the persisted replay set and the key lifecycle are the parts that most need one before alpha.3 moves data.
 
 | Invariant | Test |
 | --- | --- |
@@ -186,7 +186,8 @@ The Coordinator can now record offers, place chunks and sign transfer authorizat
 | Migration 2 upgrades in place without changing any existing record or giving any credential a service; a failed migration leaves a usable database; applied history cannot be edited; downgrade is refused | `storage-migration.test.ts`, `core.test.ts` |
 | Mixed versions: an older node, admin tool or SDK parses every answer a new Coordinator gives (checked against 0.4.0-alpha.1's real strict schemas), and a new node keeps working against an older Coordinator | `storage-compat.test.ts`, `compat-previous-release.test.ts` |
 
-Open on purpose: any enrolled node may offer storage (whether an operator should be able to restrict this is undecided); a put whose receipt is lost leaves an orphan on the node until alpha.3 reconciles; the Coordinator's view of free space is a hint and the node's own limits are the authority.
+Open on purpose: any enrolled node may offer storage (whether an operator should be able to restrict this is undecided); alpha.3 durably retries lost receipts and reconciles recorded local completion; the Coordinator's view of free space is a hint and the node's own limits are the authority.
+
 
 ## Local control panel threats (post-3.5, implemented)
 
@@ -204,10 +205,20 @@ new enrollment. There is no administrator account/SSO system or key recovery.
 
 A node can lie about its budget or state (for example claim spare RAM it lacks, or claim `DRAINING`/goodbye to shed work); v0.2 does not verify or penalise this, and there is no reputation. The budget is a scheduling hint that protects honest owners, not a guarantee against a malicious node. Owner limits are enforced on the node, and a compromised node is not bound by them. Nothing forces a running handler to stop except its own cooperation with the abort signal; preemption and checkpoint/resume are exercised only with the cooperative `system.hashchain.v1` diagnostic job (tested in-process on Linux, macOS and Windows CI, not against real application workloads, not under memory-hungry or uncooperative handlers, and not on real hardware under owner load). A dishonest node can fabricate schema-valid results for any job type (a hash-chain digest is verifiable by recomputation, but the Coordinator does not recompute it); there is no execution attestation
 or reputation. A holder of a live lease can also keep it alive by renewing until `PRIVANET_MAX_LEASE_MS` (default one hour) even if it is not doing the work, so a malicious node can stall a job for that long per attempt. At-least-once execution can repeat future side effects. SQLite
-is a single-process prototype, not HA. Job queues are bounded per application and finished jobs are deleted after a configurable retention period (v0.2.1), but there is no per-application storage byte quota, audit log or per-tenant rate limit. Production still needs audit policies, a rehearsed restore on the operator's own infrastructure and an independent security review.
+is a single-process prototype, not HA. Job queues are bounded per application and finished jobs are deleted after a configurable retention period (v0.2.1), and the storage control plane separately bounds application bytes, chunks, open transfers and ticket rates. There is no general audit log or per-tenant compute rate limit. Production still needs audit policies, a rehearsed restore on the operator's own infrastructure and an independent security review.
 Passing the automated tests is evidence that specific behaviours work on the CI platforms; it is not a security review and does not make the system production-ready. No independent security review has been done. Checkpoints hold job-derived state on the node's disk in plaintext. The macOS and Windows battery probes and the Windows console-signal handlers have not been exercised on real hardware.
-No public/community enrollment, Sybil resistance, economic rewards, storage
-integrity/durability, malicious-worker isolation, filesystem sandbox, arbitrary
+No public/community enrollment, Sybil resistance, economic rewards, distributed storage
+durability against malicious nodes, malicious-worker isolation, filesystem sandbox, arbitrary
 compute or distributed trust guarantees are claimed. Future handlers require
 individual threat review/resource bounds. Do not deploy community infrastructure
 on the strength of this demo.
+
+## Direct-transfer protections in alpha.3
+
+The implemented [transfer path](DIRECT_TRANSFER.md) adds a tiny opt-in TLS listener, exact certificate pinning and node-bound TLS private-key possession proof, unchanged Ed25519 ticket/holder verification, challenge expiry/consumption, durable single-use replay and authenticated begin binding. Current owner and Coordinator application/node policy are rechecked before commit and during streams. Separate application namespaces prevent physical cross-application deduplication/deletion/existence leaks. GET verifies full at-rest integrity and the SDK verifies received SHA-256 before signing a completion acknowledgement.
+
+Private checksummed replay/receipt state refuses corruption instead of resetting. A write-ahead receipt intent precedes commit; local completion survives lost acknowledgements and process restart, retries with bounded backoff and reconciles within seven days. Completed data is never removed for a temporary receipt outage. Definitive revocation or reconciliation expiry can leave quota-charged orphan data; automatic garbage collection/repair is outside this release. A node remains an untrusted participant: receipts are authenticated node assertions, not Phase 5 possession proofs.
+
+The platform parser, anchored paths, exact lengths, forbidden Transfer-Encoding/ranges, header/connection/challenge/concurrency/request/time limits and streaming owner bandwidth meter bound hostile input. The Coordinator never fetches advertised URLs; the SDK sends protected HTTP only after exact pinned TLS identity. A malicious advertisement can induce an unsuccessful TLS connection attempt, but cannot deliver tickets or bytes to a service without the pinned private key. Public reachability and certificate renewal are operator responsibilities. No secret-shaped material is logged or added to panel/support data.
+
+Tests, namespace traffic proof, measured throughput and the final review record are in [ALPHA3_IMPLEMENTATION_STATUS.md](ALPHA3_IMPLEMENTATION_STATUS.md). Two internal clean review passes do not prove absence of vulnerabilities. Independent external review, malicious-node durability guarantees, replication/repair and production/community hardening remain outstanding.

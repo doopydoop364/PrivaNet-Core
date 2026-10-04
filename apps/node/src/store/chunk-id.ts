@@ -16,9 +16,14 @@ export function chunkDigest(id: unknown): string {
 }
 export const chunkIdOf = (digestHex: string): string => `${CHUNK_ID_PREFIX}${digestHex}`;
 /** `<chunks>/<aa>/<bb>/<64-hex>`: two shard levels keep any one directory small. The only way to turn an identifier into a path. */
-export function chunkPath(chunksDir: string, id: unknown): string {
+export function applicationChunksDir(chunksDir: string, applicationId?: string): string {
+  if (applicationId === undefined) return chunksDir;
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(applicationId)) throw new StoreError('INVALID_ID');
+  return join(chunksDir, `app_${applicationId}`);
+}
+export function chunkPath(chunksDir: string, id: unknown, applicationId?: string): string {
   const hex = chunkDigest(id);
-  return join(chunksDir, hex.slice(0, 2), hex.slice(2, 4), hex);
+  return join(applicationChunksDir(chunksDir, applicationId), hex.slice(0, 2), hex.slice(2, 4), hex);
 }
 /** The names a committed-chunk file and its two shard directories may have. */
 export const isDigestName = (name: string): boolean => /^[0-9a-f]{64}$/.test(name);

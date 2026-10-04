@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const PROTOCOL_VERSION = 1 as const;
-export const SERVICE_VERSION = '0.4.0-alpha.2';
+export const SERVICE_VERSION = '0.4.0-alpha.3';
 export const MAX_BODY_BYTES = 32 * 1024;
 export const ProtocolSchema = z.literal(PROTOCOL_VERSION);
 export const IdSchema = z.uuid();
@@ -160,9 +160,17 @@ export function capabilityKind(id: string): 'job' | 'service' | undefined {
   return undefined;
 }
 const StorageBytesSchema = z.number().int().min(0).max(2 ** 50);
-/** What a node says it can hold right now: owner-allowed capacity and free room (a hint, never a promise: the node re-checks its own quota at every transfer), and the chunk limit it enforces. No endpoint: there is no transfer listener yet. */
+/** Public leaf certificate, never a private key. Exact pin verification is independent of DNS/Web PKI. */
+export const TransferEndpointSchema = z.strictObject({
+  url: z.string().min(9).max(512).refine(value => { try { const u = new URL(value); return u.protocol === 'https:' && !u.username && !u.password && !u.search && !u.hash && u.pathname === '/' && u.origin === value && !/[\\\s%]/.test(value); } catch { return false; } }),
+  certFingerprint: z.string().regex(/^[a-f0-9]{64}$/), certificate: z.string().min(100).max(8192).regex(/^[A-Za-z0-9+/]+={0,2}$/),
+  keyProof: z.string().min(80).max(2048).regex(/^[A-Za-z0-9+/]+={0,2}$/).optional(),
+});
+export type TransferEndpoint = z.infer<typeof TransferEndpointSchema>;
+/** What a node says it can hold right now: owner-allowed capacity and free room (a hint, never a promise: the node re-checks its own quota at every transfer), and the chunk limit it enforces. An endpoint is included only while an explicitly enabled transfer listener exists. */
 export const StorageAdvertisementSchema = z.strictObject({
   capacityBytes: StorageBytesSchema, freeBytes: StorageBytesSchema, maxChunkBytes: z.number().int().min(1).max(STORAGE_MAX_CHUNK_BYTES),
+  transferEndpoint: TransferEndpointSchema.optional(),
 }).refine(advertisement => advertisement.freeBytes <= advertisement.capacityBytes, 'free space exceeds capacity');
 export type StorageAdvertisement = z.infer<typeof StorageAdvertisementSchema>;
 const ADVERTISEMENTS = { 'storage.chunk.v1': StorageAdvertisementSchema } satisfies Record<ServiceId, z.ZodType>;
@@ -387,7 +395,7 @@ export type Job = z.infer<typeof JobSchema>;
 export type Lease = z.infer<typeof LeaseSchema>;
 export type JobError = z.infer<typeof JobErrorSchema>;
 
-// ---- Storage control plane (0.4.0-alpha.2): placement, transfer tickets and their state. Metadata only: no schema here carries chunk bytes, a path, an address or an endpoint. ----
+// ---- Storage control plane (0.4.0-alpha.2): placement, transfer tickets and their state. Metadata only: no schema here carries chunk bytes or a filesystem path. Alpha.3 adds explicitly negotiated endpoint identity. ----
 /** An opaque application label (for quotas and metrics only), for example `drive-chunk`. */
 export const StorageClassSchema = z.string().regex(/^[a-z][a-z0-9._-]{0,31}$/);
 /** A holder key: the canonical base64 of an Ed25519 SubjectPublicKeyInfo (the same encoding as a node's public key). The application makes a fresh pair per transfer and never sends the private half. */
@@ -405,10 +413,10 @@ export const ReplicaStateSchema = z.enum(['RESERVED', 'STORED', 'LOST']);
 export const TransferStateSchema = z.enum(['AUTHORIZED', 'IN_PROGRESS', 'COMPLETED', 'FAILED', 'EXPIRED', 'REVOKED']);
 export type TransferState = z.infer<typeof TransferStateSchema>;
 /** Ask where to store a chunk, and get permission to try: the Coordinator chooses the node and the application sends only bounded metadata. */
-export const PlacementRequestSchema = z.strictObject({ chunkId: ChunkIdSchema, size: z.number().int().min(1).max(STORAGE_MAX_CHUNK_BYTES), class: StorageClassSchema.optional(), holderKey: HolderKeySchema });
-export const TicketRequestSchema = z.strictObject({ operation: StorageOperationSchema, chunkId: ChunkIdSchema, holderKey: HolderKeySchema });
-/** One authorization. The ticket is shown here only: the Coordinator stores the transfer's state, never the ticket. There is deliberately no endpoint field yet. */
-export const TransferGrantSchema = z.strictObject({ transferId: TransferIdSchema, operation: StorageOperationSchema, chunkId: ChunkIdSchema, expiresAt: TimeSchema, ticket: TicketWireSchema });
+export const PlacementRequestSchema = z.strictObject({ chunkId: ChunkIdSchema, size: z.number().int().min(1).max(STORAGE_MAX_CHUNK_BYTES), class: StorageClassSchema.optional(), holderKey: HolderKeySchema, directTransfer: z.literal(true).optional() });
+export const TicketRequestSchema = z.strictObject({ operation: StorageOperationSchema, chunkId: ChunkIdSchema, holderKey: HolderKeySchema, directTransfer: z.literal(true).optional() });
+/** One authorization. The ticket is shown here only: the Coordinator stores the transfer's state, never the ticket. The endpoint identity is returned only for an explicit directTransfer request. */
+export const TransferGrantSchema = z.strictObject({ transferId: TransferIdSchema, operation: StorageOperationSchema, chunkId: ChunkIdSchema, expiresAt: TimeSchema, ticket: TicketWireSchema, transferEndpoint: TransferEndpointSchema.optional() });
 /** `grant` is null when nothing needs transferring (the chunk is already STORED, or a delete had nothing left to remove). */
 export const PlacementResponseSchema = z.strictObject({ chunkId: ChunkIdSchema, size: z.number().int().min(1).max(STORAGE_MAX_CHUNK_BYTES), state: ChunkStateSchema, grant: TransferGrantSchema.nullable() });
 export const TicketResponseSchema = z.strictObject({ chunkId: ChunkIdSchema, state: z.enum(['PENDING', 'STORED', 'DELETING', 'DELETED']), grant: TransferGrantSchema.nullable() });
@@ -426,8 +434,8 @@ export type TransferKeys = z.infer<typeof TransferKeysSchema>;
  * alpha.3 adds a route, not a rule.
  */
 export const TransferReceiptSchema = z.strictObject({
-  transferId: TransferIdSchema, operation: z.enum(['put', 'delete']), applicationId: IdSchema, chunkId: ChunkIdSchema,
-  /** Bytes the node verified and stored (put), or removed (delete). */
+  transferId: TransferIdSchema, operation: StorageOperationSchema, applicationId: IdSchema, chunkId: ChunkIdSchema,
+  /** Bytes the node verified and stored (put), delivered and acknowledged (get), or removed (delete). */
   bytes: z.number().int().min(0).max(STORAGE_MAX_CHUNK_BYTES),
   /** The SHA-256 the node computed over the stored bytes; must equal the digest in the chunk id (put). */
   sha256: z.string().regex(/^[a-f0-9]{64}$/), nodeId: NodeIdSchema, completedAt: TimeSchema,
@@ -448,5 +456,11 @@ export const TICKET_MAX_SKEW_MS = 30000;
 export type KeyRotation = z.infer<typeof KeyRotationSchema>;
 export type ChunkStatus = z.infer<typeof ChunkStatusSchema>;
 export type TransferGrant = z.infer<typeof TransferGrantSchema>;
+/** Authenticated node begin binds the verified grant to the persisted authorization, without transmitting the raw ticket. */
+export const TransferBindingSchema = z.strictObject({ applicationId: IdSchema, chunkId: ChunkIdSchema, operation: StorageOperationSchema, kid: z.string().regex(/^[a-f0-9]{16}$/), holderHash: z.string().regex(/^[a-f0-9]{64}$/), maxBytes: z.number().int().min(0).max(STORAGE_MAX_CHUNK_BYTES), issuedAt: TimeSchema, expiresAt: TimeSchema });
+export type TransferBinding = z.infer<typeof TransferBindingSchema>;
 export type PlacementResponse = z.infer<typeof PlacementResponseSchema>;
 export type TicketResponse = z.infer<typeof TicketResponseSchema>;
+
+/** Separate authenticated clock read: older strict transfer-key responses stay unchanged. */
+export const TransferClockSchema = z.strictObject({ coordinatorId: IdSchema, now: TimeSchema });

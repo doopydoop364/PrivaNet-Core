@@ -2,7 +2,9 @@ import { createServer } from 'node:http';
 import { isIP } from 'node:net';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ZodError } from 'zod';
-import { AuthStartSchema, ChunkIdSchema, EnrollmentTokenIdSchema, IdSchema, TransferIdSchema, InviteIdSchema, TypedCodeSchema, LeaseRequestSchema, MAX_BODY_BYTES, MAX_JOB_WAIT_MS, NodeIdSchema, PROTOCOL_VERSION } from '@privanet/protocol';
+import { AuthStartSchema, ChunkIdSchema, EnrollmentTokenIdSchema, IdSchema, TransferIdSchema, InviteIdSchema, TypedCodeSchema, LeaseRequestSchema, MAX_BODY_BYTES, MAX_JOB_WAIT_MS, NodeIdSchema, PROTOCOL_VERSION, TransferBindingSchema, TransferReceiptSchema } from '@privanet/protocol';
+import { FAILURE_REASONS } from './storage.js';
+import type { FailureReason } from './storage.js';
 import { ApiError, equalSecret } from '@privanet/shared';
 import type { Coordinator } from './service.js';
 
@@ -177,7 +179,27 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
           const node = core.authenticateNode(token);
           if (req.method === 'GET' && path === '/v1/node/self') { send(res, 200, core.nodeSelf(node)); return; }
           // Public verification keys for tickets, on an authenticated node route (the session response is parsed strictly by older nodes, so it cannot grow). An older Coordinator answers 404, which a node treats as "storage unavailable".
+          if (req.method === 'GET' && path === '/v1/node/transfer-clock') { send(res, 200, core.storage.transferClock(core.store.coordinatorId)); return; }
           if (req.method === 'GET' && path === '/v1/node/transfer-keys') { send(res, 200, core.storage.transferKeys(core.store.coordinatorId)); return; }
+          const storageAction = /^\/v1\/node\/storage\/transfers\/([a-f0-9]{32})\/(begin|check|prepare|fail)$/.exec(path);
+          if (req.method === 'POST' && storageAction) {
+            const input = await body(req); core.authenticateNode(token);
+            if (storageAction[2] === 'fail') {
+              const reason = typeof input === 'object' && input !== null && Object.keys(input).length === 1 && 'reason' in input ? String(input.reason) : '';
+              if (!(FAILURE_REASONS as readonly string[]).includes(reason)) throw new ApiError(400, 'INVALID_REQUEST', 'invalid request');
+              core.storage.fail(node.nodeId, storageAction[1]!, reason as FailureReason);
+            } else if (storageAction[2] === 'begin') {
+              core.storage.begin(node.nodeId, storageAction[1]!, TransferBindingSchema.parse(input));
+            } else {
+              if (JSON.stringify(input) !== '{}') throw new ApiError(400, 'INVALID_REQUEST', 'expected empty object');
+              core.storage.check(node.nodeId, storageAction[1]!, storageAction[2] === 'prepare');
+            }
+            send(res, 200, { ok: true }); return;
+          }
+          if (req.method === 'POST' && path === '/v1/node/storage/receipts') {
+            const input = TransferReceiptSchema.parse(await body(req)); core.authenticateNode(token);
+            core.storage.complete(node.nodeId, input, true); send(res, 200, { ok: true }); return;
+          }
           if (req.method === 'POST' && path === '/v1/node/heartbeat') { const input = await body(req); core.authenticateNode(token); core.heartbeat(node.nodeId, input); send(res, 200, { ok: true }); return; }
           if (req.method === 'POST' && path === '/v1/node/jobs/lease') {
             const { waitMs = 0 } = LeaseRequestSchema.parse(await body(req));

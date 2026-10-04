@@ -1,11 +1,14 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { CapabilitiesResponseSchema, HealthSchema, IdSchema, JobSchema, SubmitSchema } from '@privanet/protocol';
+import { CapabilitiesResponseSchema, HealthSchema, IdSchema, JobSchema, SubmitSchema, ChunkIdSchema, PlacementResponseSchema, TicketResponseSchema, ChunkStatusSchema, STORAGE_MAX_CHUNK_BYTES } from '@privanet/protocol';
 import type { Job, JobInputMap, JobOutputMap, JobType } from '@privanet/protocol';
-import { Transport, ApiError } from '@privanet/shared';
+import { Transport, ApiError, generateHolderKey } from '@privanet/shared';
+import { createHash } from 'node:crypto';
+import { transferChunk } from './chunk-transfer.js';
 import type { TransportOptions } from '@privanet/shared';
 export { ApiError };
 export type { Job, JobType, JobInputMap, JobOutputMap } from '@privanet/protocol';
 export interface ClientOptions extends TransportOptions { token: string }
+export interface ChunkOptions { signal?: AbortSignal; timeoutMs?: number }
 /**
  * A failure that says nothing about the job: the Coordinator or the path to it was briefly unavailable (connection refused or reset, a proxy's 502/503/504,
  * a per-request timeout). A read may safely be repeated; the overall deadline still applies.
@@ -24,6 +27,58 @@ export class PrivaNetClient {
   }
   health() { return this.transport.request('GET', '/v1/health', HealthSchema); }
   capabilities() { return this.transport.request('GET', '/v1/capabilities', CapabilitiesResponseSchema, undefined, this.token); }
+  /** Stores opaque bytes directly at the Coordinator-selected node and waits for authoritative STORED metadata. */
+  store(bytes: Uint8Array, options: ChunkOptions & { chunkId?: string; class?: string } = {}): Promise<string> { return this.chunkAction(() => this.storeChunk(bytes, options)); }
+  private async storeChunk(bytes: Uint8Array, options: ChunkOptions & { chunkId?: string; class?: string } = {}): Promise<string> {
+    if (bytes.byteLength < 1 || bytes.byteLength > STORAGE_MAX_CHUNK_BYTES) throw new ApiError(400, 'INVALID_CHUNK_SIZE', 'invalid chunk size');
+    const chunkId = `chk_${createHash('sha256').update(bytes).digest('hex')}`;
+    if (options.chunkId !== undefined && options.chunkId !== chunkId) throw new ApiError(400, 'CHUNK_MISMATCH', 'chunk mismatch');
+    const signal = this.chunkSignal(options); const holder = generateHolderKey();
+    const placed = await this.transport.request('POST', '/v1/storage/placements', PlacementResponseSchema, { directTransfer: true, chunkId, size: bytes.byteLength, holderKey: holder.publicKey, ...(options.class ? { class: options.class } : {}) }, this.token, signal);
+    if (placed.chunkId !== chunkId || placed.size !== bytes.byteLength || (placed.grant && (placed.grant.chunkId !== chunkId || placed.grant.operation !== "put"))) throw new ApiError(403, "TRANSFER_GRANT", "transfer grant mismatch");
+    if (placed.grant) await transferChunk(placed.grant, holder, signal, bytes);
+    await this.waitForChunk(chunkId, false, signal); return chunkId;
+  }
+  /** Returns bytes only after independently checking their SHA-256 and acknowledging the complete read with the holder key. */
+  fetch(chunkId: string, options: ChunkOptions = {}): Promise<Buffer> { return this.chunkAction(() => this.fetchChunk(chunkId, options)); }
+  private async fetchChunk(chunkId: string, options: ChunkOptions = {}): Promise<Buffer> {
+    if (!ChunkIdSchema.safeParse(chunkId).success) throw new ApiError(400, 'INVALID_CHUNK_ID', 'invalid chunk id'); const signal = this.chunkSignal(options); const holder = generateHolderKey();
+    const response = await this.transport.request('POST', '/v1/storage/tickets', TicketResponseSchema, { directTransfer: true, operation: 'get', chunkId, holderKey: holder.publicKey }, this.token, signal);
+    if (response.chunkId !== chunkId) throw new ApiError(403, 'TRANSFER_GRANT', 'transfer grant mismatch');
+    if (!response.grant) throw new ApiError(503, 'TRANSFER_UNAVAILABLE', 'transfer unavailable');
+    if (response.grant.chunkId !== chunkId || response.grant.operation !== "get") throw new ApiError(403, "TRANSFER_GRANT", "transfer grant mismatch");
+    return transferChunk(response.grant, holder, signal);
+  }
+  delete(chunkId: string, options: ChunkOptions = {}): Promise<void> { return this.chunkAction(() => this.deleteChunk(chunkId, options)); }
+  private async deleteChunk(chunkId: string, options: ChunkOptions = {}): Promise<void> {
+    if (!ChunkIdSchema.safeParse(chunkId).success) throw new ApiError(400, 'INVALID_CHUNK_ID', 'invalid chunk id'); const signal = this.chunkSignal(options); const holder = generateHolderKey();
+    let response;
+    try { response = await this.transport.request('POST', '/v1/storage/tickets', TicketResponseSchema, { directTransfer: true, operation: 'delete', chunkId, holderKey: holder.publicKey }, this.token, signal); }
+    catch (error) { if (error instanceof ApiError && error.status === 404) return; throw error; }
+    if (response.chunkId !== chunkId) throw new ApiError(403, 'TRANSFER_GRANT', 'transfer grant mismatch');
+    if (response.grant && (response.grant.chunkId !== chunkId || response.grant.operation !== "delete")) throw new ApiError(403, "TRANSFER_GRANT", "transfer grant mismatch");
+    if (response.grant) await transferChunk(response.grant, holder, signal);
+    await this.waitForChunk(chunkId, true, signal);
+  }
+  private async chunkAction<T>(run: () => Promise<T>): Promise<T> {
+    try { return await run(); } catch (error) {
+      if (error instanceof ApiError) throw error;
+      if (error instanceof Error && ['AbortError', 'TimeoutError'].includes(error.name)) throw new ApiError(408, 'TRANSFER_TIMEOUT', 'transfer timed out');
+      throw new ApiError(503, 'TRANSFER_UNAVAILABLE', 'transfer unavailable');
+    }
+  }
+  private chunkSignal(options: ChunkOptions): AbortSignal {
+    const timeoutMs = options.timeoutMs ?? 300000;
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600000) throw new ApiError(400, 'INVALID_TRANSFER_TIMEOUT', 'invalid transfer timeout');
+    return options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
+  }
+  private async waitForChunk(chunkId: string, deleted: boolean, signal: AbortSignal): Promise<void> {
+    try { for (;;) {
+      try { const status = await this.transport.request('GET', `/v1/storage/chunks/${chunkId}`, ChunkStatusSchema, undefined, this.token, signal); if (!deleted && status.state === 'STORED') return; }
+      catch (error) { if (deleted && error instanceof ApiError && error.status === 404) return; if (!isTransientFailure(error)) throw error; }
+      await delay(100, undefined, { signal });
+    } } catch (error) { if (signal.aborted) throw new ApiError(408, 'COMPLETION_PENDING', 'completion acknowledgement pending'); throw error; }
+  }
   submit<T extends JobType>(type: T, input: JobInputMap[T], idempotencyKey: string): Promise<Job> {
     const request = SubmitSchema.parse({ type, input, idempotencyKey });
     return this.transport.request('POST', '/v1/jobs', JobSchema, request, this.token);

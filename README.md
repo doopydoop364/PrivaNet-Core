@@ -1,7 +1,7 @@
 # PrivaNet Core Foundation
 
 PrivaNet supplies shared infrastructure to separate self-hosted applications.
-PrivaNet (v0.4.0-alpha.2) runs a Coordinator and operator-controlled PrivaNodes, with an application SDK and three typed jobs:
+PrivaNet (v0.4.0-alpha.3) runs a Coordinator and operator-controlled PrivaNodes, with an application SDK and three typed jobs:
 two harmless diagnostics (`system.echo.v1`, the CPU-bound, checkpointable `system.hashchain.v1`) and the constrained, SSRF-guarded `web.fetch.v1`
 that the separate PrivaSearch application uses.
 
@@ -9,14 +9,14 @@ Every job, including on one machine, follows:
 
 **Application → SDK → Coordinator → authenticated node → registered handler → result.**
 
-No search engine, distributed storage, credits, generic compute or remote shell
+No search engine, replicated storage/repair, credits, generic compute or remote shell
 is implemented. No application/local execution bypass exists.
 
 **Control panel.** A running node serves a local-only control panel at `http://127.0.0.1:4040/` (presets, pause, schedule, "why am I idle?", diagnostics, support bundle) and an equivalent CLI (`privanet-node status|pause|resume|policy|config check|support-bundle`). See [docs/NODE_CONTROL_PANEL.md](docs/NODE_CONTROL_PANEL.md).
 
 ## Status and limits
 
-Version **0.4.0-alpha.2** adds the storage control plane (Phase 4.0-alpha.2: the Coordinator records which nodes offer storage, places chunks and signs short-lived, holder-bound transfer tickets; **no chunk bytes move yet** and the protocol is unchanged), on top of 0.4.0-alpha.1's default-off, node-local chunk store. Phase 4 is not complete. Previous: version **0.3.6**: Phase 1 (Core Foundation) and Phase 2 (Adaptive Resource Engine) are complete, and Phase 3's Core side (`web.fetch.v1`, multi-slot nodes, waiting leases) is implemented and measured, and Phase 3.5 (remote node onboarding: invite codes, approval, installers for Linux and Windows, `doctor`, a public-hostname deployment) is implemented with the Windows service steps still to be verified on a real machine; see the [roadmap](ROADMAP.md). Trusted multi-node operation and a separate-host LAN deployment are validated ([multi-node](docs/MULTI_NODE_VALIDATION.md), [deployment](docs/DEPLOYMENT_VALIDATION.md)); first-deployment steps: [FIRST_DEPLOYMENT.md](docs/FIRST_DEPLOYMENT.md). This is a small, operator-run control plane, **not** a production-ready or community-ready network.
+Version **0.4.0-alpha.3** moves opaque chunk bytes directly application ↔ storage node over pinned TLS, with holder-bound tickets, persistent replay protection, owner limits and durable node receipts. The Coordinator carries only authorization and metadata. Storage capacity and direct transfer are separate opt-ins, off by default; compute-only installations open no transfer listener. SDK `store`, `fetch` and `delete` use the same authorized path on local and remote machines. See [direct transfer](docs/DIRECT_TRANSFER.md) for setup, wire protocol and limitations. Replication/repair are Phase 5; PrivaDrive semantics and encryption remain outside Core, and NAT traversal/relay is not included. Previous: version **0.3.6**: Phase 1 (Core Foundation) and Phase 2 (Adaptive Resource Engine) are complete, and Phase 3's Core side (`web.fetch.v1`, multi-slot nodes, waiting leases) is implemented and measured, and Phase 3.5 (remote node onboarding: invite codes, approval, installers for Linux and Windows, `doctor`, a public-hostname deployment) is implemented with the Windows service steps still to be verified on a real machine; see the [roadmap](ROADMAP.md). Trusted multi-node operation and a separate-host LAN deployment are validated ([multi-node](docs/MULTI_NODE_VALIDATION.md), [deployment](docs/DEPLOYMENT_VALIDATION.md)); first-deployment steps: [FIRST_DEPLOYMENT.md](docs/FIRST_DEPLOYMENT.md). This is a small, operator-run control plane, **not** a production-ready or community-ready network.
 
 | State | What |
 | --- | --- |

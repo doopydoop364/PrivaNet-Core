@@ -1,3 +1,4 @@
+import { transferConfig } from './store/transfer-config.js';
 /* eslint-disable @typescript-eslint/no-explicit-any -- the status document is rendered from a published JSON snapshot whose shape is checked where it is produced (status-document.ts) */
 import { openSync, closeSync, writeSync, readFileSync, constants as fsConstants } from 'node:fs';
 import { JobTypeSchema, MAX_JOB_SLOTS } from '@privanet/protocol';
@@ -123,7 +124,7 @@ async function readPolicyArg(path: string): Promise<string> {
 }
 async function policyCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
   const parsed = parse(argv, { flags: [...COMMON.flags, '--force'], values: COMMON.values }); const stateDir = stateDirOf(parsed, env); const [action, arg] = parsed.positional;
-  const context = () => { const enrolled = (() => { try { return readEnrollmentRecordSync(stateDir)?.capabilities; } catch { return undefined; } })(); return { jobSlots: Number(env.PRIVANODE_JOB_SLOTS ?? 1) || 1, ...(enrolled ? { capabilities: enrolled } : {}) }; };
+  const context = () => { const enrolled = (() => { try { return readEnrollmentRecordSync(stateDir)?.capabilities; } catch { return undefined; } })(); return { transferEnv: env, jobSlots: Number(env.PRIVANODE_JOB_SLOTS ?? 1) || 1, ...(enrolled ? { capabilities: enrolled } : {}) }; };
   if ((action === 'import' || action === 'reset' || action === 'preset') && env.PRIVANODE_POLICY_LOCKED === 'true') throw new PolicyError('POLICY_LOCKED_BY_ENVIRONMENT', ['PRIVANODE_POLICY_LOCKED=true: the policy file is authoritative here; change that file (or unset the lock) instead']);
   switch (action) {
     case 'show': {
@@ -179,14 +180,16 @@ async function storageCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo)
   if (parsed.positional[0] !== 'status' || parsed.positional.length !== 1) throw new UsageError('usage: privanet-node storage status [--json]');
   const locked = env.PRIVANODE_POLICY_LOCKED === 'true'; const resolved = await resolvePolicy(stateDir, env.PRIVANODE_POLICY_FILE, { locked });
   const status = await inspectStorage(stateDir, resolved.policy.storage); const source = resolved.source.kind === 'saved' ? 'saved' : resolved.source.kind === 'env-file' ? 'installer-file' : 'default';
+  const direct = transferConfig(resolved.policy, env);
   const gib = (n: number | null): string => n === null ? 'unknown' : bytes(n);
-  done(io, parsed, { ...status, policySource: source, locked }, [
+  done(io, parsed, { ...status, directTransfer: { enabled: direct.enabled, bindAddress: direct.bindAddress, port: direct.port, endpoint: direct.endpoint, maxConcurrent: direct.maxConcurrent, maxConcurrentPuts: direct.maxConcurrentPuts }, policySource: source, locked }, [
     `Storage        ${status.enabled ? 'ENABLED' : 'DISABLED'}   health: ${status.health}${status.error ? `   (${status.error})` : ''}${status.flags.length ? `   flags: ${status.flags.join(', ')}` : ''}`,
     `Policy         ${source}${locked ? '; LOCKED (PRIVANODE_POLICY_LOCKED): the panel and the CLI cannot change it' : ''}`,
     `Quota          ${gib(status.maxBytes)} at most; ${gib(status.reserveFreeBytes)} of the disk always left free`,
     `Stored         ${status.chunkCount} chunk${status.chunkCount === 1 ? '' : 's'}, ${gib(status.committedBytes)}${status.incomingBytes ? `; ${gib(status.incomingBytes)} of unfinished writes` : ''}${status.anomalies ? `; ${status.anomalies} unrecognised entr${status.anomalies === 1 ? 'y' : 'ies'} (left alone)` : ''}`,
     `Room now       ${status.enabled ? gib(status.allowedBytes) : 'none (storage is off)'}${status.freeBytes === null ? '' : `   (disk free: ${gib(status.freeBytes)})`}`,
-    'The store opens no port and nothing can send a chunk to it yet. While it is on and healthy this node tells the Coordinator how much room it has (so a later version can place data here). Lowering a limit never deletes data.'].join('\n'));
+    `Direct TLS     ${direct.enabled ? 'ENABLED' : 'DISABLED'}; bind ${direct.bindAddress}:${direct.port}; endpoint ${direct.endpoint || 'not configured'}; concurrency ${direct.maxConcurrent} (${direct.maxConcurrentPuts} PUTs)`,
+    'Capacity alone opens no transfer listener. Applications use authorized direct TLS transfers. Lowering a limit never deletes data.'].join('\n'));
   return status.health === 'UNSAFE' ? 1 : 0;
 }
 /** `settings`: what the node is using and where each value comes from (environment, saved, enrollment, installer file, default), and what the panel and CLI cannot change because the environment sets it. */

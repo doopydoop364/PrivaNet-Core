@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { AckSchema, JOB_TYPES, RenewResponseSchema, CapabilitiesSchema, ChallengeSchema, HealthSchema, LeaseResponseSchema, NodeSelfSchema, PROTOCOL_VERSION, SERVICE_VERSION, SessionSchema, MAX_JOB_SLOTS, TransferKeysSchema } from '@privanet/protocol';
-import type { JobType, ServicesAdvertisement, Session, TransferKeys } from '@privanet/protocol';
+import { AckSchema, JOB_TYPES, RenewResponseSchema, CapabilitiesSchema, ChallengeSchema, HealthSchema, LeaseResponseSchema, NodeSelfSchema, PROTOCOL_VERSION, SERVICE_VERSION, SessionSchema, MAX_JOB_SLOTS, TransferKeysSchema, TransferClockSchema } from '@privanet/protocol';
+import type { JobType, ServicesAdvertisement, Session, TransferKeys, TransferBinding, TransferReceipt } from '@privanet/protocol';
 import { ApiError, Transport } from '@privanet/shared';
 import type { TransportOptions } from '@privanet/shared';
 import { BindingChangedError, bindCoordinator, loadIdentity, signProof } from './identity.js';
@@ -11,6 +11,7 @@ import type { Handlers } from './handlers.js';
 import type { ResourceEngine } from './resource-engine.js';
 import type { CheckpointStore } from './checkpoint.js';
 import type { TransferMeter } from './transfer-meter.js';
+import { TransferKeyCache } from './store/key-cache.js';
 export interface NodeOptions extends TransportOptions {
   stateDir: string; capabilities: JobType[]; enrollmentToken?: string;
   heartbeatMs?: number; pollMs?: number;
@@ -71,14 +72,21 @@ export class PrivaNode {
   private leaseWaitSupported = true;
   /** Set when the Coordinator rejects the `services` member (an older Coordinator): the node then offers nothing and says so once, and tries again after an hour (the Coordinator may have been upgraded) without needing a restart. */
   private servicesBlockedUntil = 0;
-  /** The Coordinator's public ticket-verification keys for this session (memory only: refetched at every connect; nothing uses them until the transfer listener exists). Null when the Coordinator has none to give. */
-  private ticketKeys: TransferKeys['keys'] | null = null;
-  private ticketKeysTried = false;
+  /** Authenticated, identity-bound verification keys, refreshed while storage is offered. */
+  private transferClockOffset = 0;
+  get transferNow(): number { return Date.now() + this.transferClockOffset; }
+  private ticketKeyCache: TransferKeyCache | undefined;
   private readonly wakeIdle = new AbortController();
   private readonly log: NonNullable<NodeOptions['log']>;
   private identity: Identity | undefined;
   private session: Session | undefined;
   private lastHeartbeat = 0;
+  private registeredTransfer: { url: string; certFingerprint: string } | undefined;
+  /** A recent accepted heartbeat registered this exact listener identity. */
+  transferEndpointRegistered(endpoint: { url: string; certFingerprint: string }): boolean {
+    return !this.draining && Date.now() - this.lastHeartbeat <= Math.max(15000, this.heartbeatMs * 3)
+      && this.registeredTransfer?.url === endpoint.url && this.registeredTransfer.certFingerprint === endpoint.certFingerprint;
+  }
   private enrollmentToken: string | undefined;
   private busy = false;
   private currentJobs = 0;
@@ -121,7 +129,7 @@ export class PrivaNode {
     const identity = this.identity;
     const health = await this.transport.request('GET', '/v1/health', HealthSchema);
     await bindCoordinator(this.options.stateDir, this.transport.origin, health.coordinatorId);
-    this.coordinatorInfo = { serviceVersion: health.serviceVersion, protocolVersion: health.protocolVersion }; this.coordinatorId = health.coordinatorId;
+    this.coordinatorInfo = { serviceVersion: health.serviceVersion, protocolVersion: health.protocolVersion };
     let purpose: 'auth' | 'enroll' = 'auth';
     let challenge;
     try {
@@ -137,7 +145,15 @@ export class PrivaNode {
     const session = await this.transport.request('POST', purpose === 'enroll' ? '/v1/enrollment/proof' : '/v1/auth/proof', SessionSchema,
       signProof(identity, challenge, health.coordinatorId, purpose));
     if (session.nodeId !== identity.nodeId || session.coordinatorId !== health.coordinatorId) throw new Error('Invalid node session binding');
-    this.session = session; this.enrollmentToken = undefined; this.lastHeartbeat = 0; this.contacted(); void this.refreshLabel(session.token); this.ticketKeys = null; this.ticketKeysTried = false;
+    this.session = session; this.enrollmentToken = undefined; this.lastHeartbeat = 0; this.contacted(); void this.refreshLabel(session.token);
+    this.ticketKeyCache ??= new TransferKeyCache(health.coordinatorId, async () => {
+      const current = this.session;
+      if (!current || current.expiresAt <= Date.now()) throw new Error('No node session');
+      const keys = await this.transport.request('GET', '/v1/node/transfer-keys', TransferKeysSchema, undefined, current.token);
+      const before = Date.now();
+      try { const clock = await this.transport.request('GET', '/v1/node/transfer-clock', TransferClockSchema, undefined, current.token); const after = Date.now(); if (clock.coordinatorId === health.coordinatorId && after - before <= 5000) this.transferClockOffset = Math.round(clock.now - (before + after) / 2); } catch { /* alpha.2 has no clock route; retain the prior bounded estimate */ }
+      return keys;
+    }, undefined, () => this.log({ event: 'node.transfer_keys_rejected', code: 'COORDINATOR_MISMATCH' }));
     this.log({ event: purpose === 'enroll' ? 'node.enrolled' : 'node.authenticated' });
   }
   /** Best effort: the owner-side label of this node (an existing authenticated read of its own record). A failure just leaves it unknown. */
@@ -145,19 +161,24 @@ export class PrivaNode {
     try { this.coordinatorLabel = (await this.transport.request('GET', '/v1/node/self', NodeSelfSchema, undefined, token)).displayName ?? null; } catch { /* an older Coordinator, or a hiccup: leave it unknown */ }
   }
   /** The verification keys the Coordinator published to this node, or null (an older Coordinator, storage off at the Coordinator, or none fetched yet). */
-  get transferKeys(): TransferKeys['keys'] | null { return this.ticketKeys ? [...this.ticketKeys] : null; }
+  get transferKeys(): TransferKeys['keys'] | null { return this.ticketKeyCache?.keys ?? null; }
   /**
    * Best effort, and only for a node that offers a service: the public keys that verify tickets, from an authenticated route of its own Coordinator. A different Coordinator's keys are never
    * kept (the answer must name the Coordinator this node is bound to), an older Coordinator's 404 just means "no storage control plane here", and nothing here can fail the node.
    */
-  private async refreshTransferKeys(token: string, coordinatorId: string): Promise<void> {
-    try {
-      const keys = await this.transport.request('GET', '/v1/node/transfer-keys', TransferKeysSchema, undefined, token);
-      if (keys.coordinatorId !== coordinatorId) { this.ticketKeys = null; this.log({ event: 'node.transfer_keys_rejected', code: 'COORDINATOR_MISMATCH' }); return; }
-      this.ticketKeys = keys.keys;
-    } catch { this.ticketKeys = null; }
+  async refreshTransferKeys(): Promise<void> { await this.ticketKeyCache?.refresh(); }
+  async refreshTransferKeysForTicket(wire: string, coordinatorNow: number): Promise<void> { await this.ticketKeyCache?.refreshForTicket(wire, coordinatorNow); }
+  /** Metadata-only calls over the existing node session; reconnects retain the persisted Coordinator binding. */
+  async storageAction(id: string, action: 'begin' | 'check' | 'prepare' | 'fail', reason?: string, binding?: TransferBinding): Promise<void> {
+    await this.ensureSession();
+    try { await this.transport.request('POST', `/v1/node/storage/transfers/${id}/${action}`, AckSchema, action === 'fail' ? { reason } : action === 'begin' ? binding : {}, this.session?.token); }
+    catch (error) { if (error instanceof ApiError && error.status === 401) this.session = undefined; throw error; }
   }
-  private coordinatorId: string | undefined;
+  async storageReceipt(receipt: TransferReceipt): Promise<void> {
+    await this.ensureSession();
+    try { await this.transport.request('POST', '/v1/node/storage/receipts', AckSchema, receipt, this.session?.token); }
+    catch (error) { if (error instanceof ApiError && error.status === 401) this.session = undefined; throw error; }
+  }
   private lastState = '';
   private heartbeat(force = false): Promise<void> {
     // Concurrent lanes and the per-job renewers all ask for heartbeats: share one in-flight request.
@@ -169,7 +190,8 @@ export class PrivaNode {
     const report = this.options.engine?.report;
     // Whether storage is offered is part of the state that triggers an immediate heartbeat, so a withdrawn offer (a store that went unhealthy, an owner pause) reaches the Coordinator at once; the amounts are only hints and ride the ordinary heartbeats.
     const offered = Date.now() >= this.servicesBlockedUntil ? this.options.services?.() : undefined; const services = offered && Object.keys(offered).length > 0 ? offered : undefined;
-    const state = `${this.draining}/${report?.contribution}/${report?.pressure}/${this.capabilities.join(',')}/${services?.['storage.chunk.v1'] ? 'storage' : ''}`;
+    const endpoint = services?.['storage.chunk.v1']?.transferEndpoint;
+    const state = `${this.draining}/${report?.contribution}/${report?.pressure}/${this.capabilities.join(',')}/${services?.['storage.chunk.v1'] ? 'storage' : ''}/${endpoint?.url ?? ''}/${endpoint?.certFingerprint ?? ''}`;
     if (!this.session || (!force && state === this.lastState && Date.now() - this.lastHeartbeat < this.heartbeatMs)) return;
     this.lastState = state;
     try {
@@ -178,8 +200,9 @@ export class PrivaNode {
         jobSlots: this.effectiveSlots, currentJobs: Math.min(this.currentJobs, this.effectiveSlots), lifecycle: this.draining ? 'DRAINING' : 'ACTIVE',
         ...(this.options.engine ? { resources: this.options.engine.report } : {}), ...(services ? { services } : {}),
       }, this.session.token);
-      if (services && !this.ticketKeysTried && this.coordinatorId) { this.ticketKeysTried = true; void this.refreshTransferKeys(this.session.token, this.coordinatorId); }
+      if (services) void this.ticketKeyCache?.refresh();
     } catch (error) {
+      this.registeredTransfer = undefined;
       // An older Coordinator rejects the `services` member (its heartbeat schema is strict). Tried first, before the slots fallback below: a node that merely offers storage must neither stop nor lose its slots.
       if (services && error instanceof ApiError && error.status === 400) {
         this.servicesBlockedUntil = Date.now() + 3600000; this.log({ event: 'node.services_unsupported' }); this.lastState = ''; return this.sendHeartbeat(true);
@@ -190,6 +213,7 @@ export class PrivaNode {
       }
       throw error;
     }
+    this.registeredTransfer = endpoint ? { url: endpoint.url, certFingerprint: endpoint.certFingerprint } : undefined;
     this.lastHeartbeat = Date.now(); this.contacted();
   }
   /** Stop asking for work; the next heartbeat tells the Coordinator this node is draining. */
