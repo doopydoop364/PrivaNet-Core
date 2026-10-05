@@ -60,7 +60,7 @@ export function evaluate(rules: RobotsRules, product: string, pathAndQuery: stri
   return { allowed: best ? best.allow : true, ...(group.crawlDelay === undefined ? {} : { crawlDelaySec: group.crawlDelay }) };
 }
 
-export type RobotsEntry = { kind: 'RULES'; rules: RobotsRules; fetchedAt: number } | { kind: 'ALLOW_ALL'; fetchedAt: number; sha256?: string } | { kind: 'UNAVAILABLE'; fetchedAt: number };
+export type RobotsEntry = { kind: 'RULES'; rules: RobotsRules; fetchedAt: number } | { kind: 'ALLOW_ALL'; fetchedAt: number; sha256?: string } | { kind: 'UNAVAILABLE'; fetchedAt: number; httpStatus?: number; retryAfterSec?: number; error?: { code: 'CONNECT' | 'TLS' | 'TIMEOUT' | 'RESET' | 'PROTOCOL' | 'DECODE'; retryable: boolean } };
 /** In-memory, bounded (LRU by insertion order), time-limited. Nothing is written to disk. */
 export class RobotsCache {
   private readonly map = new Map<string, RobotsEntry>();
