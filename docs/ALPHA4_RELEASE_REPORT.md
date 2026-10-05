@@ -120,3 +120,5 @@ The owner additionally requested a bundled systemd automatic updater. The opt-in
 A package.json version change merged into main now invokes the existing validated release workflow, deriving the tag from the checked-out version and publishing at the exact built commit. Tag and manual triggers remain supported.
 
 The second hosted run passed both macOS versions and all Linux/operator jobs. Windows certificate generation still failed. Generated key/certificate durability handles now open with write access before fsync, which Windows requires; failure diagnostics also identify a fixed operation stage without exposing subprocess output. Local lint/typecheck/build and 31 storage tests (30 pass, one privilege skip) pass. Hosted Windows revalidation remains required.
+
+A ninth updater regression test exercises the actual private service umask: deployed program directories/dependencies are explicitly readable by service accounts, while backups retain private modes; dependency links escaping the staged release are refused.

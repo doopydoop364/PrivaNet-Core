@@ -125,6 +125,21 @@ def extract_release(archive, target, expected_root):
                 destination.chmod(0o755 if member.mode & 0o111 else 0o644)
     return target / expected_root
 
+def program_permissions(root):
+    # The systemd unit's private umask protects backups; program directories and
+    # dependencies must remain readable by the applications' service accounts.
+    root.chmod(0o755)
+    for path in root.rglob('*'):
+        if path.is_symlink():
+            if not path.resolve().is_relative_to(root.resolve()):
+                raise UpdateError('DEPENDENCY_LINK_REFUSED')
+        elif path.is_dir():
+            path.chmod(0o755)
+        elif path.is_file():
+            path.chmod(0o755 if path.stat().st_mode & 0o111 else 0o644)
+        else:
+            raise UpdateError('PACKAGE_LAYOUT_INVALID')
+
 def run(*args, **options):
     return subprocess.run(args, check=True, capture_output=True, text=True, timeout=180, **options)
 
@@ -288,6 +303,7 @@ def apply_update(app, release, backup_root):
                      'npm_config_cache': str(directory / 'npm-cache'), 'npm_config_ignore_scripts': 'true',
                      'npm_config_userconfig': '/dev/null', 'npm_config_globalconfig': '/dev/null',
                      'npm_config_registry': 'https://registry.npmjs.org', 'npm_config_proxy': '', 'npm_config_https_proxy': ''})
+        program_permissions(staged)
         running = [name for name in app['services'] if active(name)]
         snapshot = backup_root / (app['id'] + '-' + str(time.time_ns()))
         try:

@@ -57,6 +57,26 @@ class UpdaterTests(unittest.TestCase):
             self.assertEqual((output / 'run').read_bytes(), b'hello')
             self.assertEqual((output / 'run').stat().st_mode & 0o7777, 0o755)
 
+    def test_program_permissions_under_private_service_umask(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            previous = os.umask(0o077)
+            try:
+                archive = self.archive(root, 'app/bin/run')
+                program = u.extract_release(archive, root / 'out', 'app')
+                (program / 'node_modules/dependency').mkdir(parents=True)
+                (program / 'node_modules/dependency/index.js').write_text('module')
+                u.program_permissions(program)
+                for path in [program, program / 'bin', program / 'node_modules/dependency']:
+                    self.assertEqual(path.stat().st_mode & 0o777, 0o755)
+                self.assertEqual((program / 'node_modules/dependency/index.js').stat().st_mode & 0o777, 0o644)
+                self.assertEqual((program / 'bin/run').stat().st_mode & 0o7777, 0o755)
+                (program / 'outside').symlink_to('/etc')
+                with self.assertRaises(u.UpdateError):
+                    u.program_permissions(program)
+            finally:
+                os.umask(previous)
+
     def test_hash_mismatch_and_ambiguous_manifest_refused(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'archive'
