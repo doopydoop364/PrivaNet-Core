@@ -110,3 +110,11 @@ Rollback: stop activity gracefully, retain a fresh complete backup, restore prev
 Snapshot status can lag a stopped daemon up to 35 seconds. Probe establishes one operator-to-endpoint TLS handshake, not universal reachability or authorization. OpenSSL and private service-owned state required for generation; Windows key secrecy relies on installed ACLs. Shared multi-process node-state ownership is unsupported. Capacity ceiling stays 1 TiB. Lifetime local transfer counters reset at process restart. Lost/definitively rejected receipts can retain quota-charged orphan chunks under existing alpha.3 semantics; no automatic garbage collection was added.
 
 Phase 5 replication, repair, node-to-node transfer, possession challenges, placement failure domains, rebalancing, graceful storage retirement, scrubbing/soak hardening and garbage collection remain deferred. No automatic public certificate issuance, NAT traversal, relay, PrivaDrive encryption/semantics or resource-credit market.
+
+## Release publication follow-up
+
+The first hosted run passed Linux Node 24/26, multi-node, privileged LAN/direct-transfer, Caddy proxy and real Linux installer jobs. macOS exposed a compute fixture depending on busy-runner default resource reserves; its policy now explicitly permits the fixture workload and allows a bounded 45-second completion window. Windows exposed dependence on the machine OpenSSL configuration; certificate generation now supplies its own minimal configuration. Hosted revalidation is required before merging.
+
+The owner additionally requested a bundled systemd automatic updater. The opt-in daily timer checks all supported detected or explicitly registered installations, verifies immutable release archives and checksums, backs up state/configuration while services are stopped, and rolls back program symlinks on restart failure without restoring stale replay state. Eight Python security/rollback tests cover this path. Apps without compatible published assets are reported and retained. See AUTOMATIC_UPDATES.md.
+
+A package.json version change merged into main now invokes the existing validated release workflow, deriving the tag from the checked-out version and publishing at the exact built commit. Tag and manual triggers remain supported.

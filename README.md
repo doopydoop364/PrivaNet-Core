@@ -88,3 +88,5 @@ Runtime state belongs in ignored `var/`, protected with private permissions.
 Never commit identities, credentials, runtime databases or generated build output.
 
 Storage operators: [alpha.4 setup and diagnostics](docs/DIRECT_TRANSFER.md#alpha4-storage-operations), [upgrade and rollback](docs/ALPHA4_UPGRADE.md), [real-machine checklist](docs/ALPHA4_LAN_VALIDATION.md), [validation record](docs/ALPHA4_IMPLEMENTATION_STATUS.md).
+
+Opt-in Linux service updates: [systemd updater and timer](docs/AUTOMATIC_UPDATES.md), bundled with alpha.4 and disabled until explicitly enabled.

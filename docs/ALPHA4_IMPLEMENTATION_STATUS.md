@@ -31,3 +31,7 @@ Replication, node-to-node authorized transfer, repair queues, possession challen
 ## Internal review
 
 Three consecutive internal reviews of the changed storage/data-plane paths found no new actionable defect after the earlier fixes: operator/compatibility semantics, adversarial/durability behavior, and lifecycle/release interactions. These were performed by the implementing agent, not an independent reviewer. The final report records scope and regression evidence. Passing tests and clean internal review do not prove absence of vulnerabilities and are not an independent security review.
+
+## Owner-requested publication follow-up
+
+After candidate preparation the owner requested publication and an opt-in systemd updater. The release workflow now accepts version-tag pushes and fetches complete history for upgrade fixtures; old-release test imports use portable file URLs. The updater is bundled with its installer, config, service/timer and eight Linux Python regression cases, run through the normal Node suite. Actual host/systemd installation remains unperformed. See [automatic updates](AUTOMATIC_UPDATES.md) and PR #42 for hosted validation/publication results.

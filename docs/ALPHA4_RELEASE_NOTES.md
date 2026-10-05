@@ -11,4 +11,6 @@ Includes all alpha.3.1 crawler diagnostics and roundup forwarding fixes, plus Ph
 
 Review [validation report](ALPHA4_RELEASE_REPORT.md), [upgrade and rollback](ALPHA4_UPGRADE.md) and [real-machine checklist](ALPHA4_LAN_VALIDATION.md). The full suite has two confirmed environment-dependent failures; LAN/proxy/privileged isolation and actual hardware validation remain outstanding. Not independently security-reviewed. Phase 5 replication/repair remain deferred.
 
-This candidate has not been published or deployed.
+Also bundles an opt-in [systemd updater/timer](AUTOMATIC_UPDATES.md) with verified-release discovery, private backups and program rollback. Requires managed release symlinks; source/missing-release apps are reported explicitly. No timer is enabled by packaging.
+
+Publication was subsequently authorized by the owner; hosted checks and publication results are tracked on the release PR. No production deployment is authorized by the bundle request.

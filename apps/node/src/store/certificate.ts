@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { isIP } from 'node:net';
 import { join } from 'node:path';
-import { mkdtemp, chmod, rename, rm, open } from 'node:fs/promises';
+import { mkdtemp, chmod, rename, rm, open, writeFile } from 'node:fs/promises';
 import { privateDirectory } from '@privanet/shared';
 import { loadTransferTls } from './tls.js';
 import type { ResourcePolicy } from '../resource-policy.js';
@@ -17,7 +17,9 @@ export async function generateStorageCertificate(stateDir: string, ip: string, p
   const target = join(directory, `transfer-tls-${temporary.split('-').at(-1)}`);
   let published = false;
   try {
-    await run('openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-sha256', '-days', '365', '-subj', '/CN=PrivaNode transfer', '-addext', `subjectAltName=IP:${ip}`, '-keyout', join(temporary, 'key.pem'), '-out', join(temporary, 'certificate.pem')], { timeout: 10000, maxBuffer: 16384, windowsHide: true });
+    await writeFile(join(temporary, 'openssl.cnf'), '[req]\ndistinguished_name=dn\n[dn]\n', { mode: 0o600 });
+    await run('openssl', ['req', '-config', join(temporary, 'openssl.cnf'), '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-sha256', '-days', '365', '-subj', '/CN=PrivaNode transfer', '-addext', `subjectAltName=IP:${ip}`, '-keyout', join(temporary, 'key.pem'), '-out', join(temporary, 'certificate.pem')], { timeout: 10000, maxBuffer: 16384, windowsHide: true });
+    await rm(join(temporary, 'openssl.cnf'));
     await chmod(join(temporary, 'key.pem'), 0o600); await chmod(join(temporary, 'certificate.pem'), 0o600);
     for (const name of ['key.pem', 'certificate.pem']) { const file = await open(join(temporary, name), 'r'); try { await file.sync(); } finally { await file.close(); } }
     if (process.platform !== 'win32') { const folder = await open(temporary, 'r'); try { await folder.sync(); } finally { await folder.close(); } }

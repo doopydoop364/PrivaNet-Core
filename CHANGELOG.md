@@ -17,6 +17,7 @@ Phase 4 storage hardening and operator experience; protocol remains 1. Release c
 - Add node-local OpenSSL P-256 IP-SAN certificate generation and versioned renewal, with private keys, atomic directory publication, preserved old keys and fresh-grant guidance.
 - Add explicit operator-side pinned TLS probe using exact registered endpoint identity, without a ticket, HTTP payload or Coordinator probing. Detailed pool reporting is negotiated to preserve strict alpha.3 summaries.
 - Show quota, reserve, incoming reservations and overcommit planning; retain chunks on disabling or reducing capacity. Fix policy-backup symlink following and unsafe backup permissions.
+- Bundle an opt-in Linux systemd updater/timer for managed Priva applications: published-release discovery, checksums, stopped-state backups, retained program rollback, stable/prerelease channels and same-series updates. Unmanaged/source or missing-release apps are reported explicitly; no timer is automatically activated. See [automatic updates](docs/AUTOMATIC_UPDATES.md).
 - Add alpha.4 regression/upgrade coverage and real deployment checklist. No replication, repair, automatic public certificate issuance, NAT traversal or relay; independent review and real-machine validation remain outstanding.
 
 See [implementation and validation status](docs/ALPHA4_IMPLEMENTATION_STATUS.md), [setup](docs/DIRECT_TRANSFER.md) and [upgrade/rollback](docs/ALPHA4_UPGRADE.md).

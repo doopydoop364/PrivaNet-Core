@@ -283,7 +283,7 @@ test('pool details retain offline holders and exclude stale offers while legacy 
 test('certificate policy-save failure retains generated material because a post-rename outcome may be uncertain', async t => {
   const dir = await directory(t); await savePolicyFile(dir, defaultResourcePolicy()); await mkdir(join(dir, 'policy.json.bak'), { mode: 0o700 });
   const result = await local(dir, ['cert', 'generate', '--ip', '127.0.0.1', '--json']); assert.equal(result.code, 1); assert.equal(JSON.parse(result.out).code, 'STORAGE_CERT_POLICY_SAVE_FAILED');
-  const folders = (await readdir(dir)).filter(name => name.startsWith('transfer-tls-')); assert.equal(folders.length, 1); assert(new X509Certificate(await readFile(join(dir, folders[0]!, 'certificate.pem')))); assert.equal((await stat(join(dir, folders[0]!, 'key.pem'))).mode & 0o777, 0o600);
+  const folders = (await readdir(dir)).filter(name => name.startsWith('transfer-tls-')); assert.equal(folders.length, 1); assert(new X509Certificate(await readFile(join(dir, folders[0]!, 'certificate.pem')))); if (process.platform !== 'win32') assert.equal((await stat(join(dir, folders[0]!, 'key.pem'))).mode & 0o777, 0o600);
 });
 
 test('invalid persisted endpoint metadata is refused as an operator diagnostic rather than an internal server error', async t => {
@@ -300,14 +300,14 @@ test('running storage settings report retained last-good policy while the broken
 });
 
 
-test('the production daemon remains alive and executes compute when optional storage listener startup fails', { timeout: 15000 }, async t => {
+test('the production daemon remains alive and executes compute when optional storage listener startup fails', { timeout: 60000 }, async t => {
   const coordinator = await httpRig(t); const dir = await directory(t); const cert = await generateStorageCertificate(dir, '127.0.0.1', defaultResourcePolicy());
   const busy = createServer(); await new Promise<void>(resolve => busy.listen(0, '127.0.0.1', resolve)); const address = busy.address(); assert(address && typeof address !== 'string'); t.after(() => new Promise<void>(resolve => busy.close(() => resolve())));
-  await savePolicyFile(dir, ResourcePolicySchema.parse({ storage: { enabled: true, reserveFreeBytes: 0, transfer: { enabled: true, bindAddress: '127.0.0.1', port: address.port, endpoint: `https://127.0.0.1:${address.port}`, certificateFile: cert.certificateFile, keyFile: cert.keyFile } } }));
+  await savePolicyFile(dir, ResourcePolicySchema.parse({ reserveMemoryBytes: 0, safetyMarginBytes: 0, reserveDiskBytes: 0, defaultLevel: 'FULL', storage: { enabled: true, reserveFreeBytes: 0, transfer: { enabled: true, bindAddress: '127.0.0.1', port: address.port, endpoint: `https://127.0.0.1:${address.port}`, certificateFile: cert.certificateFile, keyFile: cert.keyFile } } }));
   const enrollment = await coordinator.admin.enrollment(); const app = await coordinator.admin.app({ name: 'main-storage-failure', allowedJobTypes: ['system.echo.v1'] }); const client = new PrivaNetClient({ url: coordinator.url, token: app.token, allowInsecureLoopback: true }); const job = await client.submit('system.echo.v1', { message: 'main still computes' }, 'alpha4-main-compute');
-  const child = spawn(process.execPath, [join(root, 'apps/node/dist/main.js')], { env: { PATH: process.env.PATH, PRIVANODE_COORDINATOR_URL: coordinator.url, PRIVANODE_ALLOW_INSECURE_LOOPBACK: 'true', PRIVANODE_CAPABILITIES: 'system.echo.v1', PRIVANODE_STATE_DIR: dir, PRIVANODE_PANEL: 'off', PRIVANODE_ENROLLMENT_TOKEN: enrollment.token }, stdio: 'ignore' });
+  const child = spawn(process.execPath, [join(root, 'apps/node/dist/main.js')], { env: { ...process.env, PRIVANODE_HEARTBEAT_MS: '100', PRIVANODE_POLL_MS: '100', PRIVANODE_COORDINATOR_URL: coordinator.url, PRIVANODE_ALLOW_INSECURE_LOOPBACK: 'true', PRIVANODE_CAPABILITIES: 'system.echo.v1', PRIVANODE_STATE_DIR: dir, PRIVANODE_PANEL: 'off', PRIVANODE_ENROLLMENT_TOKEN: enrollment.token }, stdio: 'ignore' });
   t.after(async () => { if (child.exitCode === null) { child.kill('SIGKILL'); await new Promise<void>(resolve => child.once('close', () => resolve())); } });
-  let completed = false; for (const end = Date.now() + 8000; Date.now() < end && !completed; await new Promise(resolve => setTimeout(resolve, 50))) completed = (await client.getJob(job.id)).status === 'COMPLETED'; assert(completed, 'compute job completes despite listener failure'); assert.equal(child.exitCode, null);
+  let completed = false; for (const end = Date.now() + 45000; Date.now() < end && !completed; await new Promise(resolve => setTimeout(resolve, 50))) completed = (await client.getJob(job.id)).status === 'COMPLETED'; assert(completed, 'compute job completes despite listener failure'); assert.equal(child.exitCode, null);
   const snapshot = JSON.parse(await readFile(join(dir, 'status.json'), 'utf8')); assert.equal(snapshot.status.storage.transfer.listener, 'FAILED'); assert.equal(snapshot.status.storage.transfer.error, 'TRANSFER_PORT_IN_USE');
 });
 

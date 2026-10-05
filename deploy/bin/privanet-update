@@ -1,0 +1,369 @@
+#!/usr/bin/env python3
+"""Opt-in immutable-release updater. No shell, git reset, enrollment or state restore."""
+import argparse
+import contextlib
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import shutil
+import signal
+import subprocess
+import tarfile
+import tempfile
+import time
+import urllib.parse
+import urllib.request
+
+REPOS = {'core': 'doopydoop364/PrivaNet-Core', 'search': 'doopydoop364/privasearch', 'proxy': 'doopydoop364/privaproxy', 'drive': 'doopydoop364/PrivaDrive'}
+VERSION = re.compile(r'^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$')
+MAX_ARCHIVE = 512 * 1024 * 1024
+MAX_EXPANDED = 2 * 1024 * 1024 * 1024
+
+class UpdateError(Exception):
+    pass
+
+def emit(app, code, **facts):
+    print(json.dumps({'app': app, 'code': code, **facts}), flush=True)
+
+def version_key(value):
+    match = VERSION.fullmatch(value)
+    if not match:
+        raise UpdateError('VERSION_INVALID')
+    pre = match[4]
+    parts = tuple((0, int(p)) if p.isdigit() else (1, p) for p in pre.split('.')) if pre else ()
+    return tuple(map(int, match.group(1, 2, 3))), pre is None, parts
+
+def select_release(releases, current, channel):
+    key = version_key(current)
+    choices = []
+    for release in releases:
+        if release.get('draft') or (release.get('prerelease') and channel != 'prerelease'):
+            continue
+        try:
+            candidate = version_key(release['tag_name'])
+        except (KeyError, UpdateError):
+            continue
+        # Automatic updates stay within the installed major/minor series.
+        if candidate[0][:2] == key[0][:2] and candidate > key:
+            choices.append((candidate, release))
+    return max(choices, key=lambda item: item[0])[1] if choices else None
+
+def allowed_url(url):
+    parsed = urllib.parse.urlsplit(url)
+    hosts = {'api.github.com', 'github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com'}
+    if parsed.scheme != 'https' or parsed.hostname not in hosts or parsed.username or parsed.password or parsed.port not in (None, 443):
+        raise UpdateError('DOWNLOAD_ORIGIN_REFUSED')
+
+class SafeRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        allowed_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+def download(url, maximum, destination=None):
+    allowed_url(url)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), SafeRedirect())
+    request = urllib.request.Request(url, headers={'User-Agent': 'PrivaNet-Updater/1', 'Accept': 'application/vnd.github+json'})
+    total = 0
+    started = time.monotonic()
+    chunks = []
+    with opener.open(request, timeout=30) as response:
+        with open(destination, 'xb') if destination else contextlib.nullcontext() as output:
+            while True:
+                chunk = response.read(65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if time.monotonic() - started > 300:
+                    raise UpdateError('DOWNLOAD_DEADLINE')
+                if total > maximum:
+                    raise UpdateError('DOWNLOAD_TOO_LARGE')
+                if output:
+                    output.write(chunk)
+                else:
+                    chunks.append(chunk)
+    return b''.join(chunks)
+
+def verify_checksum(manifest, filename, archive):
+    entries = []
+    for line in manifest.decode('utf-8').splitlines():
+        match = re.fullmatch(r'([a-fA-F0-9]{64}) [ *](.+)', line)
+        if match and match[2] == filename:
+            entries.append(match[1].lower())
+    if len(entries) != 1:
+        raise UpdateError('CHECKSUM_MISSING_OR_DUPLICATE')
+    digest = hashlib.sha256()
+    with open(archive, 'rb') as source:
+        for block in iter(lambda: source.read(65536), b''):
+            digest.update(block)
+    if digest.hexdigest() != entries[0]:
+        raise UpdateError('CHECKSUM_MISMATCH')
+
+def extract_release(archive, target, expected_root):
+    total = 0
+    names = set()
+    with tarfile.open(archive, 'r:gz') as package:
+        for member in package:
+            path = PurePosixPath(member.name)
+            if path.is_absolute() or '..' in path.parts or not path.parts or path.parts[0] != expected_root or '\\' in member.name:
+                raise UpdateError('ARCHIVE_PATH_REFUSED')
+            if not (member.isfile() or member.isdir()) or member.name in names:
+                raise UpdateError('ARCHIVE_TYPE_REFUSED')
+            names.add(member.name)
+            total += member.size
+            if total > MAX_EXPANDED or len(names) > 100000:
+                raise UpdateError('ARCHIVE_TOO_LARGE')
+            destination = target.joinpath(*path.parts)
+            if member.isdir():
+                destination.mkdir(parents=True, exist_ok=True, mode=0o755)
+            else:
+                destination.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+                with package.extractfile(member) as source, open(destination, 'xb') as output:
+                    shutil.copyfileobj(source, output)
+                destination.chmod(0o755 if member.mode & 0o111 else 0o644)
+    return target / expected_root
+
+def run(*args, **options):
+    return subprocess.run(args, check=True, capture_output=True, text=True, timeout=180, **options)
+
+def service_exists(name):
+    try:
+        return run('systemctl', 'show', name, '--property=LoadState', '--value').stdout.strip() == 'loaded'
+    except subprocess.SubprocessError:
+        return False
+
+def active(name):
+    return subprocess.run(['systemctl', 'is-active', '--quiet', name], timeout=15).returncode == 0
+
+def safe_root_path(path, prefix, symlink=False):
+    path = Path(path)
+    if not path.is_absolute() or '..' in path.parts or not path.is_relative_to(prefix):
+        raise UpdateError('PATH_REFUSED')
+    for item in list(path.parents)[::-1] + [path]:
+        if not item.exists() and not item.is_symlink():
+            continue
+        info = item.lstat()
+        if (item.is_symlink() and not (symlink and item == path)) or info.st_uid != 0 or info.st_mode & 0o022:
+            # Symlink mode bits have no write-permission meaning.
+            if not (symlink and item == path and item.is_symlink() and info.st_uid == 0):
+                raise UpdateError('PATH_UNSAFE')
+    return path
+
+def atomic_link(link, target):
+    temporary = link.with_name(link.name + '.updater-' + str(os.getpid()))
+    try:
+        os.symlink(target, temporary)
+        os.replace(temporary, link)
+        descriptor = os.open(link.parent, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        if temporary.is_symlink():
+            temporary.unlink()
+
+def reserve_margin(app):
+    margin = 1024 ** 3
+    if app['kind'] == 'core':
+        for root in app['backupPaths']:
+            for name in ('policy.json', 'node-policy.json'):
+                path = Path(root) / name
+                if not path.is_file():
+                    continue
+                if path.stat().st_size > 65536:
+                    raise UpdateError('POLICY_RESERVE_UNREADABLE')
+                data = json.loads(path.read_text())
+                policy = data.get('policy', data)
+                reserve = policy.get('storage', {}).get('reserveFreeBytes', 0)
+                if not isinstance(reserve, int) or isinstance(reserve, bool) or reserve < 0 or reserve > 2 ** 40:
+                    raise UpdateError('POLICY_RESERVE_UNREADABLE')
+                margin = max(margin, reserve)
+    return margin
+
+def backup(app, directory):
+    paths = [Path(p) for p in app['backupPaths'] if Path(p).exists()]
+    size = sum(p.stat().st_size for root in paths for p in ([root] if root.is_file() else root.rglob('*')) if p.is_file() and not p.is_symlink())
+    if shutil.disk_usage(directory.parent).free < size + reserve_margin(app):
+        raise UpdateError('BACKUP_SPACE_INSUFFICIENT')
+    directory.mkdir(mode=0o700, parents=True, exist_ok=False)
+    with tarfile.open(directory / 'state-and-config.tar.gz', 'w:gz', dereference=False) as archive:
+        for path in paths:
+            archive.add(path, arcname=str(path).lstrip('/'))
+    (directory / 'previous-release.txt').write_text(str(Path(app['link']).resolve()) + '\n')
+    for path in directory.iterdir():
+        path.chmod(0o600)
+
+DEFAULTS = [
+    {'id': 'core', 'kind': 'core', 'link': '/opt/privanet', 'services': ['privanet-coordinator.service', 'privanet-node.service', 'privanet-roundup.service'], 'backupPaths': ['/var/lib/privanet', '/var/lib/privanet-node', '/etc/privanet']},
+    {'id': 'node', 'kind': 'core', 'link': '/opt/privanet-node/current', 'services': ['privanet-node.service'], 'backupPaths': ['/var/lib/privanet-node', '/etc/privanet']},
+    {'id': 'search', 'kind': 'search', 'link': '/opt/privasearch', 'services': ['privasearch.service'], 'backupPaths': ['/var/lib/privasearch', '/etc/privasearch']},
+    {'id': 'proxy', 'kind': 'proxy', 'link': '/opt/privaproxy', 'services': ['privaproxy.service'], 'backupPaths': ['/var/lib/privaproxy', '/etc/privaproxy']},
+    {'id': 'drive', 'kind': 'drive', 'link': '/opt/privadrive', 'services': ['privadrive.service'], 'backupPaths': ['/var/lib/privadrive', '/etc/privadrive']},
+]
+
+def detect_apps(config):
+    apps = []
+    assigned = set()
+    for raw in config.get('apps', DEFAULTS):
+        app = dict(raw)
+        if app.get('kind') not in REPOS or not re.fullmatch(r'[a-z][a-z0-9-]{0,31}', app.get('id', '')):
+            raise UpdateError('APP_CONFIG_INVALID')
+        link = safe_root_path(app['link'], '/opt', symlink=True)
+        if not link.is_symlink():
+            if link.exists() or any(service_exists(s) for s in app['services']):
+                emit(app['id'], 'UNMANAGED_INSTALLATION', detail='requires a root-owned release symlink and explicit external state/config backup paths')
+            continue
+        current_root = safe_root_path(link.resolve(strict=True), '/opt')
+        if any((current_root / name).exists() for name in ('.env', 'var', 'data')):
+            emit(app['id'], 'EXTERNAL_STATE_CONFIG_REQUIRED')
+            continue
+        selected = []
+        for service in app['services']:
+            if not re.fullmatch(r'[a-zA-Z0-9_.@-]+\.service', service):
+                raise UpdateError('SERVICE_CONFIG_INVALID')
+            if service in assigned or not service_exists(service):
+                continue
+            command = run('systemctl', 'show', service, '--property=ExecStart', '--value').stdout
+            # A service's program must use this release link; auxiliary Core wrappers
+            # explicitly load /opt/privanet and are restarted with the core group.
+            if str(link) + '/' not in command and not (app['kind'] == 'core' and service == 'privanet-roundup.service' and '/usr/local/bin/privanet-roundup-api' in command):
+                continue
+            selected.append(service)
+            assigned.add(service)
+        if not selected:
+            continue
+        for path in app['backupPaths']:
+            if not Path(path).is_absolute() or '..' in Path(path).parts or not (Path(path).is_relative_to('/var/lib') or Path(path).is_relative_to('/etc')):
+                raise UpdateError('BACKUP_PATH_REFUSED')
+        app['services'] = selected
+        app['channel'] = app.get('channel', config.get('channel', 'stable'))
+        if app['channel'] not in ('stable', 'prerelease'):
+            raise UpdateError('CHANNEL_INVALID')
+        apps.append(app)
+    return apps
+
+def apply_update(app, release, backup_root):
+    version = release['tag_name'].removeprefix('v')
+    kind = app['kind']
+    root = f'privanet-{version}-linux' if kind == 'core' else f'priva{kind}-{version}'
+    filename = root + '.tar.gz'
+    names = {asset.get('name') for asset in release.get('assets', [])}
+    if not {filename, 'SHA256SUMS.txt'} <= names:
+        raise UpdateError('VERIFIED_RELEASE_ASSETS_UNAVAILABLE')
+    for path in app['backupPaths']:
+        if backup_root.is_relative_to(Path(path)) or Path(path).is_relative_to(backup_root):
+            raise UpdateError('RECURSIVE_BACKUP_REFUSED')
+    link = Path(app['link'])
+    old = link.resolve(strict=True)
+    destination = link.parent / root
+    if destination.exists() or destination.is_symlink():
+        raise UpdateError('DESTINATION_ALREADY_EXISTS')
+    if shutil.disk_usage(link.parent).free < MAX_EXPANDED + reserve_margin(app):
+        raise UpdateError('STAGING_SPACE_INSUFFICIENT')
+    with tempfile.TemporaryDirectory(prefix='.privanet-update-', dir=link.parent) as temp:
+        directory = Path(temp)
+        archive = directory / filename
+        base = f'https://github.com/{REPOS[kind]}/releases/download/{release["tag_name"]}/'
+        manifest = download(base + 'SHA256SUMS.txt', 1024 * 1024)
+        download(base + filename, MAX_ARCHIVE, archive)
+        verify_checksum(manifest, filename, archive)
+        staged = extract_release(archive, directory / 'unpack', root)
+        package = json.loads((staged / 'package.json').read_text())
+        if package.get('version') != version:
+            raise UpdateError('PACKAGE_VERSION_MISMATCH')
+        if kind == 'core':
+            for executable in ('privanet-coordinator', 'privanet-node'):
+                if not (staged / 'bin' / executable).is_file():
+                    raise UpdateError('PACKAGE_LAYOUT_INVALID')
+        else:
+            # Locked production dependencies; never run downloaded lifecycle scripts
+            # as root. PrivaSearch's published archive excludes node_modules.
+            if not (staged / 'package-lock.json').is_file() or not (staged / 'dist/main.js').is_file():
+                raise UpdateError('PACKAGE_LAYOUT_INVALID')
+            run('npm', 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', cwd=staged,
+                env={'PATH': os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin'), 'HOME': str(directory),
+                     'npm_config_cache': str(directory / 'npm-cache'), 'npm_config_ignore_scripts': 'true',
+                     'npm_config_userconfig': '/dev/null', 'npm_config_globalconfig': '/dev/null',
+                     'npm_config_registry': 'https://registry.npmjs.org', 'npm_config_proxy': '', 'npm_config_https_proxy': ''})
+        running = [name for name in app['services'] if active(name)]
+        snapshot = backup_root / (app['id'] + '-' + str(time.time_ns()))
+        try:
+            for service in reversed(running):
+                run('systemctl', 'stop', service)
+            backup(app, snapshot)
+            os.rename(staged, destination)
+            atomic_link(link, destination)
+            for service in running:
+                run('systemctl', 'start', service)
+            for _ in range(3):
+                time.sleep(2)
+                if not all(active(service) for service in running):
+                    raise UpdateError('SERVICE_START_FAILED')
+            emit(app['id'], 'UPDATED', version=version, backup=str(snapshot), verification='systemd-active; application/network health not established')
+        except Exception:
+            for service in reversed(running):
+                with contextlib.suppress(Exception):
+                    run('systemctl', 'stop', service)
+            atomic_link(link, old)
+            for service in running:
+                run('systemctl', 'start', service)
+            # Never restore old replay/receipts or databases over newer activity.
+            emit(app['id'], 'PROGRAM_ROLLED_BACK', stateRestored=False, backup=str(snapshot))
+            raise
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config', default='/etc/privanet/updater.json')
+    parser.add_argument('--check', action='store_true', help='report candidates without download/install/restart')
+    args = parser.parse_args()
+    if os.geteuid() != 0:
+        raise UpdateError('ROOT_REQUIRED')
+    def interrupted(_number, _frame):
+        raise UpdateError('UPDATE_INTERRUPTED')
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGINT, interrupted)
+    config_path = safe_root_path(args.config, '/etc')
+    config = json.loads(config_path.read_text())
+    if set(config) - {'version', 'channel', 'apps', 'backupRoot'} or config.get('version') != 1:
+        raise UpdateError('CONFIG_INVALID')
+    backup_root = safe_root_path(config.get('backupRoot', '/var/lib/privanet-updater/backups'), '/var/lib')
+    backup_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    safe_root_path(backup_root, '/var/lib')
+    if backup_root.stat().st_mode & 0o077:
+        raise UpdateError('BACKUP_DIRECTORY_NOT_PRIVATE')
+    lock = backup_root.parent / 'updater.lock'
+    with open(lock, 'a') as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        errors = 0
+        apps = detect_apps(config)
+        if not apps:
+            emit('all', 'NO_MANAGED_INSTALLATIONS')
+        for app in apps:
+            try:
+                current = json.loads((Path(app['link']) / 'package.json').read_text())['version']
+                releases = json.loads(download(f'https://api.github.com/repos/{REPOS[app["kind"]]}/releases?per_page=100', 4 * 1024 * 1024))
+                if not releases:
+                    emit(app['id'], 'NO_PUBLISHED_RELEASES')
+                    continue
+                release = select_release(releases, current, app['channel'])
+                if not release:
+                    emit(app['id'], 'UP_TO_DATE', version=current, channel=app['channel'])
+                elif args.check:
+                    emit(app['id'], 'UPDATE_AVAILABLE', current=current, target=release['tag_name'])
+                else:
+                    apply_update(app, release, backup_root)
+            except Exception as error:
+                errors += 1
+                # No raw HTTP response, environment, file content or exception text.
+                emit(app['id'], error.args[0] if isinstance(error, UpdateError) else 'UPDATE_FAILED')
+        return 1 if errors else 0
+
+if __name__ == '__main__':
+    try:
+        raise SystemExit(main())
+    except (UpdateError, OSError, ValueError, subprocess.SubprocessError):
+        emit('all', 'UPDATER_CONFIGURATION_OR_RUNTIME_ERROR')
+        raise SystemExit(1)
