@@ -140,6 +140,19 @@ def program_permissions(root):
         else:
             raise UpdateError('PACKAGE_LAYOUT_INVALID')
 
+def validate_release_layout(staged, kind):
+    lock = staged / 'package-lock.json'
+    if kind == 'core':
+        for executable in ('privanet-coordinator', 'privanet-node'):
+            if not (staged / 'bin' / executable).is_file():
+                raise UpdateError('PACKAGE_LAYOUT_INVALID')
+        return
+    if not lock.is_file():
+        raise UpdateError('PACKAGE_LAYOUT_INVALID')
+    entrypoint = staged / ('bin/privaproxy.js' if kind == 'proxy' else 'dist/main.js')
+    if not entrypoint.is_file():
+        raise UpdateError('PACKAGE_LAYOUT_INVALID')
+
 def run(*args, **options):
     return subprocess.run(args, check=True, capture_output=True, text=True, timeout=180, **options)
 
@@ -289,15 +302,10 @@ def apply_update(app, release, backup_root):
         package = json.loads((staged / 'package.json').read_text())
         if package.get('version') != version:
             raise UpdateError('PACKAGE_VERSION_MISMATCH')
-        if kind == 'core':
-            for executable in ('privanet-coordinator', 'privanet-node'):
-                if not (staged / 'bin' / executable).is_file():
-                    raise UpdateError('PACKAGE_LAYOUT_INVALID')
-        else:
+        validate_release_layout(staged, kind)
+        if kind != 'core':
             # Locked production dependencies; never run downloaded lifecycle scripts
-            # as root. PrivaSearch's published archive excludes node_modules.
-            if not (staged / 'package-lock.json').is_file() or not (staged / 'dist/main.js').is_file():
-                raise UpdateError('PACKAGE_LAYOUT_INVALID')
+            # as root. Published application archives exclude node_modules.
             run('npm', 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', cwd=staged,
                 env={'PATH': os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin'), 'HOME': str(directory),
                      'npm_config_cache': str(directory / 'npm-cache'), 'npm_config_ignore_scripts': 'true',
@@ -390,6 +398,15 @@ def main():
 if __name__ == '__main__':
     try:
         raise SystemExit(main())
-    except (UpdateError, OSError, ValueError, subprocess.SubprocessError):
+    except UpdateError as error:
+        emit('all', error.args[0] if error.args else 'UPDATER_CONFIGURATION_OR_RUNTIME_ERROR')
+        raise SystemExit(1)
+    except FileNotFoundError:
+        emit('all', 'UPDATER_CONFIG_MISSING')
+        raise SystemExit(1)
+    except json.JSONDecodeError:
+        emit('all', 'CONFIG_INVALID')
+        raise SystemExit(1)
+    except (OSError, ValueError, subprocess.SubprocessError):
         emit('all', 'UPDATER_CONFIGURATION_OR_RUNTIME_ERROR')
         raise SystemExit(1)

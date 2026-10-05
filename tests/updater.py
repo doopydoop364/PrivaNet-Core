@@ -87,6 +87,24 @@ class UpdaterTests(unittest.TestCase):
             (root / 'package.json').write_text('{"version":"0.4.0-alpha.4"}')
             self.assertEqual(u.installed_version(root, 'core'), '0.4.0-alpha.4')
 
+    def test_application_release_layouts_use_kind_specific_entrypoints(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            proxy = root / 'proxy'
+            (proxy / 'bin').mkdir(parents=True)
+            (proxy / 'package-lock.json').write_text('{}')
+            (proxy / 'bin/privaproxy.js').write_text('program')
+            u.validate_release_layout(proxy, 'proxy')
+            (proxy / 'bin/privaproxy.js').unlink()
+            with self.assertRaises(u.UpdateError):
+                u.validate_release_layout(proxy, 'proxy')
+
+            search = root / 'search'
+            (search / 'dist').mkdir(parents=True)
+            (search / 'package-lock.json').write_text('{}')
+            (search / 'dist/main.js').write_text('program')
+            u.validate_release_layout(search, 'search')
+
     def test_hash_mismatch_and_ambiguous_manifest_refused(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'archive'
