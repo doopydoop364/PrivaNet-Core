@@ -174,6 +174,9 @@ export class SqliteStore implements Store {
   deleteNodeServices(nodeId: string): void { this.stmt('DELETE FROM node_service WHERE node_id=?').run(nodeId); }
   listNodeServices(service: ServiceId): NodeServiceRecord[] { return this.stmt('SELECT * FROM node_service WHERE service=? ORDER BY node_id').all(service).map(serviceOf); }
   deleteStaleNodeServices(reportedBefore: number): number { return Number(this.stmt('DELETE FROM node_service WHERE reported_at <= ?').run(reportedBefore).changes); }
+  storedReplicaTotals(): Map<string, { committedBytes: number; lostBytes: number }> {
+    return new Map(this.stmt("SELECT node_id, COALESCE(SUM(CASE WHEN state='STORED' THEN size ELSE 0 END),0) AS committed, COALESCE(SUM(CASE WHEN state='LOST' THEN size ELSE 0 END),0) AS lost FROM replica WHERE state IN ('STORED','LOST') GROUP BY node_id").all().map(row => [String(row.node_id), { committedBytes: num(row.committed), lostBytes: num(row.lost) }]));
+  }
   storageTotals(): { pending: number; stored: number; deleting: number; storedBytes: number; reservedBytes: number } {
     const totals = { pending: 0, stored: 0, deleting: 0, storedBytes: 0, reservedBytes: 0 };
     for (const row of this.stmt('SELECT state, COUNT(*) AS count, COALESCE(SUM(size),0) AS bytes FROM chunk GROUP BY state').all()) {

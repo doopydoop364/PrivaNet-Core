@@ -1,7 +1,7 @@
 import { request } from 'node:https';
-import { createHash, X509Certificate } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import type { KeyObject } from 'node:crypto';
-import { ApiError, parseTicket, signHolderProof, validateTransferEndpoint } from '@privanet/shared';
+import { ApiError, parseTicket, signHolderProof, validateTransferEndpoint, pinnedTransferTls } from '@privanet/shared';
 import type { TransferGrant } from '@privanet/protocol';
 
 function error(code: string, status = 503): ApiError { return new ApiError(status, code, code.toLowerCase().replaceAll('_', ' ')); }
@@ -13,11 +13,9 @@ export async function directRequest(grant: TransferGrant, headers: Record<string
   if (!claims || claims.transferId !== grant.transferId || claims.operation !== grant.operation || claims.chunkId !== grant.chunkId || claims.expiresAt !== grant.expiresAt || !grant.transferEndpoint) throw error('TRANSFER_UNAVAILABLE');
   let endpoint;
   try { endpoint = validateTransferEndpoint(grant.transferEndpoint, Date.now(), claims.nodeId); } catch { throw error('TLS_IDENTITY'); }
-  const cert = new X509Certificate(Buffer.from(endpoint.certificate, 'base64'));
   const url = new URL(`/v1/chunks/${grant.chunkId}`, endpoint.url);
   return new Promise<Response>((resolve, reject) => {
-    const req = request(url, { method: grant.operation.toUpperCase(), agent: false, ca: cert.toString(), allowPartialTrustChain: true, minVersion: 'TLSv1.2', signal,
-      checkServerIdentity: (_hostname, peer) => createHash('sha256').update(peer.raw).digest('hex') === endpoint.certFingerprint ? undefined : new Error('TLS_IDENTITY'),
+    const req = request(url, { method: grant.operation.toUpperCase(), agent: false, ...pinnedTransferTls(endpoint), signal,
       headers: { authorization: `Transfer ${grant.ticket}`, 'content-length': bytes?.byteLength ?? 0, ...headers }, maxHeaderSize: 4096 }, res => {
       const parts: Buffer[] = []; let size = 0; const limit = res.statusCode === 200 && grant.operation === 'get' && headers['x-privanet-ack'] !== '1' ? claims.maxBytes : 1024;
       res.on('data', (part: Buffer) => { size += part.length; if (size > limit) { res.destroy(); reject(error('TRANSFER_SIZE')); } else parts.push(part); });

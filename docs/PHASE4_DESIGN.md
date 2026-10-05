@@ -323,3 +323,7 @@ Deliberate decisions:
 - Supporting alpha.1 fixes close simultaneous reservation races across quota/disk/concurrency, recheck owner state at commit, and flush commit ancestry. Corrupt meter/replay/receipt state fails safely without reset. Tests preserve the existing failure/restart coverage.
 
 No replication, possession protocol, node repair, market, credits, file/folder APIs, PrivaDrive manifest/sharing/encryption design or general relay is included. Two clean final internal review passes and automated testing are evidence of specific protections, not a claim of vulnerability-free software or an independent external review.
+
+## Alpha.4 operator hardening
+
+See [storage operation and diagnostic reference](DIRECT_TRANSFER.md#alpha4-storage-operations), [upgrade/rollback](ALPHA4_UPGRADE.md), [real-machine validation checklist](ALPHA4_LAN_VALIDATION.md) and [actual implementation/validation status](ALPHA4_IMPLEMENTATION_STATUS.md). Capacity, listener state, exact Coordinator metadata acceptance and remote reachability are reported separately. Protocol remains 1; Phase 5 replication and repair are deferred.

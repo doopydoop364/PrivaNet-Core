@@ -1,11 +1,14 @@
+import { loadTransferTls, TransferTlsError } from './tls.js';
+import { TransferConfigError } from './transfer-config.js';
+import { ReplayStateError } from './replay-state.js';
+import { ReceiptQueueError } from './receipt-queue.js';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:https';
 import type { Server } from 'node:https';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
-import { readFile } from 'node:fs/promises';
 import { once } from 'node:events';
-import { ApiError, bindTransferEndpoint, newHolderChallenge, parseTicket, readPrivateFileUpTo, transferEndpoint, verifyHolderProof, verifyTicket } from '@privanet/shared';
+import { ApiError, newHolderChallenge, parseTicket, verifyHolderProof, verifyTicket } from '@privanet/shared';
 import type { TicketClaims, TicketOperation } from '@privanet/shared';
 import type { TransferEndpoint, TransferReceipt } from '@privanet/protocol';
 import type { PrivaNode } from '../daemon.js';
@@ -19,7 +22,10 @@ import { PersistentReplaySet } from './replay-state.js';
 import { ReceiptQueue, RECEIPT_LIMIT } from './receipt-queue.js';
 
 export interface TransferStatus {
-  listener: 'DISABLED' | 'LISTENING' | 'ERROR'; advertised: boolean; error: string | null;
+  listener: 'DISABLED' | 'STARTING' | 'LISTENING' | 'STOPPED' | 'FAILED' | 'UNKNOWN'; advertised: boolean; error: string | null;
+  configured: boolean; bindAddress: string | null; port: number | null; endpoint: string | null;
+  coordinatorAdvertisement: 'ACCEPTED' | 'PENDING' | 'REJECTED' | 'UNSUPPORTED' | 'UNREACHABLE' | 'UNKNOWN' | 'WITHDRAWN';
+  acceptedAt: number | null; remoteReachability: 'UNKNOWN';
   active: { put: number; get: number; delete: number }; completed: number; failed: number; bytes: number;
   failures: Record<string, number>; queuedReceipts: number; lastReceiptAckAt: number | null; throughputBytesPerSec: number;
 }
@@ -48,24 +54,27 @@ export class TransferService {
   private retryTimer: NodeJS.Timeout | undefined; private retrying: Promise<void> | undefined; private failures = 0; private stopping = false;
   private sweep: NodeJS.Timeout | undefined; private stamp = ''; private startedAt = Date.now();
   private budget = { at: Date.now(), count: 0 }; private readonly ips = new Map<string, { at: number; count: number }>();
-  private cached: TransferStatus = { listener: 'DISABLED', advertised: false, error: null, active: { put: 0, get: 0, delete: 0 }, completed: 0, failed: 0, bytes: 0, failures: {}, queuedReceipts: 0, lastReceiptAckAt: null, throughputBytesPerSec: 0 };
+  private cached: TransferStatus = { listener: 'DISABLED', advertised: false, error: null, configured: false, bindAddress: null, port: null, endpoint: null, coordinatorAdvertisement: 'UNKNOWN', acceptedAt: null, remoteReachability: 'UNKNOWN', active: { put: 0, get: 0, delete: 0 }, completed: 0, failed: 0, bytes: 0, failures: {}, queuedReceipts: 0, lastReceiptAckAt: null, throughputBytesPerSec: 0 };
   constructor(private readonly options: TransferServiceOptions) {}
-  get status(): TransferStatus { return { ...this.cached, advertised: !!this.endpoint && this.options.node.transferEndpointRegistered(this.endpoint), active: { ...this.cached.active }, failures: { ...this.cached.failures }, queuedReceipts: this.queue?.size ?? 0,
+  get status(): TransferStatus { return { ...this.cached, advertised: !!this.endpoint && this.options.node.transferEndpointRegistered(this.endpoint), ...this.options.node.transferAdvertisementStatus(this.endpoint), active: { ...this.cached.active }, failures: { ...this.cached.failures }, queuedReceipts: this.queue?.size ?? 0,
     throughputBytesPerSec: this.cached.bytes / Math.max(1, (Date.now() - this.startedAt) / 1000) }; }
   get advertisement(): TransferEndpoint | undefined { return this.server && this.endpoint ? { ...this.endpoint } : undefined; }
 
   async apply(enabled: boolean): Promise<void> {
     let config: ReturnType<TransferServiceOptions["config"]>;
-    try { config = this.options.config(); } catch { await this.closeListener(); this.cached.listener = "ERROR"; this.cached.error = "TRANSFER_CONFIG_INVALID"; return; }
+    try { config = this.options.config(); } catch (error) {
+      await this.closeListener(); this.stamp = '';
+      this.cached.configured = false; this.cached.bindAddress = null; this.cached.port = null; this.cached.endpoint = null;
+      this.cached.listener = enabled ? 'FAILED' : 'DISABLED'; this.cached.error = error instanceof TransferConfigError ? error.code : 'TRANSFER_CONFIG_INVALID'; return;
+    }
+    this.cached.configured = config.enabled; this.cached.bindAddress = config.bindAddress; this.cached.port = config.port; this.cached.endpoint = config.endpoint || null;
     const stamp = JSON.stringify(config);
-    if (!enabled || !config.enabled) { await this.closeListener(); this.stamp = ''; return; }
+    if (!enabled || !config.enabled) { await this.closeListener(); this.stamp = ''; this.cached.listener = 'DISABLED'; this.cached.error = config.enabled ? 'STORAGE_DISABLED' : 'TRANSFER_POLICY_DISABLED'; return; }
     if (this.server && this.stamp === stamp) return;
-    await this.closeListener(); this.stopping = false;
+    await this.closeListener(); this.stopping = false; this.cached.listener = 'STARTING';
     try {
       const identity = await loadIdentity(this.options.stateDir);
-      const cert = await readFile(config.certificateFile, 'utf8');
-      const key = await readPrivateFileUpTo(config.keyFile, 16384);
-      const endpoint = bindTransferEndpoint(transferEndpoint(config.endpoint, cert), identity.nodeId, key);
+      const { cert, key, endpoint } = await loadTransferTls(config, identity.nodeId);
       this.replay ??= await PersistentReplaySet.open(this.options.stateDir);
       if (!this.queue) { this.queue = await ReceiptQueue.open(this.options.stateDir); await this.recover(); this.scheduleRetry(0); }
       const server = createServer({ cert, key, minVersion: 'TLSv1.2', maxHeaderSize: 4096, handshakeTimeout: 5000, requestTimeout: this.options.timeoutMs ?? 300000,
@@ -77,14 +86,15 @@ export class TransferService {
       server.on('connection', socket => { this.sockets.add(socket); socket.once('close', () => this.sockets.delete(socket)); });
       server.on('clientError', (_error, socket) => socket.destroy()); server.on('tlsClientError', () => {});
       await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(config.port, config.bindAddress, () => { server.off('error', reject); resolve(); }); });
-      server.on('error', () => { this.cached.listener = 'ERROR'; this.cached.advertised = false; this.cached.error = 'LISTEN_FAILED'; void this.closeListener(); });
+      server.on('error', () => { void this.closeListener().finally(() => { this.cached.listener = 'FAILED'; this.cached.error = 'TRANSFER_BIND_FAILED'; }); });
       this.server = server; this.endpoint = endpoint; this.stamp = stamp;
       this.cached.listener = 'LISTENING'; this.cached.advertised = true; this.cached.error = null;
       this.sweep = setInterval(() => { void this.cleanup().catch(() => { this.cached.error = 'RECEIPT_STATE_IO'; }); }, 1000); this.sweep.unref();
       this.options.log?.({ event: 'storage.transfer_listening' });
-    } catch {
-      await this.closeListener(); this.cached.listener = 'ERROR'; this.cached.error = 'TRANSFER_START_FAILED';
-      this.options.log?.({ event: 'storage.transfer_unavailable', code: 'TRANSFER_START_FAILED' });
+    } catch (error) {
+      await this.closeListener(); this.cached.listener = 'FAILED';
+      this.cached.error = error instanceof TransferTlsError || error instanceof ReplayStateError || error instanceof ReceiptQueueError ? error.code : error instanceof Error && 'code' in error && ['EADDRINUSE', 'EADDRNOTAVAIL', 'EACCES'].includes(String(error.code)) ? (error.code === 'EADDRINUSE' ? 'TRANSFER_PORT_IN_USE' : 'TRANSFER_BIND_FAILED') : 'TRANSFER_START_FAILED';
+      this.options.log?.({ event: 'storage.transfer_unavailable', code: this.cached.error });
     }
   }
   private async recover(): Promise<void> {
@@ -251,7 +261,7 @@ export class TransferService {
   }
   private async closeListener(): Promise<void> {
     if (this.sweep) clearInterval(this.sweep); this.sweep = undefined;
-    this.endpoint = undefined; this.cached.listener = 'DISABLED'; this.cached.advertised = false;
+    this.endpoint = undefined; this.cached.listener = 'STOPPED'; this.cached.advertised = false;
     for (const controller of this.running) controller.abort();
     for (const socket of this.sockets) socket.destroy();
     const server = this.server; this.server = undefined;

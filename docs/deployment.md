@@ -103,3 +103,7 @@ High availability, multiple Coordinators, PostgreSQL, and an independent securit
 ## Alpha.3 direct storage deployment
 
 Compute-only installations retain their outbound operation. Direct opaque chunk transfer is a separate explicit TLS listener opt-in; storage capacity alone opens no port. Provision certificate/key paths and a reachable advertised HTTPS origin under the service account, and open only the configured transfer port as needed. The Coordinator still carries authorization/metadata only and must never proxy `/v1/chunks` bodies. No NAT relay is provided. See [DIRECT_TRANSFER.md](DIRECT_TRANSFER.md) for configuration, certificate renewal and durable-receipt recovery.
+
+## Alpha.4 operator hardening
+
+See [storage operation and diagnostic reference](DIRECT_TRANSFER.md#alpha4-storage-operations), [upgrade/rollback](ALPHA4_UPGRADE.md), [real-machine validation checklist](ALPHA4_LAN_VALIDATION.md) and [actual implementation/validation status](ALPHA4_IMPLEMENTATION_STATUS.md). Capacity, listener state, exact Coordinator metadata acceptance and remote reachability are reported separately. Protocol remains 1; Phase 5 replication and repair are deferred.

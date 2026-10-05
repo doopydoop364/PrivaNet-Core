@@ -100,9 +100,9 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
         if (req.headers['x-privanet-protocol'] !== String(PROTOCOL_VERSION)) throw new ApiError(426, 'PROTOCOL_MISMATCH', 'unsupported protocol version');
         const rawUrl = req.url ?? ''; const queryAt = rawUrl.indexOf('?');
         const path = queryAt < 0 ? rawUrl : rawUrl.slice(0, queryAt); const query = queryAt < 0 ? '' : rawUrl.slice(queryAt + 1);
-        // The only query string the API accepts is `waitMs=<integer>` on a job read; anything else is an unknown route.
+        // Only exact job wait and explicitly negotiated operator storage-detail queries are accepted.
         const waitMatch = /^waitMs=(\d{1,5})$/.exec(query);
-        if (query !== '' && !(waitMatch && req.method === 'GET' && /^\/v1\/jobs\/[^/]+$/.test(path))) throw new ApiError(404, 'NOT_FOUND', 'route not found');
+        if (query !== '' && !(waitMatch && req.method === 'GET' && /^\/v1\/jobs\/[^/]+$/.test(path)) && !(query === 'details=1' && req.method === 'GET' && path === '/v1/admin/storage')) throw new ApiError(404, 'NOT_FOUND', 'route not found');
         const jobWaitMs = waitMatch?.[1] === undefined ? 0 : Number(waitMatch[1]);
         if (jobWaitMs > MAX_JOB_WAIT_MS) throw new ApiError(400, 'INVALID_REQUEST', 'waitMs too large');
         if (!/^\/v1\/[a-zA-Z0-9/_-]+$/.test(path)) throw new ApiError(404, 'NOT_FOUND', 'route not found');
@@ -157,7 +157,9 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
           if (req.method === 'POST' && rename) {
             const id = NodeIdSchema.parse(rename[1]); core.renameNode(id, await body(req)); log({ event: 'node.renamed' }); send(res, 200, { ok: true }); return;
           }
-          if (req.method === 'GET' && path === '/v1/admin/storage') { send(res, 200, core.storage.summary()); return; }
+          if (req.method === 'GET' && path === '/v1/admin/storage') { send(res, 200, core.storage.summary(new URL(req.url ?? '/', 'http://localhost').searchParams.get('details') === '1')); return; }
+          const probe = /^\/v1\/admin\/storage\/nodes\/(node_[a-f0-9]{64})\/endpoint$/.exec(path);
+          if (req.method === 'GET' && probe) { send(res, 200, core.storage.probeTarget(probe[1]!)); return; }
           if (req.method === 'POST' && path === '/v1/admin/storage/keys/rotate') {
             if (JSON.stringify(await body(req)) !== '{}') throw new ApiError(400, 'INVALID_REQUEST', 'expected empty object');
             send(res, 200, await core.storage.rotateKeys()); log({ event: 'storage.key_rotated' }); return;

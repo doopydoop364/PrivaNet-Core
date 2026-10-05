@@ -21,7 +21,7 @@ export class Transport {
     if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs < 1 || this.timeoutMs > 60000) throw new Error('Invalid request timeout');
   }
   async request<T>(method: 'GET' | 'POST', path: string, schema: z.ZodType<T>, body?: unknown, token?: string, signal?: AbortSignal): Promise<T> {
-    if (!/^\/v1\/[a-zA-Z0-9/_-]+(\?waitMs=\d{1,5})?$/.test(path)) throw new Error('Invalid API path');
+    if (!/^\/v1\/[a-zA-Z0-9/_-]+(\?waitMs=\d{1,5})?$/.test(path) && !(method === 'GET' && path === '/v1/admin/storage?details=1')) throw new Error('Invalid API path');
     const serialized = body === undefined ? undefined : JSON.stringify(body);
     if (serialized !== undefined && Buffer.byteLength(serialized) > MAX_BODY_BYTES) throw new Error('Request too large');
     const headers: Record<string, string> = { 'X-PrivaNet-Protocol': String(PROTOCOL_VERSION), Accept: 'application/json' };

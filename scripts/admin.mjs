@@ -1,7 +1,7 @@
-import { ApiError, SHELLS, Transport, completionScript } from '@privanet/shared';
+import { ApiError, SHELLS, Transport, completionScript, probeTransferEndpoint } from '@privanet/shared';
 import {
   AckSchema, AppCredentialSchema, CapabilitiesSchema, DisplayNameSchema, EnrollmentTokenIdSchema, EnrollmentTokenSchema, EnrollmentTokensSchema, IdSchema, InviteCreatedSchema, InviteIdSchema,
-  InvitesSchema, JoinRequestsSchema, KeyRotationSchema, NodeIdSchema, NodesSchema, ServiceListSchema, StorageSummarySchema, TypedCodeSchema, formatCode, normalizeCode,
+  InvitesSchema, JoinRequestsSchema, KeyRotationSchema, NodeIdSchema, NodesSchema, ServiceListSchema, StorageDetailsSchema, StorageProbeTargetSchema, TypedCodeSchema, formatCode, normalizeCode,
 } from '@privanet/protocol';
 
 const USAGE = `Usage:
@@ -20,6 +20,7 @@ const USAGE = `Usage:
   privanet-admin nodes rename NODE NAME... | nodes rename NODE --clear
   privanet-admin application [NAME] [--services storage.chunk.v1] | revoke-application ID | rotate-application ID
   privanet-admin storage status [--json]                   storage control plane: nodes offering storage, chunk and transfer counts (aggregates only)
+  privanet-admin storage probe NODE [--json]              explicit ticket-free pinned TLS handshake from this machine
   privanet-admin storage rotate-key [--json]               new ticket-signing key; the old one keeps verifying for 4.5 minutes, so no live ticket breaks
   privanet-admin completions bash|zsh|fish|powershell      a shell completion script (command and option names only)
   privanet-admin ui [--port 4041]                          the operator dashboard in your browser (this machine only; see docs/OPERATOR_DASHBOARD.md)
@@ -71,7 +72,7 @@ function requestCode(parts) {
 const COMPLETION_TREE = {
   enrollment: { subs: ['create', 'list', 'revoke'], options: ['--expires', '--capabilities', '--label', '--all', '--json'] }, invite: { subs: ['create', 'list', 'revoke'], options: ['--expires', '--capabilities', '--label', '--all', '--json'] },
   requests: { subs: ['list'], options: ['--all', '--json'] }, approve: { options: ['--capabilities', '--label', '--json'] }, deny: { options: ['--json'] },
-  nodes: { subs: ['list', 'show', 'revoke', 'rename'], options: ['--json', '--clear'] }, application: { options: ['--services'] }, storage: { subs: ['status', 'rotate-key'], options: ['--json'] }, 'revoke-application': {}, 'rotate-application': {}, ui: { options: ['--port'] }, completions: { subs: [...SHELLS] },
+  nodes: { subs: ['list', 'show', 'revoke', 'rename'], options: ['--json', '--clear'] }, application: { options: ['--services'] }, storage: { subs: ['status', 'rotate-key', 'probe'], options: ['--json'] }, 'revoke-application': {}, 'rotate-application': {}, ui: { options: ['--port'] }, completions: { subs: [...SHELLS] },
 };
 async function main() {
   // Completions need neither the Coordinator nor the administrator credential.
@@ -209,13 +210,27 @@ async function main() {
     const services = flags.services === undefined ? [] : ServiceListSchema.parse(flags.services.split(','));
     printJson(await request('POST', '/v1/admin/applications', AppCredentialSchema, { name: subcommand ?? 'demo', allowedJobTypes: envTypes, ...identity, ...(services.length > 0 ? { allowedServices: services } : {}) }));
   } else if (operation === 'storage' && subcommand === 'status') {
-    const summary = await request('GET', '/v1/admin/storage', StorageSummarySchema);
+    const summary = await request('GET', '/v1/admin/storage?details=1', StorageDetailsSchema).catch(error => {
+      if (error instanceof ApiError && error.status === 404) return request('GET', '/v1/admin/storage', StorageDetailsSchema);
+      throw error;
+    });
     if (flags.json) { printJson(summary); return; }
     const gib = (bytes) => `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
-    console.log([`Signing key:   ${summary.keyring.available ? `${summary.keyring.currentKid} (${summary.keyring.keys} key${summary.keyring.keys === 1 ? '' : 's'} valid)` : 'NOT AVAILABLE: storage is off at this Coordinator'}`,
+    console.log([...(summary.pool ? [`Pool:          ${summary.pool.onlineStorageNodes} online storage nodes; ${summary.pool.offlineNodesHoldingChunks} offline nodes holding chunks; raw ${gib(summary.pool.rawAdvertisedCapacityBytes)}, usable ${gib(summary.pool.usableBytes)}, reserved ${gib(summary.pool.reservedBytes)}, committed ${gib(summary.pool.committedBytes)}`] : []), `Signing key:   ${summary.keyring.available ? `${summary.keyring.currentKid} (${summary.keyring.keys} key${summary.keyring.keys === 1 ? '' : 's'} valid)` : 'NOT AVAILABLE: storage is off at this Coordinator'}`,
       `Chunks:        ${summary.chunks.stored} stored (${gib(summary.chunks.storedBytes)}), ${summary.chunks.pending} pending (${gib(summary.chunks.reservedBytes)} reserved), ${summary.chunks.deleting} deleting`,
       `Transfers:     ${summary.transfers.open} open; last 24h: ${summary.transfers.last24h.completed} completed, ${summary.transfers.last24h.failed} failed, ${summary.transfers.last24h.expired} expired, ${summary.transfers.last24h.revoked} revoked`, '',
-      summary.nodes.length === 0 ? 'No node is offering storage.' : table([['NODE', 'STATUS', 'CAPACITY', 'FREE (reported)', 'RESERVED', 'OPEN'], ...summary.nodes.map(node => [`${node.nodeId.slice(0, 13)}…`, node.status, gib(node.capacityBytes), gib(node.freeBytes), gib(node.reservedBytes), node.openTransfers])])].join('\n'));
+      summary.nodes.length === 0 ? 'No node is offering storage.' : table([['NODE', 'STATUS', 'CAPACITY', 'FREE (reported)', 'RESERVED', 'COMMITTED', 'ENDPOINT', 'OPEN'], ...summary.nodes.map(node => [`${node.nodeId.slice(0, 13)}…`, node.status, gib(node.capacityBytes), gib(node.freeBytes), gib(node.reservedBytes), gib(node.committedBytes ?? 0), node.endpointRegistration ?? 'UNKNOWN', node.openTransfers])])].join('\n'));
+  } else if (operation === 'storage' && subcommand === 'probe') {
+    if (rest.length !== 1) throw new UsageError('usage: privanet-admin storage probe NODE [--json]');
+    const node = await resolveNode(rest[0]);
+    const path = `/v1/admin/storage/nodes/${node.nodeId}/endpoint`;
+    const target = await request('GET', path, StorageProbeTargetSchema);
+    const result = await probeTransferEndpoint(target.endpoint, target.nodeId);
+    const after = await request('GET', path, StorageProbeTargetSchema);
+    const changed = target.endpoint.url !== after.endpoint.url || target.endpoint.certFingerprint !== after.endpoint.certFingerprint;
+    const report = { ...result, ...(changed ? { code: 'ENDPOINT_CHANGED', reachable: false } : {}), nodeId: node.nodeId, registeredEndpoint: target.endpoint.url, remoteReachability: changed ? 'UNKNOWN' : result.reachable ? 'REACHABLE_FROM_OPERATOR' : 'FAILED_FROM_OPERATOR' };
+    if (flags.json) printJson(report); else console.log(`${report.code}: ${report.registeredEndpoint}. Exact registered TLS identity; tested only from this operator machine. No ticket or payload sent.`);
+    if (!report.reachable) process.exitCode = 1;
   } else if (operation === 'storage' && subcommand === 'rotate-key') {
     const rotation = await request('POST', '/v1/admin/storage/keys/rotate', KeyRotationSchema, {});
     if (flags.json) printJson(rotation); else console.log(`New signing key ${rotation.currentKid}. The previous key (${rotation.previousKid}) keeps verifying until ${iso(rotation.previousValidUntil)}, so tickets already issued still work.`);

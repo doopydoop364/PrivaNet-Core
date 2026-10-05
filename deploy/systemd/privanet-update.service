@@ -1,0 +1,26 @@
+[Unit]
+Description=Check and install verified Priva application releases
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/privanet/updater.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/privanet-update
+User=root
+Group=root
+UMask=0077
+TimeoutStartSec=2h
+Environment=PATH=/opt/node/bin:/usr/local/bin:/usr/bin:/bin
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/opt /var/lib/privanet-updater /run
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target

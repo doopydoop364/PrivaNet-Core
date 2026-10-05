@@ -265,3 +265,7 @@ All later optimization must preserve the owner's hard limits and priority.
 ## `web.fetch.v1` estimate
 
 Low CPU, 48 MiB memory, no disk, up to 2 MiB network, 30 s, preemptible, not checkpointable (a preempted fetch is simply retried). Owner limits and the `fetch` policy section apply as for any job.
+
+## Alpha.4 operator hardening
+
+See [storage operation and diagnostic reference](DIRECT_TRANSFER.md#alpha4-storage-operations), [upgrade/rollback](ALPHA4_UPGRADE.md), [real-machine validation checklist](ALPHA4_LAN_VALIDATION.md) and [actual implementation/validation status](ALPHA4_IMPLEMENTATION_STATUS.md). Capacity, listener state, exact Coordinator metadata acceptance and remote reachability are reported separately. Protocol remains 1; Phase 5 replication and repair are deferred.

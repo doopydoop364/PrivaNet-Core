@@ -1,4 +1,4 @@
-import { copyFile, lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -14,13 +14,7 @@ export async function privateDirectory(path: string): Promise<string> {
   return absolute;
 }
 export async function readPrivateFile(path: string): Promise<string> {
-  const stat = await lstat(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 8192 ||
-      (process.platform !== 'win32' && ((stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.()))) {
-    throw new Error('Unsafe private state file');
-  }
-  const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-  try { return await file.readFile('utf8'); } finally { await file.close(); }
+  return readPrivateFileUpTo(path, 8192);
 }
 export async function createPrivateFile(path: string, value: string): Promise<void> {
   // Exclusive creation: never overwrite an identity/binding or follow a symlink.
@@ -48,13 +42,22 @@ async function busyRetry<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 async function readPrivateFileOnce(path: string, maxBytes: number): Promise<string> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > 64 * 1024 * 1024) throw new Error('Invalid private file size limit');
   const stat = await lstat(path);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maxBytes ||
       (process.platform !== 'win32' && ((stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.()))) {
     throw new Error('Unsafe private state file');
   }
-  const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-  try { return await file.readFile('utf8'); } finally { await file.close(); }
+  const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const opened = await file.stat();
+    if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino || opened.size > maxBytes ||
+        (process.platform !== 'win32' && ((opened.mode & 0o077) !== 0 || opened.uid !== process.getuid?.()))) throw new Error('Unsafe private state file');
+    const data = Buffer.alloc(maxBytes + 1); let length = 0;
+    while (length < data.length) { const { bytesRead } = await file.read(data, length, data.length - length, length); if (!bytesRead) break; length += bytesRead; }
+    if (length > maxBytes) throw new Error('Unsafe private state file');
+    return data.subarray(0, length).toString('utf8');
+  } finally { await file.close(); }
 }
 /**
  * Replaces (or creates) a private file atomically: the new content is written to a sibling temporary file (exclusive, mode 0600, flushed to disk) and renamed over the
@@ -68,7 +71,10 @@ export async function replacePrivateFile(path: string, value: string, options: {
   try {
     if (options.keepBackup) {
       const existing = await lstat(path).catch(() => undefined);
-      if (existing?.isFile() && !existing.isSymbolicLink()) { await busyRetry(() => copyFile(path, `${path}.bak`)); }
+      if (existing?.isFile() && !existing.isSymbolicLink()) {
+        // Stage and atomically replace the backup too: copyFile would follow a hostile .bak symlink or preserve unsafe permissions.
+        await replacePrivateFile(`${path}.bak`, await readPrivateFileUpTo(path, existing.size));
+      }
     }
     await busyRetry(() => rename(temporary, path));
   } catch (error) { await unlink(temporary).catch(() => undefined); throw error; }

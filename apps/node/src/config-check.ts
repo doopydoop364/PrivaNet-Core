@@ -12,8 +12,10 @@ import { readLocalState } from './local-state.js';
 import { ChunkStore } from './store/chunk-store.js';
 import { storeRoot } from './store/status.js';
 import { transferConfig } from './store/transfer-config.js';
-import { readPrivateFileUpTo, transferEndpoint, bindTransferEndpoint } from '@privanet/shared';
-import { readFile } from 'node:fs/promises';
+import { storageConfigFindings, liveStorageFindings } from './store/diagnostics.js';
+import { observedStorage } from './store/observed-status.js';
+import { withCapacityPlan } from './store/status.js';
+import { gatherSettings } from './effective-settings.js';
 
 export type FindingSeverity = 'error' | 'warning' | 'info';
 export interface Finding { severity: FindingSeverity; id: string; message: string; /** The setting concerned, by name. Never a value. */ setting?: string }
@@ -55,7 +57,7 @@ export function policyFindings(policy: unknown, context: { jobSlots?: number; ca
   return out;
 }
 
-export interface ConfigCheck { ok: boolean; findings: Finding[]; policy?: { source: string; preset?: string } }
+export interface ConfigCheck { ok: boolean; findings: Finding[]; policy?: { source: string; preset?: string }; settings?: unknown }
 /**
  * Offline check of everything the node reads at start-up, without contacting the Coordinator and without printing any value that could be a secret: the environment
  * settings (by name), the policy in force and where it comes from, the saved local choices, the state directory and the paths named. Safe to run at any time.
@@ -95,18 +97,11 @@ export async function checkConfig(env: NodeJS.ProcessEnv): Promise<ConfigCheck> 
     if (resolved.source.kind === 'saved' && resolved.source.preset) preset = resolved.source.preset;
     if (resolved.problem) findings.push({ severity: 'error', id: resolved.problem.code, message: `The saved policy was not applied (${resolved.problem.code}); the ${resolved.problem.fellBackTo === 'env-file' ? 'installer policy file' : 'conservative defaults'} apply instead. ${resolved.problem.issues.join('; ')}`.trim() });
     findings.push(...policyFindings(resolved.policy, { transferEnv: env, ...(jobSlots !== undefined ? { jobSlots } : {}), ...(capabilities ? { capabilities } : {}) }));
-    try {
-      const transfer = transferConfig(resolved.policy, env);
-      if (transfer.enabled) {
-        if (!resolved.policy.storage.enabled) findings.push({ severity: 'warning', id: 'TRANSFER_STORAGE_DISABLED', setting: 'storage.transfer', message: 'The transfer listener will remain closed while storage capacity is disabled.' });
-        const certificate = await readFile(transfer.certificateFile, 'utf8'); const key = await readPrivateFileUpTo(transfer.keyFile, 16384);
-        bindTransferEndpoint(transferEndpoint(transfer.endpoint, certificate), `node_${'00'.repeat(32)}`, key);
-        findings.push({ severity: 'info', id: 'TRANSFER_OPT_IN', setting: 'storage.transfer', message: 'Direct TLS transfer is explicitly enabled. The advertised endpoint must be reachable by the application; no NAT traversal or relay is included.' });
-      }
-    } catch { findings.push({ severity: 'error', id: 'TRANSFER_CONFIG_INVALID', setting: 'storage.transfer', message: 'Direct transfer settings or certificate/key are invalid, unreadable, expired or unsafe. Values are not shown.' }); }
+    findings.push(...await storageConfigFindings(stateDir, resolved.policy, env));
+    findings.push(...liveStorageFindings(withCapacityPlan(await observedStorage(stateDir, resolved.policy, env))));
   } catch (error) {
     findings.push({ severity: 'error', id: 'POLICY_UNREADABLE', setting: 'PRIVANODE_POLICY_FILE', message: error instanceof PolicyError ? `The policy file is not acceptable (${error.code}). ${error.issues.join('; ')}`.trim() : 'The policy file could not be read or parsed.' });
   }
   if (local.kind === 'error') findings.push({ severity: 'error', id: local.code, message: 'The saved local choices (local-state.json) cannot be read; the node holds itself paused until they are fixed or the file is removed.' });
-  return { ok: !findings.some(finding => finding.severity === 'error'), findings, policy: { source, ...(preset ? { preset } : {}) } };
+  return { ok: !findings.some(finding => finding.severity === 'error'), findings, settings: (await gatherSettings(env, stateDir, Date.now()).catch(() => undefined))?.settings, policy: { source, ...(preset ? { preset } : {}) } };
 }

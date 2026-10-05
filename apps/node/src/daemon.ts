@@ -72,6 +72,7 @@ export class PrivaNode {
   private leaseWaitSupported = true;
   /** Set when the Coordinator rejects the `services` member (an older Coordinator): the node then offers nothing and says so once, and tries again after an hour (the Coordinator may have been upgraded) without needing a restart. */
   private servicesBlockedUntil = 0;
+  private servicesBlockedReason: 'UNSUPPORTED' | 'REJECTED' = 'UNSUPPORTED';
   /** Authenticated, identity-bound verification keys, refreshed while storage is offered. */
   private transferClockOffset = 0;
   get transferNow(): number { return Date.now() + this.transferClockOffset; }
@@ -86,6 +87,12 @@ export class PrivaNode {
   transferEndpointRegistered(endpoint: { url: string; certFingerprint: string }): boolean {
     return !this.draining && Date.now() - this.lastHeartbeat <= Math.max(15000, this.heartbeatMs * 3)
       && this.registeredTransfer?.url === endpoint.url && this.registeredTransfer.certFingerprint === endpoint.certFingerprint;
+  }
+  private advertisementFailure: 'REJECTED' | 'UNREACHABLE' | undefined;
+  transferAdvertisementStatus(endpoint?: { url: string; certFingerprint: string }) {
+    const accepted = endpoint !== undefined && this.transferEndpointRegistered(endpoint);
+    const coordinatorAdvertisement = accepted ? 'ACCEPTED' as const : Date.now() < this.servicesBlockedUntil ? this.servicesBlockedReason : this.advertisementFailure ?? (this.lastFailure?.code === 'TRANSPORT_ERROR' ? 'UNREACHABLE' as const : undefined) ?? (endpoint ? 'PENDING' as const : 'WITHDRAWN' as const);
+    return { coordinatorAdvertisement, acceptedAt: accepted ? this.lastHeartbeat : null };
   }
   private enrollmentToken: string | undefined;
   private busy = false;
@@ -203,9 +210,11 @@ export class PrivaNode {
       if (services) void this.ticketKeyCache?.refresh();
     } catch (error) {
       this.registeredTransfer = undefined;
+      this.advertisementFailure = error instanceof ApiError && error.status < 500 ? 'REJECTED' : 'UNREACHABLE';
       // An older Coordinator rejects the `services` member (its heartbeat schema is strict). Tried first, before the slots fallback below: a node that merely offers storage must neither stop nor lose its slots.
       if (services && error instanceof ApiError && error.status === 400) {
-        this.servicesBlockedUntil = Date.now() + 3600000; this.log({ event: 'node.services_unsupported' }); this.lastState = ''; return this.sendHeartbeat(true);
+        this.servicesBlockedReason = error.code === 'INVALID_TRANSFER_ENDPOINT' ? 'REJECTED' : 'UNSUPPORTED';
+        this.servicesBlockedUntil = Date.now() + (this.servicesBlockedReason === 'REJECTED' ? 30000 : 3600000); this.log({ event: this.servicesBlockedReason === 'REJECTED' ? 'node.storage_offer_rejected' : 'node.services_unsupported' }); this.lastState = ''; return this.sendHeartbeat(true);
       }
       // An older Coordinator accepts exactly one slot and rejects the heartbeat: fall back to one slot and say so once.
       if (this.effectiveSlots > 1 && error instanceof ApiError && error.status === 400) {
@@ -213,6 +222,7 @@ export class PrivaNode {
       }
       throw error;
     }
+    this.advertisementFailure = undefined;
     this.registeredTransfer = endpoint ? { url: endpoint.url, certFingerprint: endpoint.certFingerprint } : undefined;
     this.lastHeartbeat = Date.now(); this.contacted();
   }

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily verified Priva application update check
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+RandomizedDelaySec=30m
+Persistent=true
+Unit=privanet-update.service
+
+[Install]
+WantedBy=timers.target

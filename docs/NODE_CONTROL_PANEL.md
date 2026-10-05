@@ -153,3 +153,7 @@ Another user on the same machine who can read the node's state directory can rea
 The operator's side is [OPERATOR_DASHBOARD.md](OPERATOR_DASHBOARD.md).
 
 See also [RESOURCES.md](RESOURCES.md), [ONBOARDING.md](ONBOARDING.md), [INSTALLER.md](INSTALLER.md) and [security.md](security.md).
+
+## Alpha.4 operator hardening
+
+See [storage operation and diagnostic reference](DIRECT_TRANSFER.md#alpha4-storage-operations), [upgrade/rollback](ALPHA4_UPGRADE.md), [real-machine validation checklist](ALPHA4_LAN_VALIDATION.md) and [actual implementation/validation status](ALPHA4_IMPLEMENTATION_STATUS.md). Capacity, listener state, exact Coordinator metadata acceptance and remote reachability are reported separately. Protocol remains 1; Phase 5 replication and repair are deferred.

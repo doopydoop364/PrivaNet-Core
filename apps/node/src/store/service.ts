@@ -7,7 +7,7 @@ import { storageGate } from './gate.js';
 import type { GateInputs } from './gate.js';
 import { StoreError } from './errors.js';
 import { MAX_CHUNK_BYTES } from './limits.js';
-import { emptyStorageStatus, storeRoot } from './status.js';
+import { emptyStorageStatus, storeRoot, withCapacityPlan, inspectStorage } from './status.js';
 import type { StorageStatus } from './status.js';
 import type { PrivaNode } from '../daemon.js';
 import type { TransferMeter } from '../transfer-meter.js';
@@ -38,7 +38,7 @@ export class StorageService {
   async start(): Promise<void> { await this.apply(this.options.policy()); this.timer = setInterval(() => { void this.refresh().catch(() => undefined); }, this.options.refreshMs ?? 10000); this.timer.unref(); }
   async stop(): Promise<void> { if (this.timer) clearInterval(this.timer); await this.serialized(async () => { try { await this.direct?.stop(); } finally { await this.store?.close().catch(() => undefined); this.store = undefined; } }); }
   /** The status as of the last refresh (cheap, synchronous). */
-  get status(): StorageStatus { return { ...this.cached, networkAccessible: this.direct?.status.listener === 'LISTENING', ...(this.direct ? { transfer: this.direct.status } : {}) }; }
+  get status(): StorageStatus { return withCapacityPlan({ ...this.cached, networkAccessible: null, observation: { source: 'daemon', publishedAt: Date.now() }, ...(this.direct ? { transfer: this.direct.status } : {}) }); }
   /** The open store, used by the authorized transfer service; undefined while storage is disabled or the store could not be opened. */
   get chunkStore(): ChunkStore | undefined { return this.store; }
 
@@ -56,7 +56,7 @@ export class StorageService {
     if (engine.report.contribution === 'PAUSED') return undefined;
     if (!storageGate({ ...this.options.inputs, enabled: () => policy.enabled })().allowed) return undefined;
     if (status.flags.includes('FREE_SPACE_UNKNOWN') || status.flags.includes('UNREADABLE') || status.flags.includes('CLOSED') || status.freeBytes === null) return undefined;
-    if (this.direct?.status.listener === 'ERROR') return undefined;
+    if (this.direct?.status.listener === 'FAILED') return undefined;
     const endpoint = this.direct?.advertisement;
     const freeBytes = Math.min(status.allowedBytes, policy.maxBytes); if (!(freeBytes >= 1) && !endpoint) return undefined;
     return { capacityBytes: Math.min(policy.maxBytes, 2 ** 50), freeBytes: Math.min(Math.floor(freeBytes), 2 ** 50), maxChunkBytes: MAX_CHUNK_BYTES, ...(endpoint ? { transferEndpoint: endpoint } : {}) };
@@ -81,12 +81,12 @@ export class StorageService {
   async refresh(): Promise<StorageStatus> { await this.serialized(() => this.refreshNow(this.options.policy())); return this.status; }
   private async refreshNow(policy: ResourcePolicy): Promise<void> {
     const wanted = policy.storage; const base = emptyStorageStatus(wanted);
-    if (!wanted.enabled) { this.cached = base; return; }
+    if (!wanted.enabled) { this.cached = await inspectStorage(this.options.stateDir, wanted); return; }
     if (!this.store) { this.cached = { ...base, state: 'ERROR', error: this.openError ?? 'IO', health: 'UNSAFE', flags: ['UNAVAILABLE'] }; return; }
     try {
       const usage = await this.store.usage(); const gate = storageGate({ ...this.options.inputs, enabled: () => true })();
       this.cached = { ...base, state: gate.allowed ? 'READY' : 'UNAVAILABLE', reasons: gate.allowed ? [] : [gate.reason], committedBytes: usage.committedBytes, chunkCount: usage.chunkCount, incomingBytes: usage.incomingBytes,
-        allowedBytes: usage.allowedBytes, freeBytes: usage.freeBytes, anomalies: usage.anomalies, integrityFailures: usage.integrityFailures, health: usage.health, flags: usage.flags };
+        allowedBytes: gate.allowed ? usage.allowedBytes : 0, unwrittenReservedBytes: usage.unwrittenReservedBytes, freeBytes: usage.freeBytes, anomalies: usage.anomalies, integrityFailures: usage.integrityFailures, health: usage.health, flags: usage.flags };
     } catch (error) { this.cached = { ...base, state: 'ERROR', error: error instanceof StoreError ? error.code : 'IO', health: 'UNSAFE', flags: ['UNREADABLE'] }; }
   }
 }

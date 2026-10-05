@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
+import { open } from 'node:fs/promises';
 import { z } from 'zod';
 import { isMissing, privateDirectory, readPrivateFileUpTo, replacePrivateFile } from '@privanet/shared';
 import { ResourcePolicySchema } from './resource-policy.js';
@@ -70,6 +71,8 @@ export async function savePolicyFile(stateDir: string, policy: ResourcePolicy, p
   assertNoUnsafeLocal(checked.data);
   const file: PolicyFile = { version: POLICY_FILE_VERSION, ...(preset && preset !== 'custom' ? { preset } : {}), savedAt: now, policy: checked.data };
   await replacePrivateFile(policyFilePath(await privateDirectory(stateDir)), JSON.stringify(file, null, 2) + '\n', { keepBackup: true });
+  // Persist both renames (policy and backup) before reporting success on POSIX.
+  if (process.platform !== 'win32') { const directory = await open(stateDir, 'r'); try { await directory.sync(); } finally { await directory.close(); } }
 }
 export async function removePolicyFile(stateDir: string): Promise<boolean> {
   const { unlink } = await import('node:fs/promises');

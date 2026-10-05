@@ -11,6 +11,7 @@ const stage = join(outDir, `privanet-${version}-${platform}`);
 rmSync(stage, { recursive: true, force: true });
 const modules = join(stage, 'node_modules');
 mkdirSync(join(stage, 'bin'), { recursive: true }); mkdirSync(join(stage, 'tools'), { recursive: true });
+writeFileSync(join(stage, 'package.json'), JSON.stringify({ name: 'privanet-distribution', version, private: true }) + '\n');
 
 const workspaces = { protocol: 'packages/protocol', shared: 'packages/shared', sdk: 'packages/sdk', coordinator: 'apps/coordinator', node: 'apps/node' };
 for (const [name, source] of Object.entries(workspaces)) {
@@ -22,7 +23,7 @@ for (const [name, source] of Object.entries(workspaces)) {
   cpSync(join(source, 'dist'), join(target, 'dist'), { recursive: true, filter: path => !path.endsWith('.tsbuildinfo') && !path.endsWith('.map') });
 }
 cpSync('node_modules/zod', join(modules, 'zod'), { recursive: true });
-for (const script of ['admin.mjs', 'demo.mjs', 'backup.mjs']) cpSync(join('scripts', script), join(stage, 'tools', script));
+for (const script of ['admin.mjs', 'demo.mjs', 'backup.mjs', 'validate-storage.mjs']) cpSync(join('scripts', script), join(stage, 'tools', script));
 for (const file of ['LICENSE', 'README.md', 'ROADMAP.md', 'CHANGELOG.md']) cpSync(file, join(stage, file));
 cpSync('docs', join(stage, 'docs'), { recursive: true });
 cpSync('.env.example', join(stage, '.env.example'));

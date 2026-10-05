@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const PROTOCOL_VERSION = 1 as const;
-export const SERVICE_VERSION = '0.4.0-alpha.3.1';
+export const SERVICE_VERSION = '0.4.0-alpha.4';
 export const MAX_BODY_BYTES = 32 * 1024;
 export const ProtocolSchema = z.literal(PROTOCOL_VERSION);
 export const IdSchema = z.uuid();
@@ -464,3 +464,14 @@ export type TicketResponse = z.infer<typeof TicketResponseSchema>;
 
 /** Separate authenticated clock read: older strict transfer-key responses stay unchanged. */
 export const TransferClockSchema = z.strictObject({ coordinatorId: IdSchema, now: TimeSchema });
+
+export const StorageProbeTargetSchema = z.strictObject({ nodeId: NodeIdSchema, endpoint: TransferEndpointSchema, reportedAt: TimeSchema });
+/** JSON-safe exact aggregates: ordinary byte counts are numbers; larger sums are decimal strings. */
+export const AggregateBytesSchema = z.union([z.number().int().min(0), z.string().regex(/^(0|[1-9][0-9]{0,29})$/)]);
+
+/** Explicitly negotiated operator detail view. Legacy strict summaries retain their exact shape. */
+export const StorageDetailsSchema = StorageSummarySchema.extend({
+  nodes: z.array(StorageSummarySchema.shape.nodes.element.extend({ committedBytes: z.number().int().min(0).optional(), lostBytes: z.number().int().min(0).optional(), usableBytes: z.number().int().min(0).optional(), endpointRegistration: z.enum(['REGISTERED', 'ABSENT']).optional(), reportedAt: TimeSchema.nullable().optional() })).max(1000),
+  pool: z.strictObject({ onlineStorageNodes: z.number().int().min(0), offlineNodesHoldingChunks: z.number().int().min(0), rawAdvertisedCapacityBytes: AggregateBytesSchema, usableBytes: AggregateBytesSchema, reservedBytes: AggregateBytesSchema, committedBytes: AggregateBytesSchema }).optional(),
+});
+export type StorageDetails = z.infer<typeof StorageDetailsSchema>;

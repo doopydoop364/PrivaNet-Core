@@ -325,9 +325,11 @@ test('a damaged local-state.json is reported with a fixed code and a next step, 
 
 test('storage in the panel: a status card with no path or chunk list, edits through the same policy path as everything else, refused when the policy is locked', async t => {
   const r = await rig(t); const s = await r.login(); const status = await r.get(s, '/api/storage'); assert.equal(status.status, 200);
-  const body = status.json(); assert.deepEqual([body.enabled, body.state, body.networkAccessible, body.maxChunkBytes], [false, 'DISABLED', false, 8 * 1024 * 1024]); assert.doesNotMatch(status.text, new RegExp(r.state.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), 'no host path'); assert.doesNotMatch(status.text, /chk_[0-9a-f]{64}/);
+  const body = status.json(); assert.deepEqual([body.enabled, body.state, body.networkAccessible, body.maxChunkBytes], [false, 'DISABLED', null, 8 * 1024 * 1024]); assert.doesNotMatch(status.text, new RegExp(r.state.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), 'no host path'); assert.doesNotMatch(status.text, /chk_[0-9a-f]{64}/);
   const doc = (await r.get(s, '/api/policy')).json(); assert.deepEqual(doc.policy.storage, { enabled: false, maxBytes: 1024 ** 3, reserveFreeBytes: 10 * 1024 ** 3, transfer: defaultResourcePolicy().storage.transfer });
-  const saved = await r.post(s, '/api/policy', { policy: { ...doc.policy, storage: { enabled: true, maxBytes: 2 * 1024 ** 3, reserveFreeBytes: 5 * 1024 ** 3 } } }); assert.equal(saved.status, 200, saved.text);
+  const reduced = { ...doc.policy, storage: { enabled: true, maxBytes: 2 * 1024 ** 3, reserveFreeBytes: 5 * 1024 ** 3 } };
+  assert.equal((await r.post(s, '/api/policy', { policy: reduced })).status, 422, 'reserve reductions require explicit confirmation');
+  const saved = await r.post(s, '/api/policy', { policy: reduced, allowReserveReduction: true }); assert.equal(saved.status, 200, saved.text);
   assert.deepEqual((await r.get(s, '/api/policy')).json().policy.storage, { enabled: true, maxBytes: 2 * 1024 ** 3, reserveFreeBytes: 5 * 1024 ** 3, transfer: defaultResourcePolicy().storage.transfer }); assert.equal((await r.get(s, '/api/policy')).json().preset, doc.preset, 'storage never changes which preset the policy matches');
   assert.equal((await r.post(s, '/api/policy', { policy: { ...doc.policy, storage: { enabled: true, maxBytes: -5, reserveFreeBytes: 0 } } })).status, 422);
   assert.equal((await r.post(s, '/api/policy', { policy: { ...doc.policy, storage: { enabled: true, listenerPort: 4041 } } })).status, 422, 'there is no network setting to change');

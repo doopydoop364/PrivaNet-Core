@@ -66,3 +66,10 @@ export class ReceiptQueue {
   acknowledge(id: string): Promise<void> { return this.mutate(() => { this.records.delete(id); }); }
   async flush(): Promise<void> { await this.tail; }
 }
+
+/** Read-only validation: absent state is normal before the first transfer; corruption never resets it. */
+export async function inspectReceiptState(stateDir: string): Promise<void> {
+  try { const value = Schema.parse(JSON.parse(await readPrivateFileUpTo(join(stateDir, RECEIPT_FILE), 4 * 1024 * 1024)));
+    if (value.checksum !== checksum(value.records) || new Set(value.records.map(r => r.receipt.transferId)).size !== value.records.length) throw new Error();
+  } catch (error) { if (!isMissing(error)) throw new ReceiptQueueError('RECEIPT_STATE_INVALID'); }
+}

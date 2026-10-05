@@ -94,7 +94,7 @@ test('owner pause/storage disable overrides an already issued ticket', async t =
   const rig = await directRig(t); const placed = await rig.placement(randomBytes(1024)); rig.world.blockers = ['PAUSED_BY_OWNER'];
   assert.equal((await directRequest(placed.grant, { 'x-privanet-handshake': '1' }, AbortSignal.timeout(5000))).status, 503);
   rig.world.blockers = []; rig.world.policy.storage.enabled = false; await rig.storage.apply(rig.world.policy);
-  assert.equal(rig.storage.status.networkAccessible, false);
+  assert.equal(rig.storage.status.networkAccessible, null);
 });
 
 test('closed surface rejects unknown methods, encoded paths, ranges and transfer-encoding', async t => {
