@@ -125,7 +125,10 @@ def build_roundup():
             "duplicate_ratio": duplicate_ratio,
             "failed_frontier_ratio": failed_ratio,
             "top_host_frontier_share": top_host_share,
-            "host_share_note": "Calculated from the host rows included in this response.",
+            "host_share_note": "Sample-only; not a full-frontier concentration metric.",
+            "concentration": frontier.get("concentration"),
+            "operational": frontier.get("operational"),
+            "source_generated_at_ms": source_status.get("generatedAtMs"),
         },
         "domains": {
             "total": hosts_payload.get("total"),

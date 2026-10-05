@@ -39,6 +39,31 @@ function rig(port: number, extra: Partial<FetchPolicy> = {}, deps: Parameters<ty
 }
 const outcome = async (run: Promise<FetchOutput>) => (await run).outcome;
 
+test('robots diagnostics retain remote status, Retry-After and network causes through the negative cache', async t => {
+  const o = await origin(t, { '/robots.txt': (_q, res) => { res.writeHead(503, { 'retry-after': '120' }); res.end(); }, '*': html(page) });
+  const run = rig(o.port);
+  for (let i = 0; i < 2; i++) {
+    const r = await run({ url: o.url('site.example', `/a${i}`) });
+    assert.equal(r.outcome, 'ROBOTS_UNAVAILABLE'); assert.equal(r.httpStatus, 503); assert.equal(r.retryAfterSec, 120);
+    assert.equal(FetchOutputSchema.safeParse(r).success, true);
+  }
+  assert.equal(o.hits('/robots.txt'), 1); assert.equal(o.hits('/a0'), 0);
+  const limited = await origin(t, { '/robots.txt': (_q, res) => { res.writeHead(429, { 'retry-after': '90' }); res.end(); }, '*': html(page) });
+  const rate = await rig(limited.port)({ url: limited.url('site.example') });
+  assert.equal(rate.outcome, 'RATE_LIMITED'); assert.equal(rate.retryAfterSec, 90); assert.equal(limited.hits('/'), 0);
+  const slow = await origin(t, { '/robots.txt': () => {}, '*': html(page) });
+  const timeout = await rig(slow.port)({ url: slow.url('site.example'), timeoutMs: 1000 });
+  assert.equal(timeout.outcome, 'ROBOTS_UNAVAILABLE'); assert.equal(timeout.error?.code, 'TIMEOUT');
+  const redirect = await origin(t, { '/robots.txt': (_q, res) => { res.writeHead(302, { location: 'http://other.example/robots.txt' }); res.end(); }, '*': html(page) });
+  const denied = await rig(redirect.port)({ url: redirect.url('site.example') });
+  assert.equal(denied.outcome, 'ROBOTS_UNAVAILABLE'); assert.equal(denied.error?.code, 'PROTOCOL'); assert.equal(denied.httpStatus, 302);
+  const dns = await rig(o.port, { unsafeLocal: undefined }, { resolver: async () => [] })({ url: 'https://missing.example/' });
+  assert.equal(dns.outcome, 'FETCH_FAILED'); assert.equal(dns.error?.code, 'DNS');
+  const broken = await origin(t, { '/robots.txt': (_q, res) => { res.writeHead(200, { 'content-encoding': 'gzip' }); res.end('invalid compressed bytes'); }, '*': html(page) });
+  const decode = await rig(broken.port)({ url: broken.url('site.example') });
+  assert.equal(decode.outcome, 'ROBOTS_UNAVAILABLE'); assert.equal(decode.error?.code, 'DECODE');
+});
+
 test('a valid fetch returns a digest through the guarded path, sends only the fixed identity headers and a GET, and reports robots and hashes', async t => {
   const o = await origin(t, { '/robots.txt': noRobots, '/a': html(page, { etag: '"v1"', 'last-modified': 'Tue, 15 Nov 1994 08:12:31 GMT' }) });
   const result = await rig(o.port)({ url: o.url('site.example', '/a?q=1#frag') });
@@ -253,7 +278,7 @@ test('TLS certificates are always verified: an untrusted or mismatched certifica
   await new Promise<void>(resolve => tls.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise<void>(resolve => { tls.closeAllConnections(); tls.close(() => resolve()); })); const port = (tls.address() as AddressInfo).port;
   const run = rig(port, { unsafeLocal: { allowedCidrs: ['127.0.0.0/8'], allowedPorts: [port], hostMap: { 'tls.example': '127.0.0.1', 'wrong.example': '127.0.0.1' } } });
   for (const host of ['tls.example', 'wrong.example']) { // self-signed and unknown to the trust store; and a name the certificate does not cover
-    const result = await run({ url: `https://${host}:${port}/` }); assert.deepEqual([result.outcome, result.error?.code, result.error?.retryable], ['ROBOTS_UNAVAILABLE', undefined, undefined]); }
+    const result = await run({ url: `https://${host}:${port}/` }); assert.deepEqual([result.outcome, result.error?.code, result.error?.retryable], ['ROBOTS_UNAVAILABLE', 'TLS', false]); }
   assert.equal(served, 0, 'no request may be sent over an unverified connection');
   assert.equal(Object.keys(FetchInputSchema.shape).some(key => /tls|insecure|verify|cert/i.test(key)), false); // the input has no TLS knob
 });

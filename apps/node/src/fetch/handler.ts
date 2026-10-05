@@ -10,7 +10,7 @@ import { FetchProblem, guardedGet, systemResolver } from './http-client.js';
 import type { GetResult, Resolver } from './http-client.js';
 import { Limiter } from './politeness.js';
 import { evaluate, parseRobots, ROBOTS_MAX_BYTES, RobotsCache } from './robots.js';
-import type { RobotsRules } from './robots.js';
+import type { RobotsRules, RobotsEntry } from './robots.js';
 import { checkUrl } from './url-policy.js';
 
 /** Owner-controlled limits for the fetch capability. A job can only lower these, never raise them. */
@@ -93,30 +93,41 @@ export function createFetchHandler(deps: FetchDeps): (input: FetchInput, context
     const acquired = limiter.tryAcquire(first.host); if (!acquired.ok) return finish('RATE_LIMITED', { retryAfterSec: acquired.retryAfterSec });
 
     // robots.txt for one origin, cached in memory, fetched through the same guarded client.
-    const robotsFor = async (target: URL): Promise<{ rules?: RobotsRules; problem?: FetchProblem; unavailable?: boolean }> => {
+    const robotsFor = async (target: URL): Promise<{ rules?: RobotsRules; problem?: FetchProblem; unavailable?: boolean; httpStatus?: number; retryAfterSec?: number; error?: FetchOutput['error'] }> => {
       const origin = originOf(target); const hit = cache.get(origin);
-      if (hit) return hit.kind === 'RULES' ? { rules: hit.rules } : hit.kind === 'UNAVAILABLE' ? { unavailable: true } : {};
+      if (hit) return hit.kind === 'RULES' ? { rules: hit.rules } : hit.kind === 'UNAVAILABLE' ? { unavailable: true, ...(hit.httpStatus === undefined ? {} : { httpStatus: hit.httpStatus }), ...(hit.retryAfterSec === undefined ? {} : { retryAfterSec: hit.retryAfterSec }), ...(hit.error ? { error: hit.error } : {}) } : {};
       const robotsUrl = new URL('/robots.txt', origin); let current = robotsUrl;
+      const failure: Extract<RobotsEntry, { kind: 'UNAVAILABLE' }> = { kind: 'UNAVAILABLE', fetchedAt: clock() };
       try {
         for (let hop = 0; hop <= HARD_MAX_REDIRECTS; hop++) {
           const res = await get(current, { 'User-Agent': userAgent, Accept: 'text/plain,*/*;q=0.1', 'Accept-Encoding': 'gzip, br' }, h => h.status >= 200 && h.status < 300, ROBOTS_MAX_BYTES);
+          failure.httpStatus = res.status;
+          const after = retryAfterSec(res.headers['retry-after'], clock()); if (after !== undefined) failure.retryAfterSec = after;
           if (REDIRECT_STATUSES.has(res.status) && res.headers.location) {
-            let next: URL; try { next = new URL(res.headers.location, current); } catch { break; }
-            const checked = checkUrl(next.toString(), urlPolicy); if (!checked.ok) break; if (!sameOrigin(current, checked.url)) break; current = checked.url; continue;
+            let next: URL; try { next = new URL(res.headers.location, current); } catch { failure.error = { code: 'PROTOCOL', retryable: false }; break; }
+            const checked = checkUrl(next.toString(), urlPolicy); if (!checked.ok || !sameOrigin(current, checked.url)) { failure.error = { code: 'PROTOCOL', retryable: false }; break; } current = checked.url; continue;
           }
           if (res.status >= 200 && res.status < 300) { const rules = parseRobots(decode(res.body, undefined)); cache.set(origin, { kind: 'RULES', rules, fetchedAt: clock() }); return { rules }; }
+          if (res.status === 429) break; // a rate limit is a request to wait, never permission to fetch the page
           if (res.status >= 400 && res.status < 500) { cache.set(origin, { kind: 'ALLOW_ALL', fetchedAt: clock() }); return {}; } // RFC 9309: unavailable client error means no restrictions
+          if (res.status < 500) failure.error = { code: 'PROTOCOL', retryable: false };
           break; // 5xx and anything else: unreachable
         }
       } catch (error) {
-        if (error instanceof FetchProblem) { if (error.code === 'BLOCKED' || error.code === 'DNS') return { problem: error }; } else throw error; // an abort is rethrown so the job is released
+        if (error instanceof FetchProblem) {
+          if (error.code === 'BLOCKED' || error.code === 'DNS') return { problem: error };
+          failure.error = { code: error.code === 'TOO_LARGE' ? 'PROTOCOL' : error.code, retryable: !['TLS', 'DECODE', 'PROTOCOL', 'TOO_LARGE'].includes(error.code) };
+        } else throw error; // an abort is rethrown so the job is released
       }
-      cache.set(origin, { kind: 'UNAVAILABLE', fetchedAt: clock() }); return { unavailable: true };
+      if (!failure.error && (failure.httpStatus ?? 0) < 500) failure.error = { code: 'PROTOCOL', retryable: false };
+      failure.fetchedAt = clock(); cache.set(origin, failure);
+      return { unavailable: true, ...(failure.httpStatus === undefined ? {} : { httpStatus: failure.httpStatus }), ...(failure.retryAfterSec === undefined ? {} : { retryAfterSec: failure.retryAfterSec }), ...(failure.error ? { error: failure.error } : {}) };
     };
     const consult = async (target: URL): Promise<FetchOutput | undefined> => {
       const found = await robotsFor(target);
       if (found.problem) { if (found.problem.code === 'DNS') return finish('FETCH_FAILED', { error: { code: 'DNS', retryable: true } }); return finish('BLOCKED_TARGET'); }
-      if (found.unavailable) { robots = { verdict: 'UNAVAILABLE' }; return finish('ROBOTS_UNAVAILABLE'); }
+      if (found.unavailable && found.httpStatus === 429) return finish('RATE_LIMITED', { retryAfterSec: found.retryAfterSec ?? 60 });
+      if (found.unavailable) { robots = { verdict: 'UNAVAILABLE' }; return finish('ROBOTS_UNAVAILABLE', { ...(found.httpStatus === undefined ? {} : { httpStatus: found.httpStatus }), ...(found.retryAfterSec === undefined ? {} : { retryAfterSec: found.retryAfterSec }), ...(found.error ? { error: found.error } : {}) }); }
       const entry = cache.get(originOf(target)); const sha = entry?.kind === 'RULES' ? entry.rules.sha256 : undefined;
       const decision = found.rules ? evaluate(found.rules, identity.product, `${target.pathname}${target.search}`) : { allowed: true };
       robots = { verdict: decision.allowed ? 'ALLOWED' : 'DISALLOWED', ...(entry ? { fetchedAtMs: entry.fetchedAt } : {}), ...(sha ? { sha256: sha } : {}), ...('crawlDelaySec' in decision && decision.crawlDelaySec !== undefined ? { crawlDelaySec: decision.crawlDelaySec } : {}) };
