@@ -330,6 +330,16 @@ def apply_update(app, release, backup_root):
             emit(app['id'], 'PROGRAM_ROLLED_BACK', stateRestored=False, backup=str(snapshot))
             raise
 
+def installed_version(root, kind):
+    manifest = root / 'package.json'
+    # Core alpha.3/alpha.3.1 portable archives had workspace manifests only.
+    if kind == 'core' and not manifest.is_file():
+        manifest = root / 'node_modules/@privanet/protocol/package.json'
+    version = json.loads(manifest.read_text())['version']
+    if not VERSION.fullmatch(version):
+        raise UpdateError('INSTALLED_VERSION_INVALID')
+    return version
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', default='/etc/privanet/updater.json')
@@ -359,7 +369,7 @@ def main():
             emit('all', 'NO_MANAGED_INSTALLATIONS')
         for app in apps:
             try:
-                current = json.loads((Path(app['link']) / 'package.json').read_text())['version']
+                current = installed_version(Path(app['link']), app['kind'])
                 releases = json.loads(download(f'https://api.github.com/repos/{REPOS[app["kind"]]}/releases?per_page=100', 4 * 1024 * 1024))
                 if not releases:
                     emit(app['id'], 'NO_PUBLISHED_RELEASES')

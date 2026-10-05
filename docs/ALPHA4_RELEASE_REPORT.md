@@ -122,3 +122,5 @@ A package.json version change merged into main now invokes the existing validate
 The second hosted run passed both macOS versions and all Linux/operator jobs. Windows certificate generation still failed. Generated key/certificate durability handles now open with write access before fsync, which Windows requires; failure diagnostics also identify a fixed operation stage without exposing subprocess output. Local lint/typecheck/build and 31 storage tests (30 pass, one privilege skip) pass. Hosted Windows revalidation remains required.
 
 A ninth updater regression test exercises the actual private service umask: deployed program directories/dependencies are explicitly readable by service accounts, while backups retain private modes; dependency links escaping the staged release are refused.
+
+A tenth updater regression covers alpha.3/alpha.3.1 portable archives whose version lives only in the protocol workspace manifest. New archives also include a root distribution-version manifest so automatic update layout validation succeeds.

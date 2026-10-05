@@ -11,6 +11,7 @@ const stage = join(outDir, `privanet-${version}-${platform}`);
 rmSync(stage, { recursive: true, force: true });
 const modules = join(stage, 'node_modules');
 mkdirSync(join(stage, 'bin'), { recursive: true }); mkdirSync(join(stage, 'tools'), { recursive: true });
+writeFileSync(join(stage, 'package.json'), JSON.stringify({ name: 'privanet-distribution', version, private: true }) + '\n');
 
 const workspaces = { protocol: 'packages/protocol', shared: 'packages/shared', sdk: 'packages/sdk', coordinator: 'apps/coordinator', node: 'apps/node' };
 for (const [name, source] of Object.entries(workspaces)) {

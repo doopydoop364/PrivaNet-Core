@@ -77,6 +77,16 @@ class UpdaterTests(unittest.TestCase):
             finally:
                 os.umask(previous)
 
+    def test_existing_core_archive_version_without_root_manifest(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            manifest = root / 'node_modules/@privanet/protocol/package.json'
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text('{"version":"0.4.0-alpha.3.1"}')
+            self.assertEqual(u.installed_version(root, 'core'), '0.4.0-alpha.3.1')
+            (root / 'package.json').write_text('{"version":"0.4.0-alpha.4"}')
+            self.assertEqual(u.installed_version(root, 'core'), '0.4.0-alpha.4')
+
     def test_hash_mismatch_and_ambiguous_manifest_refused(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'archive'
