@@ -7,6 +7,19 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 
 ## [Unreleased]
 
+## [0.4.0-alpha.3.1] - 2026-10-05
+
+Focused crawler diagnostics patch; the separate alpha.4 storage milestone is unchanged.
+
+### Fixed
+- Preserve robots HTTP status, typed transport error and Retry-After through negative-cache hits. Robots 429 is rate limited conservatively instead of permitting the page fetch.
+- Forward PrivaSearch operational health and configured-family concentration through the roundup adapter, with compatibility for older sources.
+
+### Validation and upgrade
+- Adds robots diagnostic/cache/rate-limit and roundup forwarding regressions. Protocol version and snapshot schema stay unchanged; no storage migration or replication changes.
+- Upgrade crawler nodes to obtain the new robots diagnostics and restart the roundup adapter to forward the new Search health fields. See [crawler observability](docs/CRAWLER_OBSERVABILITY.md).
+- Local lint/typecheck passed. Full suite: 550 passed, two failures in unchanged runtime-dependent network-interface and /proc inspection tests, six skipped. GitHub CI results are recorded on PR #40; tests do not establish production remote reachability or security.
+
 ## [0.4.0-alpha.3] - 2026-10-03
 
 Phase 4.0-alpha.3 now moves generic opaque chunk bytes directly application ↔ storage node. The Coordinator carries only authorization and metadata. Both capacity and the TLS listener remain opt-in/default-off; protocol stays 1. [Built reference](docs/DIRECT_TRANSFER.md), [design decisions](docs/PHASE4_DESIGN.md#17-40-alpha3-as-built-and-what-changed-from-this-design), [validation/measurements](docs/ALPHA3_IMPLEMENTATION_STATUS.md).

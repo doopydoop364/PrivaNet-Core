@@ -1,6 +1,6 @@
 {
   "name": "@privanet/shared",
-  "version": "0.4.0-alpha.3",
+  "version": "0.4.0-alpha.3.1",
   "description": "PrivaNet shared client internals: bounded HTTPS/loopback transport, identity helpers and secret handling. Used by @privanet/sdk.",
   "license": "Apache-2.0",
   "type": "module",
@@ -21,7 +21,7 @@
   },
   "sideEffects": false,
   "dependencies": {
-    "@privanet/protocol": "0.4.0-alpha.3",
+    "@privanet/protocol": "0.4.0-alpha.3.1",
     "zod": "^4.6.5"
   },
   "repository": {
