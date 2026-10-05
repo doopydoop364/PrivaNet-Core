@@ -159,7 +159,7 @@ The first Phase 4 code is a store of opaque, immutable, SHA-256-addressed chunks
 | Usage never exceeds the owner's quota or the free-space reserve, including against a stale reading | quota and free-space tests (reading changes mid-write and at commit) |
 | A damaged chunk is never served; it is removed and reported once | corrupt-at-rest tests (wrong digest, truncated, extended) |
 | Errors are a fixed vocabulary; no path or system message reaches a caller | injected `ENOSPC`/`EIO`/`EACCES`/`ELOOP` tests |
-| The store is not a network service | a real-node test that the process owns no listening socket with storage on; the policy has no network setting |
+| Capacity alone opens no transfer listener | the compute-only node test owns no listening socket with storage on and the explicit transfer opt-in disabled |
 
 Not covered in alpha.1 (later milestones): transfer authorization, replay and theft of grants, endpoint substitution, remote disk-exhaustion by many clients, and possession challenges. A store on a filesystem that lies about fsync can lose the most recent write in a power cut (never half of it). No independent review has been done.
 
@@ -222,3 +222,9 @@ Private checksummed replay/receipt state refuses corruption instead of resetting
 The platform parser, anchored paths, exact lengths, forbidden Transfer-Encoding/ranges, header/connection/challenge/concurrency/request/time limits and streaming owner bandwidth meter bound hostile input. The Coordinator never fetches advertised URLs; the SDK sends protected HTTP only after exact pinned TLS identity. A malicious advertisement can induce an unsuccessful TLS connection attempt, but cannot deliver tickets or bytes to a service without the pinned private key. Public reachability and certificate renewal are operator responsibilities. No secret-shaped material is logged or added to panel/support data.
 
 Tests, namespace traffic proof, measured throughput and the final review record are in [ALPHA3_IMPLEMENTATION_STATUS.md](ALPHA3_IMPLEMENTATION_STATUS.md). Two internal clean review passes do not prove absence of vulnerabilities. Independent external review, malicious-node durability guarantees, replication/repair and production/community hardening remain outstanding.
+
+## Alpha.4 operator surfaces
+
+Offline inspection cannot prove listener operation. Recent private daemon snapshots name their observation time; exact Coordinator acceptance is metadata evidence, and remote reachability remains UNKNOWN unless explicitly tested from the operator machine. The explicit operator probe performs only bounded pinned TLS, using the SDK identity rules, without tickets, credentials or payload. The Coordinator supplies registered metadata and never dials node-controlled origins. A successful handshake proves TLS availability from that operator, not application authorization or universal network reachability.
+
+Certificate generation runs one fixed OpenSSL operation with a validated literal IP, private staging and atomic versioned-directory publication. Old keys remain on renewal; grants pin their original leaf and must be replaced. No arbitrary command or certificate issuance API is exposed by the panel. Policy backups now publish privately and atomically rather than following a backup symlink. Changes retain protocol 1 and existing store, replay, receipt and database formats. Review evidence and limitations: [ALPHA4_IMPLEMENTATION_STATUS.md](ALPHA4_IMPLEMENTATION_STATUS.md).

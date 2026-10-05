@@ -16,7 +16,7 @@ PrivaNet has three layers ([docs/DATA_PLANE.md](docs/DATA_PLANE.md), ADR 006):
 2. **Control plane**: the Coordinator. Authentication, node identity, capability registry, scheduler, job state, leases, placement decisions, transfer authorizations, and later accounting, the resource market and the Network Treasury.
 3. **Resource/data plane**: PrivaNodes. Actual compute, storage and bandwidth, plus application-to-node and node-to-node transfers.
 
-> The Coordinator is the control plane, not the bulk-data pipe. All work begins at the Coordinator; large payloads eventually move directly between authorized participants through narrowly scoped, Coordinator-authorized transfers. Small typed jobs keep returning bounded inline results through the Coordinator. The direct data plane is a Phase 4 deliverable and is **not implemented**.
+> The Coordinator is the control plane, not the bulk-data pipe. All work begins at the Coordinator; large payloads eventually move directly between authorized participants through narrowly scoped, Coordinator-authorized transfers. Small typed jobs keep returning bounded inline results through the Coordinator. The application-to-node direct storage data plane is implemented since alpha.3; alpha.4 adds operator hardening and diagnostics. Node replication/repair remains Phase 5.
 
 ## Status terminology
 
@@ -411,3 +411,7 @@ These applications should not distract from the Core Foundation, PrivaSearch, an
 21. Small typed jobs keep returning bounded inline results; introduce result-by-reference only when measurements require it, and additively.
 22. Accounting rests on verified data-plane evidence, never on issued authorizations or requested capacity.
 23. The Coordinator's server may also run an optional, conservatively limited PrivaNode, scheduled through the same authenticated path as any node; the Coordinator never depends on it.
+
+## 4.0-alpha.4 operator hardening
+
+Implemented: explicit live/offline listener status, storage diagnostics, effective-setting sources, safe capacity/reserve controls, node-local certificate generation/renewal, operator-side pinned TLS probe and negotiated pool reporting. [Validation status](docs/ALPHA4_IMPLEMENTATION_STATUS.md) records automated evidence and outstanding real-machine checks. Phase 5 remains separate.

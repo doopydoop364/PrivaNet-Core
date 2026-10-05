@@ -108,3 +108,10 @@ export class PersistentReplaySet {
     this.flushing = false;
   }
 }
+
+/** Read-only validation: absent state is normal before the first transfer; corruption never resets it. */
+export async function inspectReplayState(stateDir: string): Promise<void> {
+  try { const value = StateSchema.parse(JSON.parse(await readPrivateFileUpTo(join(stateDir, REPLAY_STATE_FILE), MAX_STATE_BYTES)));
+    if (value.checksum !== checksum(value.entries) || new Set(value.entries.map(([id]) => id)).size !== value.entries.length) throw new Error();
+  } catch (error) { if (!isMissing(error)) throw new ReplayStateError('REPLAY_STATE_INVALID'); }
+}

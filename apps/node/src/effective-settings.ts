@@ -1,3 +1,7 @@
+import { z } from 'zod';
+import { join } from 'node:path';
+import { readPrivateFileUpTo } from '@privanet/shared';
+import { StatusFileSchema, STATUS_FILE, STATUS_STALE_MS } from './status-file.js';
 import type { JobType } from '@privanet/protocol';
 import { activePause, jobSlotsChoice, readLocalState } from './local-state.js';
 import type { LocalState } from './local-state.js';
@@ -7,7 +11,7 @@ import type { ResolvedPolicy } from './policy-store.js';
 import { readEnrollmentRecordSync } from './enrollment-record.js';
 import { existsSync } from 'node:fs';
 import { DEFAULT_PANEL_PORT } from './panel-token.js';
-import { transferConfig, TRANSFER_ENV } from './store/transfer-config.js';
+import { transferConfig, TRANSFER_ENV, reportedTransferEndpoint } from './store/transfer-config.js';
 
 /**
  * One place that answers "what is this node actually using, and where did that come from?", for the panel, the CLI, the support bundle and `config check`.
@@ -32,8 +36,9 @@ export interface EffectiveSettings {
   coordinator: { source: 'environment' | 'enrollment' | 'default'; host: string | null; editableHere: false };
   panel: { enabled: boolean; port: number; source: 'environment' | 'default'; editableHere: false };
   /** The local chunk store's switches (the store itself is reported by `storage status`). Governed by the same policy source and lock as every other limit. */
-  storage: { enabled: boolean; maxBytes: number; reserveFreeBytes: number; source: 'saved' | 'installer-file' | 'default'; locked: boolean; networkAccessible: false };
-  directTransfer: { enabled: boolean; bindAddress: string; port: number; endpoint: string; maxConcurrent: number; maxConcurrentPuts: number; certificateConfigured: boolean; keyConfigured: boolean; environmentLocks: string[] };
+  storage: { enabled: boolean; maxBytes: number; reserveFreeBytes: number; source: 'saved' | 'installer-file' | 'default'; locked: boolean; networkAccessible: null };
+  directTransfer: { enabled: boolean; bindAddress: string; port: number; endpoint: string; maxConcurrent: number; maxConcurrentPuts: number; certificateConfigured: boolean; keyConfigured: boolean; environmentLocks: string[]; configurationError: string | null };
+  storageFields: Record<string, { value: unknown; source: Source; saved: unknown; override: string | null; locked: boolean }>;
   name: { value: string | null; source: 'saved' | 'none' };
   pause: { active: boolean; kind: string | null; until: number | null };
   updates: { automatic: false };
@@ -62,7 +67,17 @@ export function computeEffectiveSettings(input: SettingsInputs): EffectiveSettin
   const url = env.PRIVANODE_COORDINATOR_URL ?? input.enrolled?.coordinatorUrl;
   const panelPort = Number(env.PRIVANODE_PANEL_PORT ?? DEFAULT_PANEL_PORT);
   const pause = activePause(local.pause, input.now, input.bootTime);
-  const direct = transferConfig(input.policy.policy, env);
+  let direct; let configurationError: string | null = null;
+  try { direct = transferConfig(input.policy.policy, env); } catch (error) { direct = input.policy.policy.storage.transfer; configurationError = error instanceof Error ? error.message : 'TRANSFER_CONFIG_INVALID'; }
+  const policySource = input.policy.source.kind === 'saved' ? 'saved' as const : input.policy.source.kind === 'env-file' ? 'installer-file' as const : 'default' as const;
+  const storageFields: EffectiveSettings['storageFields'] = {};
+  for (const key of ['enabled', 'maxBytes', 'reserveFreeBytes'] as const) storageFields[key] = { value: input.policy.policy.storage[key], source: policySource, saved: policySource === 'saved' ? input.policy.policy.storage[key] : null, override: null, locked: policyLocked };
+  for (const [key, name] of Object.entries(TRANSFER_ENV)) {
+    const k = key as keyof typeof TRANSFER_ENV; const overridden = env[name] !== undefined;
+    const secretPath = k === 'keyFile' || k === 'certificateFile';
+    const savedValue = secretPath ? !!input.policy.policy.storage.transfer[k] : k === 'endpoint' ? reportedTransferEndpoint(input.policy.policy.storage.transfer.endpoint) : input.policy.policy.storage.transfer[k];
+    storageFields[`transfer.${key}`] = { value: configurationError ? null : secretPath ? !!direct[k] : direct[k], source: overridden ? 'environment' : policySource, saved: policySource === 'saved' ? savedValue : null, override: overridden ? name : null, locked: policyLocked || overridden };
+  }
   return {
     jobSlots: { value: input.runningJobSlots ?? choice.value, source: choice.source, saved: local.jobSlots ?? null, locked: slotsFromEnv, appliesAtStart: true,
       restartRequired: input.runningJobSlots !== undefined && !slotsFromEnv && local.jobSlots !== undefined && local.jobSlots !== input.runningJobSlots },
@@ -72,13 +87,20 @@ export function computeEffectiveSettings(input: SettingsInputs): EffectiveSettin
     coordinator: { source: env.PRIVANODE_COORDINATOR_URL !== undefined ? 'environment' : input.enrolled ? 'enrollment' : 'default', host: hostOf(url ?? 'http://127.0.0.1:4010'), editableHere: false },
     panel: { enabled: env.PRIVANODE_PANEL !== 'off', port: Number.isInteger(panelPort) ? panelPort : DEFAULT_PANEL_PORT, source: env.PRIVANODE_PANEL !== undefined || env.PRIVANODE_PANEL_PORT !== undefined ? 'environment' : 'default', editableHere: false },
     storage: { enabled: input.policy.policy.storage.enabled, maxBytes: input.policy.policy.storage.maxBytes, reserveFreeBytes: input.policy.policy.storage.reserveFreeBytes,
-      source: input.policy.source.kind === 'saved' ? 'saved' : input.policy.source.kind === 'env-file' ? 'installer-file' : 'default', locked: policyLocked, networkAccessible: false },
-    directTransfer: { enabled: direct.enabled, bindAddress: direct.bindAddress, port: direct.port, endpoint: direct.endpoint, maxConcurrent: direct.maxConcurrent, maxConcurrentPuts: direct.maxConcurrentPuts,
+      source: input.policy.source.kind === 'saved' ? 'saved' : input.policy.source.kind === 'env-file' ? 'installer-file' : 'default', locked: policyLocked, networkAccessible: null },
+    storageFields,
+    directTransfer: { configurationError, enabled: configurationError ? false : direct.enabled, bindAddress: direct.bindAddress, port: direct.port, endpoint: reportedTransferEndpoint(direct.endpoint), maxConcurrent: direct.maxConcurrent, maxConcurrentPuts: direct.maxConcurrentPuts,
       certificateConfigured: direct.certificateFile !== '', keyConfigured: direct.keyFile !== '', environmentLocks: Object.entries(TRANSFER_ENV).filter(([, name]) => env[name] !== undefined).map(([key]) => key) },
     name: { value: local.name ?? null, source: local.name === undefined ? 'none' : 'saved' },
     pause: { active: pause !== undefined, kind: pause?.kind ?? null, until: pause?.until ?? null },
     updates: { automatic: false },
   };
+}
+
+/** A running node retains its last good policy when a file becomes corrupt; disk fallback is not its effective policy. */
+export function withRunningStorageSettings(base: EffectiveSettings, policy: ResolvedPolicy, env: NodeJS.ProcessEnv): EffectiveSettings {
+  const live = computeEffectiveSettings({ env, policy, local: { version: 1, disabledCapabilities: [] }, now: Date.now() });
+  return { ...base, policy: { ...base.policy, source: live.policy.source, preset: live.policy.preset }, storage: live.storage, directTransfer: live.directTransfer, storageFields: live.storageFields };
 }
 
 /** A few plain lines for `privanet-node settings`. */
@@ -91,6 +113,8 @@ export function renderSettings(s: EffectiveSettings): string {
     `Capabilities   ${s.capabilities.advertised.join(', ') || 'none'}${by(s.capabilities.source)}${s.capabilities.disabledByOwner.length ? `; switched off by you: ${s.capabilities.disabledByOwner.join(', ')}` : ''}`,
     `Storage        ${s.storage.enabled ? `ON: up to ${gib(s.storage.maxBytes)}, keeping ${gib(s.storage.reserveFreeBytes)} of disk free` : 'off'}${by(s.storage.source)}${s.policy.locked ? '; locked with the policy' : ''}; opaque chunks`,
     `Transfer       ${s.directTransfer.enabled ? `TLS listener configured on ${s.directTransfer.bindAddress}:${s.directTransfer.port}; endpoint ${s.directTransfer.endpoint}` : 'off (no network access)'}; concurrent ${s.directTransfer.maxConcurrent}, PUTs ${s.directTransfer.maxConcurrentPuts}${s.directTransfer.environmentLocks.length ? `; environment locks: ${s.directTransfer.environmentLocks.join(', ')}` : ''}`,
+    ...Object.entries(s.storageFields).map(([key, field]) => `Storage ${key.padEnd(22)} ${typeof field.value === 'number' && ['maxBytes', 'reserveFreeBytes'].includes(key) ? gib(field.value) : String(field.value)} [${field.source}]${field.override ? `; saved ${JSON.stringify(field.saved)}; override ${field.override}` : ''}${field.locked ? '; locked' : ''}`),
+    ...(s.directTransfer.configurationError ? [`Transfer configuration: ${s.directTransfer.configurationError}`] : []),
     `Coordinator    ${s.coordinator.host ?? 'unknown'}${by(s.coordinator.source)}; not editable here`,
     `Panel          ${s.panel.enabled ? `on, port ${s.panel.port}` : 'off'}${by(s.panel.source)}; set in the environment`,
     `Name           ${s.name.value ?? '(none)'}${s.name.source === 'saved' ? ' (saved by you; stays on this machine)' : ''}`,
@@ -108,4 +132,23 @@ export async function gatherSettings(env: NodeJS.ProcessEnv, stateDir: string, n
   const savedPolicyPresent = locked && existsSync(policyFilePath(stateDir)) && (await readPolicyFile(stateDir)).kind !== 'absent';
   const settings = computeEffectiveSettings({ env, local: local.state, policy, enrolled: enrolled ? { coordinatorUrl: enrolled.coordinatorUrl, capabilities: enrolled.capabilities } : undefined, runningJobSlots, now, savedPolicyPresent });
   return { settings, ...(local.kind === 'error' ? { localProblem: local.code } : {}), ...(policy.problem ? { policyProblem: policy.problem.code } : {}) };
+}
+
+const sourceSchema = z.enum(['environment', 'saved', 'enrollment', 'installer-file', 'default']);
+const scalar = z.union([z.boolean(), z.number().finite(), z.string().max(512), z.null()]);
+const daemonStorageSettings = z.object({
+  storage: z.object({ enabled: z.boolean(), maxBytes: z.number().int().min(0), reserveFreeBytes: z.number().int().min(0), source: z.enum(['saved', 'installer-file', 'default']), locked: z.boolean(), networkAccessible: z.null() }),
+  directTransfer: z.object({ enabled: z.boolean(), bindAddress: z.string().max(64), port: z.number().int(), endpoint: z.string().max(512), maxConcurrent: z.number().int(), maxConcurrentPuts: z.number().int(), certificateConfigured: z.boolean(), keyConfigured: z.boolean(), environmentLocks: z.array(z.string().max(64)).max(16), configurationError: z.string().max(64).nullable() }),
+  storageFields: z.record(z.string().max(64), z.object({ value: scalar, source: sourceSchema, saved: scalar, override: z.string().max(64).nullable(), locked: z.boolean() })),
+});
+/** Prefer the daemon's effective storage environment; a login shell may have different overrides. */
+export async function preferDaemonStorageSettings(stateDir: string, settings: EffectiveSettings, now = Date.now()): Promise<{ settings: EffectiveSettings; observation: 'daemon' | 'command-environment' }> {
+  try {
+    const file = StatusFileSchema.parse(JSON.parse(await readPrivateFileUpTo(join(stateDir, STATUS_FILE), 262144)));
+    if (file.publishedAt <= now && now - file.publishedAt <= STATUS_STALE_MS) {
+      const live = daemonStorageSettings.parse(file.status.storageSettings);
+      return { settings: { ...settings, ...live }, observation: 'daemon' };
+    }
+  } catch { /* absence, invalid or stale snapshots cannot establish running configuration */ }
+  return { settings, observation: 'command-environment' };
 }

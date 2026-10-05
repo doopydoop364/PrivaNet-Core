@@ -44,7 +44,7 @@ export interface StoreUsage {
   incomingBytes: number;
   maxBytes: number; reserveFreeBytes: number;
   /** How many more bytes could be accepted right now: the smaller of the quota room and the free space above the reserve. */
-  allowedBytes: number; freeBytes: number | null;
+  allowedBytes: number; unwrittenReservedBytes: number; freeBytes: number | null;
   /** Entries found that are not valid chunks (malformed names, wrong sizes or permissions). They are never counted, served or deleted. */
   anomalies: number; integrityFailures: number;
   health: 'OK' | 'DEGRADED'; flags: string[];
@@ -184,7 +184,7 @@ export class ChunkStore {
     const free = await this.free(); const room = this.room(free);
     const flags: string[] = []; if (this.anomalies > 0) flags.push('ANOMALIES'); if (this.integrityFailures > 0) flags.push('INTEGRITY_FAILURES'); if (free === null) flags.push('FREE_SPACE_UNKNOWN'); if (this.closedFlag) flags.push('CLOSED');
     return { committedBytes: this.committedBytes, chunkCount: this.chunkCount, incomingBytes: this.reserved + this.orphanBytes, maxBytes: this.limits.maxBytes, reserveFreeBytes: this.limits.reserveFreeBytes,
-      allowedBytes: room, freeBytes: free, anomalies: this.anomalies, integrityFailures: this.integrityFailures, health: flags.length === 0 ? 'OK' : 'DEGRADED', flags };
+      allowedBytes: room, unwrittenReservedBytes: Math.max(0, this.reserved - this.writtenInFlight), freeBytes: free, anomalies: this.anomalies, integrityFailures: this.integrityFailures, health: flags.length === 0 ? 'OK' : 'DEGRADED', flags };
   }
   /** What can still be accepted: quota room (committed, reserved and leftover partials all count against it) and free disk above the owner's reserve (writes already made are already out of `free`). */
   private parts(free: number | null): { quotaRoom: number; diskRoom: number } {

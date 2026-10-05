@@ -11,20 +11,21 @@ export const storeRoot = (stateDir: string): string => join(stateDir, 'store');
 
 /**
  * What the owner, `config check`, the panel and the support bundle may be told about the store: switches, limits, counts and a health word. Never a path, never an inventory of chunk
- * IDs, never any content. `networkAccessible` is always false in this version: there is no storage listener and no remote API.
+ * IDs, never any content. Local listening and Coordinator acceptance do not prove remote reachability.
  */
 export interface StorageStatus {
   enabled: boolean;
-  /** DISABLED, READY (a put would be accepted), UNAVAILABLE (enabled but a node state forbids writes right now: see `reasons`), or ERROR (the store could not be opened safely). */
+  /** READY means the store opened safely and owner gates permit writing; quota/disk room and transfer availability are separate facts. */
   state: 'DISABLED' | 'READY' | 'UNAVAILABLE' | 'ERROR';
   reasons: string[]; error: string | null;
   maxBytes: number; reserveFreeBytes: number;
-  committedBytes: number; chunkCount: number; incomingBytes: number; allowedBytes: number; freeBytes: number | null;
+  unwrittenReservedBytes?: number; committedBytes: number; chunkCount: number; incomingBytes: number; allowedBytes: number; freeBytes: number | null;
   anomalies: number; integrityFailures: number; health: 'OK' | 'DEGRADED' | 'UNSAFE' | 'DISABLED'; flags: string[];
-  networkAccessible: boolean; maxChunkBytes: number; transfer?: TransferStatus;
+  /** Deprecated: cannot represent reachability; always null. Use transfer.remoteReachability. */
+  networkAccessible: null; observation?: { source: 'daemon' | 'offline'; publishedAt: number | null }; planning?: CapacityPlan; maxChunkBytes: number; transfer?: TransferStatus | undefined;
 }
 export const emptyStorageStatus = (policy: ResourcePolicy['storage']): StorageStatus => ({ enabled: policy.enabled, state: policy.enabled ? 'READY' : 'DISABLED', reasons: [], error: null, maxBytes: policy.maxBytes, reserveFreeBytes: policy.reserveFreeBytes,
-  committedBytes: 0, chunkCount: 0, incomingBytes: 0, allowedBytes: 0, freeBytes: null, anomalies: 0, integrityFailures: 0, health: policy.enabled ? 'OK' : 'DISABLED', flags: [], networkAccessible: false, maxChunkBytes: 8 * 1024 * 1024 });
+  committedBytes: 0, chunkCount: 0, incomingBytes: 0, allowedBytes: 0, freeBytes: null, anomalies: 0, integrityFailures: 0, health: policy.enabled ? 'OK' : 'DISABLED', flags: [], networkAccessible: null, maxChunkBytes: 8 * 1024 * 1024 });
 
 /** A read-only look at the store on disk for a process that does not own it (`privanet-node storage status`, `config check`, the bundle). Creates and changes nothing. */
 export async function inspectStorage(stateDir: string, policy: ResourcePolicy['storage']): Promise<StorageStatus> {
@@ -35,6 +36,15 @@ export async function inspectStorage(stateDir: string, policy: ResourcePolicy['s
   const flags: string[] = []; if (scan.unsafe) flags.push('UNSAFE'); if (scan.anomalies > 0) flags.push('ANOMALIES'); if (policy.enabled && freeBytes === null) flags.push('FREE_SPACE_UNKNOWN');
   const quotaRoom = Math.max(0, policy.maxBytes - scan.committedBytes - scan.incomingBytes); const diskRoom = freeBytes === null ? 0 : Math.max(0, freeBytes - policy.reserveFreeBytes);
   const health = scan.unsafe ? 'UNSAFE' : !policy.enabled ? 'DISABLED' : flags.length > 0 ? 'DEGRADED' : 'OK';
-  return { ...base, state: scan.unsafe ? 'ERROR' : base.state, error: scan.unsafe ? 'STORE_UNSAFE' : null, committedBytes: scan.committedBytes, chunkCount: scan.chunkCount, incomingBytes: scan.incomingBytes,
-    allowedBytes: policy.enabled && !scan.unsafe ? Math.min(quotaRoom, diskRoom) : 0, freeBytes, anomalies: scan.anomalies, health, flags };
+  return withCapacityPlan({ ...base, state: scan.unsafe ? 'ERROR' : base.state, error: scan.unsafe ? 'STORE_UNSAFE' : null, committedBytes: scan.committedBytes, chunkCount: scan.chunkCount, incomingBytes: scan.incomingBytes,
+    allowedBytes: policy.enabled && !scan.unsafe ? Math.min(quotaRoom, diskRoom) : 0, freeBytes, anomalies: scan.anomalies, health, flags });
+}
+
+export interface CapacityPlan { quotaRemainingBytes: number; diskHeadroomBytes: number | null; usableBytes: number; overcommittedBytes: number; reserveConstrained: boolean; formula: string }
+export function withCapacityPlan(status: StorageStatus): StorageStatus {
+  const quotaRemainingBytes = Math.max(0, status.maxBytes - status.committedBytes - status.incomingBytes);
+  const diskHeadroomBytes = status.freeBytes === null ? null : Math.max(0, status.freeBytes - status.reserveFreeBytes - (status.unwrittenReservedBytes ?? 0));
+  return { ...status, planning: { quotaRemainingBytes, diskHeadroomBytes, usableBytes: status.allowedBytes,
+    overcommittedBytes: Math.max(0, status.committedBytes + status.incomingBytes - status.maxBytes), reserveConstrained: diskHeadroomBytes !== null && diskHeadroomBytes < quotaRemainingBytes,
+    formula: 'min(max(0, maxBytes - committedBytes - incomingBytes), max(0, filesystemFreeBytes - reserveFreeBytes - unwrittenReservedBytes)); owner gates can reduce usableBytes to zero' } };
 }

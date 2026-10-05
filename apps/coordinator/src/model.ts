@@ -106,6 +106,7 @@ export interface Store {
   listNodeServices(service: ServiceId): NodeServiceRecord[];
   /** Deletes advertisements last reported at or before the cutoff; returns how many. */
   deleteStaleNodeServices(reportedBefore: number): number;
+  storedReplicaTotals(): Map<string, { committedBytes: number; lostBytes: number }>;
   storageTotals(): { pending: number; stored: number; deleting: number; storedBytes: number; reservedBytes: number };
   close(): void;
 }

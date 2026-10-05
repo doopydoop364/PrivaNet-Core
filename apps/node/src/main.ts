@@ -1,4 +1,3 @@
-import { transferConfig } from './store/transfer-config.js';
 import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { PrivaNode } from './daemon.js';
@@ -28,7 +27,7 @@ import { diagnose } from './doctor.js';
 import type { PanelHandle } from './panel.js';
 import { DEFAULT_PANEL_PORT } from './panel-token.js';
 import { jobSlotsChoice, readLocalState } from './local-state.js';
-import { gatherSettings } from './effective-settings.js';
+import { gatherSettings, withRunningStorageSettings } from './effective-settings.js';
 import { checkForUpdate } from './update-check.js';
 import { STATUS_FILE, STATUS_PUBLISH_MS } from './status-file.js';
 import { privateDirectory, replacePrivateFile } from '@privanet/shared';
@@ -65,7 +64,6 @@ async function main() {
   // The owner's saved policy (from the panel or `policy import`) wins over the installer's file while it is good; a damaged or newer one is not applied and not overwritten.
   const resolved = await resolvePolicy(config.stateDir, process.env.PRIVANODE_POLICY_FILE, { locked: process.env.PRIVANODE_POLICY_LOCKED === 'true' }).catch(() => ({ policy: installedPolicy, source: { kind: 'defaults' } as const }));
   const policy = resolved.policy;
-  try { transferConfig(policy, process.env); } catch { log({ event: 'node.config_invalid', code: 'TRANSFER_CONFIG_INVALID' }); process.exitCode = EXIT_CONFIG; return; }
   if ('problem' in resolved && resolved.problem) log({ event: 'node.policy_invalid', code: resolved.problem.code });
   const transfer = new TransferMeter({ stateDir: config.stateDir, ratePerSec: policy.maxBandwidthBytesPerSec, monthlyBytes: policy.monthlyTransferBytes });
   const checkpoints = new CheckpointStore(join(config.stateDir, 'checkpoints'));
@@ -84,9 +82,10 @@ async function main() {
   const storage = new StorageService({ stateDir: config.stateDir, policy: () => control.view.policy ?? resolved.policy, inputs: { draining: () => node.snapshot.draining, engine }, log, direct: { node, meter: transfer, env: process.env } });
   offer.current = () => { const advertisement = storage.advertisement(); return advertisement ? { 'storage.chunk.v1': advertisement } : undefined; };
   const control = new LocalControl({ stateDir: config.stateDir, envPolicyFile: process.env.PRIVANODE_POLICY_FILE, node, engine, transfer, history, log, jobSlots: { running: slots.value, fromEnvironment: slots.source === 'environment' }, transferEnv: process.env, policyLocked: process.env.PRIVANODE_POLICY_LOCKED === 'true', onPolicy: policy => { void storage.apply(policy).catch(() => log({ event: "storage.unavailable", code: "TRANSFER_CONFIG_INVALID" })); }, onChange: () => { void publish(); } });
+  const runtimePolicy = () => ({ policy: control.view.policy ?? resolved.policy, source: control.view.source ?? resolved.source, ...(control.view.policyProblem ? { problem: control.view.policyProblem } : {}) });
   // The snapshot `privanet-node status` reads: private, replaced atomically, no secrets (see status-document.ts).
   const publish = async () => {
-    try { await replacePrivateFile(join(await privateDirectory(config.stateDir), STATUS_FILE), JSON.stringify({ version: 1, publishedAt: Date.now(), status: buildStatus({ node, engine, control, transfer, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities, storage: storage.status }) })); } catch { /* status is a convenience */ }
+    try { const gathered = await gatherSettings(process.env, config.stateDir, Date.now(), slots.value); const settings = withRunningStorageSettings(gathered.settings, runtimePolicy(), process.env); await replacePrivateFile(join(await privateDirectory(config.stateDir), STATUS_FILE), JSON.stringify({ version: 1, publishedAt: Date.now(), status: { ...buildStatus({ node, engine, control, transfer, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities, storage: storage.status }), storageSettings: { storage: settings.storage, directTransfer: settings.directTransfer, storageFields: settings.storageFields } } })); } catch { /* status is a convenience */ }
   };
   await control.init(resolved);
   try { await storage.start(); } catch (error) { control.stop(); await storage.stop(); throw error; }
@@ -109,7 +108,7 @@ async function main() {
     try {
       if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('bad port');
       panel = await startPanel({ stateDir: config.stateDir, port, storage, node, engine, control, transfer, history, logs, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities, jobSlots: slots.value, env: process.env, actions,
-        supportBundle: async () => buildSupportBundle({ env: process.env, settings: (await gatherSettings(process.env, config.stateDir, Date.now(), slots.value)).settings, storage: await storage.refresh(), policy: resolved, local: control.view.local, localProblem: control.view.localProblem, status: JSON.parse(JSON.stringify(buildStatus({ node, engine, control, transfer, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities, storage: storage.status }))) as Record<string, unknown>,
+        supportBundle: async () => buildSupportBundle({ env: process.env, settings: withRunningStorageSettings((await gatherSettings(process.env, config.stateDir, Date.now(), slots.value)).settings, runtimePolicy(), process.env), storage: await storage.refresh(), policy: runtimePolicy(), local: control.view.local, localProblem: control.view.localProblem, status: JSON.parse(JSON.stringify(buildStatus({ node, engine, control, transfer, coordinatorUrl: config.url, enrolledCapabilities: config.capabilities, storage: storage.status }))) as Record<string, unknown>,
           doctor: await diagnose({ url: config.url, stateDir: config.stateDir, allowInsecureLoopback: process.env.PRIVANODE_ALLOW_INSECURE_LOOPBACK === 'true', timeoutMs: 8000, env: process.env }).catch(() => undefined), logs: logs.recent(200) }), updateCheck: () => checkForUpdate() });
       log({ event: 'panel.listening', code: String(panel.port) });
     } catch { log({ event: 'panel.unavailable', code: 'LISTEN_FAILED' }); }

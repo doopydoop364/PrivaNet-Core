@@ -86,7 +86,7 @@ test('short, disconnected, stalled PUTs clean partial files and never complete',
 test('corrupt replay, receipt or TLS key refuses the listener and never erases state', async t => {
   for (const file of [REPLAY_STATE_FILE, RECEIPT_FILE, 'key.pem']) await t.test(file, async t => {
     const rig = await directRig(t); await rig.storage.stop(); const path = join(rig.dir, file); await writeFile(path, '{invalid security state', { mode: 0o600 });
-    await rig.restart(); assert.equal(rig.storage.status.transfer?.listener, 'ERROR'); assert.equal(await readFile(path, 'utf8'), '{invalid security state');
+    await rig.restart(); assert.equal(rig.storage.status.transfer?.listener, 'FAILED'); assert.equal(await readFile(path, 'utf8'), '{invalid security state');
   });
 });
 
@@ -200,6 +200,6 @@ test('receipt persistence failure during shutdown still closes the listener and 
   const first = await directRequest(grant, { 'x-privanet-handshake': '1' }, AbortSignal.timeout(5000)); const challenge = JSON.parse(first.bytes.toString()).challenge as string;
   await directRequest(grant, { 'x-privanet-challenge': challenge, 'x-privanet-proof': signHolderProof(holder.privateKey, { challenge, transferId: grant.transferId, requestLine: `GET /v1/chunks/${id}` }) }, AbortSignal.timeout(5000));
   const path = join(rig.dir, RECEIPT_FILE); await rm(path); await mkdir(path, { mode: 0o700 });
-  await rig.storage.stop(); assert.equal(rig.storage.status.transfer?.listener, 'DISABLED'); assert.equal(rig.storage.chunkStore, undefined);
+  await rig.storage.stop(); assert.equal(rig.storage.status.transfer?.listener, 'STOPPED'); assert.equal(rig.storage.chunkStore, undefined);
   assert.notEqual(rig.coordinator.store.getTransfer(grant.transferId)?.state, 'COMPLETED');
 });

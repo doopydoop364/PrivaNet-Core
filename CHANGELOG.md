@@ -7,6 +7,20 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 
 ## [Unreleased]
 
+## [0.4.0-alpha.4] - 2026-10-05
+
+Phase 4 storage hardening and operator experience; protocol remains 1. Release candidate, not published by this implementation task. Includes the alpha.3.1 crawler diagnostics and roundup forwarding fixes below.
+
+- Replace ambiguous network accessibility reporting with daemon/offline observation, listener lifecycle, exact recent Coordinator advertisement acceptance and explicitly unknown remote reachability. Deprecated `networkAccessible` is null.
+- Report fixed storage/TLS/key/bind/replay/receipt/owner-state diagnostic codes; optional listener misconfiguration no longer stops compute startup.
+- Show per-storage-setting effective source, saved value, environment override and lock. Add exact human-size capacity/reserve controls, safe enable/disable and transfer bind/port/endpoint controls. Reserve reduction needs explicit confirmation.
+- Add node-local OpenSSL P-256 IP-SAN certificate generation and versioned renewal, with private keys, atomic directory publication, preserved old keys and fresh-grant guidance.
+- Add explicit operator-side pinned TLS probe using exact registered endpoint identity, without a ticket, HTTP payload or Coordinator probing. Detailed pool reporting is negotiated to preserve strict alpha.3 summaries.
+- Show quota, reserve, incoming reservations and overcommit planning; retain chunks on disabling or reducing capacity. Fix policy-backup symlink following and unsafe backup permissions.
+- Add alpha.4 regression/upgrade coverage and real deployment checklist. No replication, repair, automatic public certificate issuance, NAT traversal or relay; independent review and real-machine validation remain outstanding.
+
+See [implementation and validation status](docs/ALPHA4_IMPLEMENTATION_STATUS.md), [setup](docs/DIRECT_TRANSFER.md) and [upgrade/rollback](docs/ALPHA4_UPGRADE.md).
+
 ## [0.4.0-alpha.3.1] - 2026-10-05
 
 Focused crawler diagnostics patch; the separate alpha.4 storage milestone is unchanged.

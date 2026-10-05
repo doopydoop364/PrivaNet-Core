@@ -35,10 +35,10 @@ test('privanet-admin sends allowedServices only when asked, so an older Coordina
   assert.equal((await admin(stub, ['application', 'new', '--services', 'storage.chunk.v1'])).code, 0); assert.deepEqual((received as { allowedServices?: string[] }).allowedServices, ['storage.chunk.v1']);
 });
 test('privanet-admin storage status: aggregates only, in text and JSON, with no id, ticket, key or application name', async t => {
-  const rig = await httpRig(t); const empty = await admin(rig, ['storage', 'status']); assert.equal(empty.code, 0); assert.match(empty.out, /No node is offering storage/); assert.match(empty.out, /Signing key:\s+[a-f0-9]{16}/);
+  const rig = await httpRig(t); const empty = await admin(rig, ['storage', 'status']); assert.equal(empty.code, 0, empty.err); assert.match(empty.out, /No node is offering storage/); assert.match(empty.out, /Signing key:\s+[a-f0-9]{16}/);
   const privaNode = await rig.node(); const app = await rig.admin.app({ name: 'secret-app-name', allowedJobTypes: [], allowedServices: ['storage.chunk.v1'] }); const chunk = chunkIdOf('payload'); const holder = generateHolderKey();
   const placed = await rig.apiFor(app.token).place({ chunkId: chunk, size: 7, holderKey: holder.publicKey }); assert(placed.grant);
-  const text = await admin(rig, ['storage', 'status']); assert.equal(text.code, 0); assert.match(text.out, /1 pending/); assert.match(text.out, /1 open/); assert.match(text.out, new RegExp(privaNode.status.nodeId?.slice(0, 13) ?? 'x'));
+  const text = await admin(rig, ['storage', 'status']); assert.equal(text.code, 0, text.err); assert.match(text.out, /1 pending/); assert.match(text.out, /1 open/); assert.match(text.out, new RegExp(privaNode.status.nodeId?.slice(0, 13) ?? 'x'));
   const json = JSON.parse((await admin(rig, ['storage', 'status', '--json'])).out) as { chunks: { pending: number }; nodes: unknown[] }; assert.equal(json.chunks.pending, 1); assert.equal(json.nodes.length, 1);
   for (const forbidden of [placed.grant.ticket, chunk, holder.publicKey, 'secret-app-name', app.token, app.applicationId, rig.adminSecret, 'privateKey']) assert.equal(text.out.includes(forbidden) || JSON.stringify(json).includes(forbidden), false, forbidden);
 });
@@ -58,4 +58,14 @@ test('the operator dashboard shows a compact storage summary and nothing identif
   const overview = await send('GET', '/api/overview', { cookie: login.cookie ?? '' }); assert.equal(overview.status, 200); const body = JSON.parse(overview.text) as { storage: { chunks: { pending: number }; transfers: { open: number }; nodes: unknown[] } | null };
   assert(body.storage); assert.equal(body.storage.chunks.pending, 1); assert.equal(body.storage.transfers.open, 1); assert.equal(body.storage.nodes.length, 1);
   for (const forbidden of [placed.grant.ticket, chunk, app.token, rig.adminSecret, 'privateKey']) assert.equal(overview.text.includes(forbidden), false, forbidden);
+});
+
+
+test('alpha.4 admin falls back to the strict alpha.3 storage summary when detail negotiation is unsupported', async t => {
+  const rig = await httpRig(t); let refusedDetails = 0;
+  const server = createServer((req, res) => {
+    if (req.url === '/v1/admin/storage?details=1') { refusedDetails++; res.writeHead(404, { 'content-type': 'application/json', 'x-privanet-protocol': '1' }); res.end(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'route not found' } })); return; }
+    assert.equal(req.url, '/v1/admin/storage'); res.writeHead(200, { 'content-type': 'application/json', 'x-privanet-protocol': '1' }); res.end(JSON.stringify(rig.core.storage.summary()));
+  }); const url = await listen(server); t.after(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
+  const result = await admin({ url, adminSecret: rig.adminSecret }, ['storage', 'status', '--json']); assert.equal(result.code, 0, result.err); assert.equal(JSON.parse(result.out).pool, undefined); assert.equal(refusedDetails, 1);
 });

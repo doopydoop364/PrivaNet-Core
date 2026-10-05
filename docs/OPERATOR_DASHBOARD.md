@@ -42,3 +42,7 @@ The Nodes tab starts with a compact **Storage control plane** card: how many nod
 ## Limits
 
 Someone who can read the dashboard process's terminal output or its memory has the sign-in token (and, by being that user, the administrator secret). It does not change who may administer a Coordinator. It shows what the Coordinator stores: no per-node history, no accounting. A page was exercised in headless Chromium by hand; that is not part of CI.
+
+## Alpha.4 operator hardening
+
+See [storage operation and diagnostic reference](DIRECT_TRANSFER.md#alpha4-storage-operations), [upgrade/rollback](ALPHA4_UPGRADE.md), [real-machine validation checklist](ALPHA4_LAN_VALIDATION.md) and [actual implementation/validation status](ALPHA4_IMPLEMENTATION_STATUS.md). Capacity, listener state, exact Coordinator metadata acceptance and remote reachability are reported separately. Protocol remains 1; Phase 5 replication and repair are deferred.

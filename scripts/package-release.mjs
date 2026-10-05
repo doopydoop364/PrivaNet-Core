@@ -22,7 +22,7 @@ for (const [name, source] of Object.entries(workspaces)) {
   cpSync(join(source, 'dist'), join(target, 'dist'), { recursive: true, filter: path => !path.endsWith('.tsbuildinfo') && !path.endsWith('.map') });
 }
 cpSync('node_modules/zod', join(modules, 'zod'), { recursive: true });
-for (const script of ['admin.mjs', 'demo.mjs', 'backup.mjs']) cpSync(join('scripts', script), join(stage, 'tools', script));
+for (const script of ['admin.mjs', 'demo.mjs', 'backup.mjs', 'validate-storage.mjs']) cpSync(join('scripts', script), join(stage, 'tools', script));
 for (const file of ['LICENSE', 'README.md', 'ROADMAP.md', 'CHANGELOG.md']) cpSync(file, join(stage, file));
 cpSync('docs', join(stage, 'docs'), { recursive: true });
 cpSync('.env.example', join(stage, '.env.example'));

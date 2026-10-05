@@ -1,4 +1,10 @@
-import { transferConfig } from './store/transfer-config.js';
+import { generateStorageCertificate } from './store/certificate.js';
+import { observedStorage } from './store/observed-status.js';
+import { storageConfigFindings, liveStorageFindings } from './store/diagnostics.js';
+import { editStoragePolicy } from './store/settings.js';
+import type { StorageEdit } from './store/settings.js';
+import { withCapacityPlan } from './store/status.js';
+import { transferConfig, reportedTransferEndpoint } from './store/transfer-config.js';
 /* eslint-disable @typescript-eslint/no-explicit-any -- the status document is rendered from a published JSON snapshot whose shape is checked where it is produced (status-document.ts) */
 import { openSync, closeSync, writeSync, readFileSync, constants as fsConstants } from 'node:fs';
 import { JobTypeSchema, MAX_JOB_SLOTS } from '@privanet/protocol';
@@ -20,8 +26,7 @@ import { join } from 'node:path';
 import { DEFAULT_PANEL_PORT, loadOrCreatePanelToken, panelUrl } from './panel-token.js';
 import { explainIdle } from './status.js';
 import { diagnose } from './doctor.js';
-import { gatherSettings, renderSettings } from './effective-settings.js';
-import { inspectStorage } from './store/status.js';
+import { gatherSettings, renderSettings, preferDaemonStorageSettings } from './effective-settings.js';
 import { UnsafeBundleError, buildSupportBundle } from './support-bundle.js';
 import { checkForUpdate } from './update-check.js';
 import { SHELLS, completionScript } from './completions.js';
@@ -58,7 +63,7 @@ async function statusCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo):
   const parsed = parse(argv, COMMON); const stateDir = stateDirOf(parsed, env); const now = Date.now();
   let file: StatusFile | undefined;
   try { file = StatusFileSchema.parse(JSON.parse(await readPrivateFileUpTo(join(stateDir, STATUS_FILE), 262144))); } catch (error) { if (!isMissing(error)) file = undefined; }
-  if (file && now - file.publishedAt <= STATUS_STALE_MS) {
+  if (file && file.publishedAt <= now && now - file.publishedAt <= STATUS_STALE_MS) {
     const doc = file.status as Record<string, any>;
     done(io, parsed, { running: true, ...doc }, renderStatus(doc, now));
     return 0;
@@ -113,7 +118,7 @@ async function configCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo):
   const parsed = parse(argv, COMMON);
   if (parsed.positional[0] !== 'check' || parsed.positional.length !== 1) throw new UsageError('usage: privanet-node config check [--json] [--state-dir DIR]');
   const result = await checkConfig({ ...env, PRIVANODE_STATE_DIR: stateDirOf(parsed, env) });
-  const human = [`Configuration ${result.ok ? 'is valid' : 'has problems'} (policy: ${result.policy?.source ?? 'defaults'}${result.policy?.preset ? `, preset ${result.policy.preset}` : ''}).`, result.findings.length ? renderFindings(result.findings) : '  No problems found.'].join('\n');
+  const human = [`Configuration ${result.ok ? 'is valid' : 'has problems'} (command environment; policy: ${result.policy?.source ?? 'defaults'}${result.policy?.preset ? `, preset ${result.policy.preset}` : ''}).`, 'A service may have different environment overrides; storage status/settings prefer its recent daemon snapshot.', result.findings.length ? renderFindings(result.findings) : '  No problems found.'].join('\n');
   done(io, parsed, result, human);
   return result.ok ? 0 : 1;
 }
@@ -129,7 +134,7 @@ async function policyCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo):
   switch (action) {
     case 'show': {
       const resolved = await resolvePolicy(stateDir, env.PRIVANODE_POLICY_FILE, { locked: env.PRIVANODE_POLICY_LOCKED === 'true' });
-      done(io, parsed, { source: resolved.source, preset: detectPreset(resolved.policy), problem: resolved.problem ?? null, policy: resolved.policy }, [`Policy in force: ${resolved.source.kind === 'defaults' ? 'conservative defaults' : resolved.source.kind === 'saved' ? `saved policy (${resolved.source.path})` : `policy file (${resolved.source.path})`}; preset: ${detectPreset(resolved.policy)}.`, JSON.stringify(resolved.policy, null, 2)].join('\n'));
+      done(io, parsed, { source: resolved.source, preset: detectPreset(resolved.policy), problem: resolved.problem ?? null, policy: resolved.policy, settings: (await preferDaemonStorageSettings(stateDir, (await gatherSettings(env, stateDir, Date.now())).settings)).settings }, [`Policy in force: ${resolved.source.kind === 'defaults' ? 'conservative defaults' : resolved.source.kind === 'saved' ? `saved policy (${resolved.source.path})` : `policy file (${resolved.source.path})`}; preset: ${detectPreset(resolved.policy)}.`, JSON.stringify(resolved.policy, null, 2), renderSettings((await preferDaemonStorageSettings(stateDir, (await gatherSettings(env, stateDir, Date.now())).settings)).settings)].join('\n'));
       return 0;
     }
     case 'export': {
@@ -176,31 +181,68 @@ async function nameCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): P
 }
 /** `storage status`: the local chunk store's switches, limits, usage and health, read from disk without changing anything. There is deliberately no command here that adds, lists or fetches chunks. */
 async function storageCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
-  const parsed = parse(argv, COMMON); const stateDir = stateDirOf(parsed, env);
-  if (parsed.positional[0] !== 'status' || parsed.positional.length !== 1) throw new UsageError('usage: privanet-node storage status [--json]');
+  const parsed = parse(argv, { flags: [...COMMON.flags, '--allow-reserve-reduction', '--renew'], values: [...COMMON.values, '--ip'] }); const stateDir = stateDirOf(parsed, env);
   const locked = env.PRIVANODE_POLICY_LOCKED === 'true'; const resolved = await resolvePolicy(stateDir, env.PRIVANODE_POLICY_FILE, { locked });
-  const status = await inspectStorage(stateDir, resolved.policy.storage); const source = resolved.source.kind === 'saved' ? 'saved' : resolved.source.kind === 'env-file' ? 'installer-file' : 'default';
-  const direct = transferConfig(resolved.policy, env);
+  const [action, arg, value] = parsed.positional;
+  if (action === 'cert' && arg === 'generate' && parsed.positional.length === 2) {
+    if (locked) throw new PolicyError('POLICY_LOCKED_BY_ENVIRONMENT');
+    if (resolved.problem) throw new PolicyError(resolved.problem.code);
+    for (const name of ['PRIVANODE_TRANSFER_CERT_FILE', 'PRIVANODE_TRANSFER_KEY_FILE', 'PRIVANODE_TRANSFER_ENDPOINT']) if (env[name] !== undefined) throw new PolicyError('POLICY_LOCKED_BY_ENVIRONMENT', [name]);
+    const ip = parsed.values.get('--ip'); if (!ip) throw new UsageError('usage: storage cert generate --ip ADDRESS [--renew]');
+    const generated = await generateStorageCertificate(stateDir, ip, resolved.policy, parsed.flags.has('--renew'));
+    const next = structuredClone(resolved.policy); Object.assign(next.storage.transfer, { certificateFile: generated.certificateFile, keyFile: generated.keyFile, endpoint: generated.endpoint });
+    try { await savePolicyFile(stateDir, next, detectPreset(next)); } catch {
+      // A post-rename fsync failure has an uncertain outcome: the policy may already reference these files.
+      // Retain private material rather than delete a possibly active certificate/key pair.
+      done(io, parsed, { ok: false, code: 'STORAGE_CERT_POLICY_SAVE_FAILED', materialRetained: true, freshGrantsRequired: true }, 'Certificate material was generated and retained privately, but policy-save durability could not be confirmed. Inspect policy/status before retrying. Any changed certificate identity requires fresh endpoint registration and grants.'); return 1;
+    }
+    done(io, parsed, { ok: true, certificateFile: generated.certificateFile, keyFile: generated.keyFile, expiresAt: generated.expiresAt, algorithm: generated.algorithm, restartRequired: [], freshGrantsRequired: true }, `Node-local P-256 certificate generated; expires ${generated.expiresAt}. Paths saved in policy; existing keys retained. New certificate identity requires fresh endpoint registration and grants. Set the intended bind address, enable capacity and transfer explicitly, and run storage status. No secret printed.`);
+    return 0;
+  }
+  if (action !== 'status') {
+    if (resolved.problem) throw new PolicyError(resolved.problem.code);
+    let edit: StorageEdit;
+    if (['enable', 'disable'].includes(action ?? '') && parsed.positional.length === 1) edit = { setting: 'enabled', value: String(action === 'enable') };
+    else if (['capacity', 'reserve'].includes(action ?? '') && arg && parsed.positional.length === 2) edit = { setting: action === 'capacity' ? 'maxBytes' : 'reserveFreeBytes', value: arg, allowReserveReduction: parsed.flags.has('--allow-reserve-reduction') };
+    else if (action === 'transfer' && ['enable', 'disable'].includes(arg ?? '') && parsed.positional.length === 2) edit = { setting: 'transfer.enabled', value: String(arg === 'enable') };
+    else if (action === 'transfer' && ['endpoint', 'bind', 'port'].includes(arg ?? '') && value && parsed.positional.length === 3) edit = { setting: `transfer.${arg === 'bind' ? 'bindAddress' : arg}` as StorageEdit['setting'], value };
+    else throw new UsageError('usage: storage status|enable|disable|capacity SIZE|reserve SIZE [--allow-reserve-reduction]|transfer enable|disable|endpoint URL|bind ADDRESS|port PORT');
+    const next = editStoragePolicy(resolved.policy, edit, env);
+    await savePolicyFile(stateDir, next, detectPreset(next));
+    const findings = liveStorageFindings(withCapacityPlan(await observedStorage(stateDir, next, env)));
+    done(io, parsed, { ok: true, storage: next.storage, findings, restartRequired: [], appliesWithinSeconds: 10 }, 'Storage policy saved; previous saved policy kept as policy.json.bak. A running node applies the change within a few seconds. Capacity reductions retain existing chunks and may refuse new writes. No restart required.' + (findings.length ? '\n' + renderFindings(findings) : ''));
+    return 0;
+  }
+  if (parsed.positional.length !== 1) throw new UsageError('usage: storage status [--json]');
+  const status = withCapacityPlan(await observedStorage(stateDir, resolved.policy, env));
+  const diagnostics = [...(status.observation?.source === 'daemon' ? [] : await storageConfigFindings(stateDir, resolved.policy, env)), ...liveStorageFindings(status)]; const source = resolved.source.kind === 'saved' ? 'saved' : resolved.source.kind === 'env-file' ? 'installer-file' : 'default';
+  let direct; try { direct = transferConfig(resolved.policy, env); } catch { direct = { ...resolved.policy.storage.transfer, enabled: false, endpoint: reportedTransferEndpoint(resolved.policy.storage.transfer.endpoint) }; }
+  if (status.observation?.source === 'daemon' && status.transfer) direct = { ...direct, enabled: status.transfer.configured, bindAddress: status.transfer.bindAddress ?? 'unknown', port: status.transfer.port ?? 0, endpoint: status.transfer.endpoint ?? '' };
   const gib = (n: number | null): string => n === null ? 'unknown' : bytes(n);
-  done(io, parsed, { ...status, directTransfer: { enabled: direct.enabled, bindAddress: direct.bindAddress, port: direct.port, endpoint: direct.endpoint, maxConcurrent: direct.maxConcurrent, maxConcurrentPuts: direct.maxConcurrentPuts }, policySource: source, locked }, [
+  done(io, parsed, { ...status, diagnostics, directTransfer: { enabled: direct.enabled, bindAddress: direct.bindAddress, port: direct.port, endpoint: direct.endpoint, maxConcurrent: direct.maxConcurrent, maxConcurrentPuts: direct.maxConcurrentPuts }, policySource: source, locked }, [
     `Storage        ${status.enabled ? 'ENABLED' : 'DISABLED'}   health: ${status.health}${status.error ? `   (${status.error})` : ''}${status.flags.length ? `   flags: ${status.flags.join(', ')}` : ''}`,
+    `Observation    ${status.observation?.source}; store ${status.state}; listener ${status.transfer?.listener ?? 'UNKNOWN'}; coordinatorAdvertisement ${status.transfer?.coordinatorAdvertisement ?? 'UNKNOWN'}; remoteReachability UNKNOWN`,
     `Policy         ${source}${locked ? '; LOCKED (PRIVANODE_POLICY_LOCKED): the panel and the CLI cannot change it' : ''}`,
     `Quota          ${gib(status.maxBytes)} at most; ${gib(status.reserveFreeBytes)} of the disk always left free`,
     `Stored         ${status.chunkCount} chunk${status.chunkCount === 1 ? '' : 's'}, ${gib(status.committedBytes)}${status.incomingBytes ? `; ${gib(status.incomingBytes)} of unfinished writes` : ''}${status.anomalies ? `; ${status.anomalies} unrecognised entr${status.anomalies === 1 ? 'y' : 'ies'} (left alone)` : ''}`,
     `Room now       ${status.enabled ? gib(status.allowedBytes) : 'none (storage is off)'}${status.freeBytes === null ? '' : `   (disk free: ${gib(status.freeBytes)})`}`,
     `Direct TLS     ${direct.enabled ? 'ENABLED' : 'DISABLED'}; bind ${direct.bindAddress}:${direct.port}; endpoint ${direct.endpoint || 'not configured'}; concurrency ${direct.maxConcurrent} (${direct.maxConcurrentPuts} PUTs)`,
+    `Planning       quota remaining ${gib(status.planning!.quotaRemainingBytes)}; disk headroom ${gib(status.planning!.diskHeadroomBytes)}; usable ${gib(status.allowedBytes)}; overcommitted ${gib(status.planning!.overcommittedBytes)}`,
+    status.planning!.formula,
+    renderFindings(diagnostics),
     'Capacity alone opens no transfer listener. Applications use authorized direct TLS transfers. Lowering a limit never deletes data.'].join('\n'));
-  return status.health === 'UNSAFE' ? 1 : 0;
+  return status.health === 'UNSAFE' || diagnostics.some(f => f.severity === 'error') ? 1 : 0;
 }
 /** `settings`: what the node is using and where each value comes from (environment, saved, enrollment, installer file, default), and what the panel and CLI cannot change because the environment sets it. */
 async function settingsCommand(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
   const parsed = parse(argv, COMMON); const stateDir = stateDirOf(parsed, env);
   if (parsed.positional.length > 1 || (parsed.positional[0] !== undefined && parsed.positional[0] !== 'show')) throw new UsageError('usage: privanet-node settings [show] [--json]');
   let running: number | undefined;
-  try { const file = StatusFileSchema.parse(JSON.parse(await readPrivateFileUpTo(join(stateDir, STATUS_FILE), 262144))); if (Date.now() - file.publishedAt <= STATUS_STALE_MS) running = (file.status as { jobs?: { slots?: { configured?: number } } }).jobs?.slots?.configured; } catch { /* not running */ }
-  const { settings, localProblem, policyProblem } = await gatherSettings(env, stateDir, Date.now(), running);
-  done(io, parsed, { ...settings, ...(localProblem ? { localStateProblem: localProblem } : {}), ...(policyProblem ? { policyProblem } : {}) },
-    [renderSettings(settings), localProblem ? `PROBLEM ${localProblem}: local-state.json cannot be read; run "privanet-node config check", then fix or remove that file (the node stays paused until then).` : '', policyProblem ? `PROBLEM ${policyProblem}: the saved policy was not applied; run "privanet-node config check".` : ''].filter(Boolean).join('\n'));
+  try { const file = StatusFileSchema.parse(JSON.parse(await readPrivateFileUpTo(join(stateDir, STATUS_FILE), 262144))); if (file.publishedAt <= Date.now() && Date.now() - file.publishedAt <= STATUS_STALE_MS) running = (file.status as { jobs?: { slots?: { configured?: number } } }).jobs?.slots?.configured; } catch { /* not running */ }
+  const { settings: configuredSettings, localProblem, policyProblem } = await gatherSettings(env, stateDir, Date.now(), running);
+  const { settings, observation } = await preferDaemonStorageSettings(stateDir, configuredSettings);
+  done(io, parsed, { ...settings, storageObservation: observation, ...(localProblem ? { localStateProblem: localProblem } : {}), ...(policyProblem ? { policyProblem } : {}) },
+    [`Storage configuration observed from ${observation}.`, renderSettings(settings), localProblem ? `PROBLEM ${localProblem}: local-state.json cannot be read; run "privanet-node config check", then fix or remove that file (the node stays paused until then).` : '', policyProblem ? `PROBLEM ${policyProblem}: the saved policy was not applied; run "privanet-node config check".` : ''].filter(Boolean).join('\n'));
   return localProblem || policyProblem ? 1 : 0;
 }
 /** `slots`: how many jobs may run at once. Saved in the local state; it applies the next time the node starts, and an explicit PRIVANODE_JOB_SLOTS (when set) takes priority. */
@@ -252,16 +294,17 @@ async function supportBundleCommand(argv: string[], env: NodeJS.ProcessEnv, io: 
   if (!resolved) { io.err('The policy could not be read; run `privanet-node config check`.\n'); return 1; }
   const local = await readLocalState(stateDir);
   let status: Record<string, unknown> | undefined;
-  try { const file = StatusFileSchema.parse(JSON.parse(await readPrivateFileUpTo(join(stateDir, STATUS_FILE), 262144))); if (now - file.publishedAt <= STATUS_STALE_MS) status = file.status; } catch { /* the node is not running */ }
+  try { const file = StatusFileSchema.parse(JSON.parse(await readPrivateFileUpTo(join(stateDir, STATUS_FILE), 262144))); if (file.publishedAt <= now && now - file.publishedAt <= STATUS_STALE_MS) status = file.status; } catch { /* the node is not running */ }
   const config = await checkConfig({ ...env, PRIVANODE_STATE_DIR: stateDir }).catch(() => undefined);
-  const storageFacts = await inspectStorage(stateDir, resolved.policy.storage).catch(() => undefined);
+  const storageFacts = await observedStorage(stateDir, resolved.policy, env).catch(() => undefined);
   const gathered = await gatherSettings(env, stateDir, now, (status as { jobs?: { slots?: { configured?: number } } } | undefined)?.jobs?.slots?.configured).catch(() => undefined);
+  const observedSettings = gathered ? await preferDaemonStorageSettings(stateDir, gathered.settings, now) : undefined;
   const doctor = parsed.flags.has('--no-network') ? undefined : await diagnose({ stateDir, allowInsecureLoopback: env.PRIVANODE_ALLOW_INSECURE_LOOPBACK === 'true', timeoutMs: 8000, env }).catch(() => undefined);
   let logText: string | undefined;
   const logFile = parsed.values.get('--log-file');
   if (logFile) { try { const { readFileSync, statSync } = await import('node:fs'); const size = statSync(logFile).size; logText = readFileSync(logFile, 'utf8').slice(-Math.min(size, 120000)); } catch { io.err('The log file could not be read; continuing without it.\n'); } }
   let bundle: Record<string, unknown>;
-  try { bundle = buildSupportBundle({ env, now, policy: resolved, local: local.state, ...(local.kind === 'error' ? { localProblem: local.code } : {}), status, doctor, logText, settings: gathered?.settings, storage: storageFacts }); }
+  try { bundle = buildSupportBundle({ env, now, policy: resolved, local: local.state, ...(local.kind === 'error' ? { localProblem: local.code } : {}), status, doctor, logText, settings: observedSettings?.settings, storage: storageFacts }); }
   catch (error) { if (error instanceof UnsafeBundleError) { io.err(`No bundle was written: something that looks like a secret (${error.kind}) survived redaction. This is a bug in the redaction rules; please report it without attaching anything.\n`); return 1; } throw error; }
   if (config) bundle.configurationCheck = { ok: config.ok, findings: config.findings.map(finding => ({ severity: finding.severity, id: finding.id, ...(finding.setting ? { setting: finding.setting } : {}) })) };
   const text = JSON.stringify(bundle, null, 2) + '\n';
@@ -297,7 +340,10 @@ const USAGE = `Usage: privanet-node COMMAND [options]
   name show|set NAME|clear             this machine's local display name
   capability enable|disable NAME       switch an enrolled capability on or off
   slots show|set N|clear               how many jobs may run at once (applies at the next start)
-  storage status [--json]             the local chunk store: switches, limits, usage and health (local only; no file access commands)
+  storage status [--json]             store, live listener, advertisement, reachability and capacity diagnostics
+  storage enable|disable; capacity SIZE; reserve SIZE [--allow-reserve-reduction]
+  storage transfer enable|disable|endpoint URL|bind ADDRESS|port PORT
+  storage cert generate --ip ADDRESS [--renew]    private P-256 LAN certificate
   settings [--json]                    what the node is using and where each value comes from; what the environment locks
   panel                                how to open the local control panel
   support-bundle [FILE] [--no-network] [--log-file F]    a sanitized troubleshooting file you can share

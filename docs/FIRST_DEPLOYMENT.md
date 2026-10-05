@@ -16,7 +16,7 @@ application (PrivaSearch, anywhere) --- HTTPS -------------->        |
                                                           Coordinator 127.0.0.1:4010 (plain HTTP, loopback only)
 ```
 
-- Everything is initiated by the node or the application. The Coordinator never opens a connection, and a node needs no inbound port. (Its local control panel listens on 127.0.0.1:4040 only, reachable from that machine alone; set `PRIVANODE_PANEL=off` to remove even that. See [NODE_CONTROL_PANEL.md](NODE_CONTROL_PANEL.md).)
+- Compute connections are initiated by the node or application. The Coordinator never opens a connection. Compute-only nodes need no inbound port; optional alpha.3/alpha.4 storage contribution opens an explicitly enabled pinned-TLS listener (normally 4050). Follow [DIRECT_TRANSFER.md](DIRECT_TRANSFER.md) and [ALPHA4_LAN_VALIDATION.md](ALPHA4_LAN_VALIDATION.md) for its separate firewall and certificate setup. (Its local control panel listens on 127.0.0.1:4040 only, reachable from that machine alone; set `PRIVANODE_PANEL=off` to remove even that. See [NODE_CONTROL_PANEL.md](NODE_CONTROL_PANEL.md).)
 - The Coordinator speaks plain HTTP and refuses a non-loopback bind unless you acknowledge TLS termination. TLS is a reverse proxy's job (Caddy here), and nodes and the SDK refuse plain HTTP to anything but literal loopback.
 - The Coordinator does not depend on the server's PrivaNode. Stop, crash or remove that node and the Coordinator is untouched.
 
@@ -230,7 +230,8 @@ Set `fetch.minHostDelayMs` and `fetch.maxRequestsPerMinute` per your politeness 
 | Machine | Allow | Everything else |
 | --- | --- | --- |
 | Server | TCP **443** from your LAN or VPN (nodes, applications) | deny (SSH as you already allow it) |
-| Desktop | nothing inbound | deny |
+| Compute-only desktop | nothing inbound | deny |
+| Opt-in storage node | configured direct-transfer TLS port (normally 4050) | allow only from intended application/operator networks |
 
 - The Coordinator's port 4010 is on the loopback interface and must not be opened. Caddy's configuration opens no port 80.
 - A desktop node needs only outbound TCP 443 to the server, plus whatever the fetch jobs reach (DNS and HTTP/HTTPS to the web).

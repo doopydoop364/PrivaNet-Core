@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import {
   PlacementRequestSchema, SERVICES, TICKET_MAX_LIFETIME_MS, TICKET_MAX_SKEW_MS, TicketRequestSchema, TransferReceiptSchema,
 } from '@privanet/protocol';
-import type { TransferBinding, ChunkStatus, NodeView, PlacementResponse, ServicesAdvertisement, StorageSummary, TicketResponse, TransferGrant, TransferState } from '@privanet/protocol';
+import type { TransferBinding, ChunkStatus, NodeView, PlacementResponse, ServicesAdvertisement, StorageDetails, TicketResponse, TransferGrant, TransferState } from '@privanet/protocol';
 import { ApiError, canonicalPublicKey, signTicket, validateTransferEndpoint } from '@privanet/shared';
 import type { ApplicationRecord, ChunkRecord, NodeRecord, ReplicaRecord, Store, TransferRecord } from './model.js';
 import { KeyringError } from './transfer-keys.js';
@@ -361,15 +361,33 @@ export class StorageControl {
   }
 
   // ---- Operator view: aggregates only ---------------------------------------------------------------------------------------------------------------------------------------------------
-  summary(): StorageSummary {
+  summary(details = false): StorageDetails {
     const reserved = this.store.reservedBytes(); const totals = this.store.storageTotals(); const counts = this.store.transferCounts(this.now - 86400000);
     const keyring = this.deps.keyring;
-    const nodes = this.store.listNodeServices(SERVICE).map(advertisement => {
-      const node = this.store.getNode(advertisement.nodeId);
-      return { nodeId: advertisement.nodeId, status: node ? this.deps.status(node) : 'OFFLINE' as const, capacityBytes: advertisement.capacityBytes, freeBytes: advertisement.freeBytes, reservedBytes: reserved.get(advertisement.nodeId) ?? 0, openTransfers: this.store.countOpenTransfers({ nodeId: advertisement.nodeId }) };
+    const offers = new Map(this.store.listNodeServices(SERVICE).map(offer => [offer.nodeId, offer]));
+    const usage = this.store.storedReplicaTotals();
+    const ids = details ? [...new Set([...offers.keys(), ...usage.keys()])].sort() : [...offers.keys()];
+    const nodes = ids.map(nodeId => {
+      const advertisement = offers.get(nodeId); const node = this.store.getNode(nodeId); const status = node ? this.deps.status(node) : 'OFFLINE' as const;
+      const reservedBytes = reserved.get(nodeId) ?? 0;
+      const eligible = status === 'ONLINE' && advertisement !== undefined && advertisement.reportedAt > this.now - this.deps.offlineMs;
+      return { nodeId, status, capacityBytes: advertisement?.capacityBytes ?? 0, freeBytes: advertisement?.freeBytes ?? 0, reservedBytes, openTransfers: this.store.countOpenTransfers({ nodeId }),
+        ...(details ? { committedBytes: usage.get(nodeId)?.committedBytes ?? 0, lostBytes: usage.get(nodeId)?.lostBytes ?? 0, usableBytes: eligible ? Math.max(0, (advertisement?.freeBytes ?? 0) - reservedBytes) : 0,
+          endpointRegistration: advertisement?.transferEndpoint ? 'REGISTERED' as const : 'ABSENT' as const, reportedAt: advertisement?.reportedAt ?? null } : {}) };
     });
-    return { keyring: { available: keyring !== undefined, currentKid: keyring ? keyring.currentKid : null, keys: keyring?.size ?? 0 }, nodes,
+    const sumBytes = (values: number[]): number | string => { const total = values.reduce((sum, value) => sum + BigInt(value), 0n); return total <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(total) : total.toString(); };
+    const pool = details ? { onlineStorageNodes: nodes.filter(n => n.status === 'ONLINE' && (offers.get(n.nodeId)?.reportedAt ?? 0) > this.now - this.deps.offlineMs).length, offlineNodesHoldingChunks: nodes.filter(n => n.status !== 'ONLINE' && (n.committedBytes! + n.lostBytes!) > 0).length,
+      rawAdvertisedCapacityBytes: sumBytes(nodes.map(n => n.capacityBytes)), usableBytes: sumBytes(nodes.map(n => n.usableBytes ?? 0)), reservedBytes: sumBytes([...reserved.values()]), committedBytes: sumBytes([...usage.values()].map(n => n.committedBytes)) } : undefined;
+    return { keyring: { available: keyring !== undefined, currentKid: keyring ? keyring.currentKid : null, keys: keyring?.size ?? 0 }, nodes, ...(pool ? { pool } : {}),
       chunks: totals, transfers: { open: counts.AUTHORIZED + counts.IN_PROGRESS, last24h: { completed: counts.COMPLETED, failed: counts.FAILED, expired: counts.EXPIRED, revoked: counts.REVOKED } } };
+  }
+  /** Return metadata for an explicit operator-side probe; the Coordinator never connects to this URL. */
+  probeTarget(nodeId: string) {
+    const node = this.store.getNode(nodeId); const offer = this.store.getNodeService(nodeId, SERVICE);
+    if (!node || node.revoked || this.deps.status(node) !== 'ONLINE' || !offer?.transferEndpoint || offer.reportedAt <= this.now - this.deps.offlineMs) reject(503, 'TRANSFER_UNAVAILABLE');
+    let endpoint;
+    try { endpoint = validateTransferEndpoint(offer.transferEndpoint, this.now, nodeId); } catch { reject(503, 'INVALID_TRANSFER_ENDPOINT'); }
+    return { nodeId, endpoint, reportedAt: offer.reportedAt };
   }
   /** The public verification keys for a node. Only an authenticated node may ask (the route), only public halves are returned. */
   transferClock(coordinatorId: string) { return { coordinatorId, now: this.now }; }

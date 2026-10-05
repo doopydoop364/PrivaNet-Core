@@ -1,3 +1,5 @@
+import { liveStorageFindings, storageConfigFindings } from './store/diagnostics.js';
+import { withCapacityPlan } from './store/status.js';
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
@@ -18,7 +20,7 @@ import { policyFindings } from './config-check.js';
 import { ResourcePolicySchema, defaultResourcePolicy } from './resource-policy.js';
 import { buildStatus } from './status-document.js';
 import { diagnose } from './doctor.js';
-import { gatherSettings } from './effective-settings.js';
+import { gatherSettings, withRunningStorageSettings } from './effective-settings.js';
 import { TRANSFER_ENV, transferConfig } from './store/transfer-config.js';
 import type { StorageService } from './store/service.js';
 import { emptyStorageStatus } from './store/status.js';
@@ -54,7 +56,7 @@ const json = (res: ServerResponse, status: number, body: unknown, headers: Recor
 const fail = (res: ServerResponse, status: number, code: string, extra: Record<string, unknown> = {}): void => json(res, status, { error: { code, ...extra } });
 
 const PauseBody = z.strictObject({ kind: z.enum(['15m', '1h', 'tomorrow', 'reboot', 'indefinite']) });
-const PolicyBody = z.union([z.strictObject({ preset: z.enum(PRESET_IDS) }), z.strictObject({ reset: z.literal(true) }), z.strictObject({ policy: z.record(z.string(), z.unknown()) })]);
+const PolicyBody = z.union([z.strictObject({ preset: z.enum(PRESET_IDS) }), z.strictObject({ reset: z.literal(true) }), z.strictObject({ policy: z.record(z.string(), z.unknown()), allowReserveReduction: z.boolean().optional() })]);
 const NameBody = z.strictObject({ name: DisplayNameSchema.nullable() });
 const SlotsBody = z.strictObject({ slots: z.number().int().min(1).max(MAX_JOB_SLOTS).nullable() });
 const CapabilitiesBody = z.strictObject({ disabled: z.array(JobTypeSchema).max(32) });
@@ -86,7 +88,7 @@ export async function startPanel(options: PanelOptions): Promise<PanelHandle> {
   const context = () => ({ node: options.node, engine: options.engine, control: options.control, transfer: options.transfer, coordinatorUrl: options.coordinatorUrl, enrolledCapabilities: options.enrolledCapabilities, storage: options.storage?.status });
   const policyDocument = () => {
     const view = options.control.view; const policy = view.policy;
-    return { locked: view.policyLocked, effectiveTransfer: policy ? transferConfig(policy, options.env) : null, transferEnvironmentLocks: Object.entries(TRANSFER_ENV).filter(([, name]) => options.env[name] !== undefined).map(([key]) => key), source: view.source ?? null, preset: view.preset, problem: view.policyProblem ?? null, restartRequired: view.restartRequired, policy: policy ?? null,
+    return { locked: view.policyLocked, effectiveTransfer: (() => { try { return policy ? transferConfig(policy, options.env) : null; } catch { return null; } })(), transferEnvironmentLocks: Object.entries(TRANSFER_ENV).filter(([, name]) => options.env[name] !== undefined).map(([key]) => key), source: view.source ?? null, preset: view.preset, problem: view.policyProblem ?? null, restartRequired: view.restartRequired, policy: policy ?? null,
       findings: policy ? policyFindings(policy, { transferEnv: options.env, jobSlots: options.jobSlots, capabilities: options.enrolledCapabilities }) : [], jobSlots: { value: options.jobSlots, saved: view.jobSlots.saved, source: view.jobSlots.source, editable: view.jobSlots.editable, max: MAX_JOB_SLOTS,
         note: view.jobSlots.editable ? 'How many jobs may run at once. A change applies the next time the node starts.' : 'Set by PRIVANODE_JOB_SLOTS in the service environment, which takes priority; change it there and restart.' },
       presets: PRESET_IDS.map(id => ({ id, label: PRESETS[id].label, summary: PRESETS[id].summary, values: PRESETS[id].values })) };
@@ -128,8 +130,8 @@ export async function startPanel(options: PanelOptions): Promise<PanelHandle> {
         case '/api/session': return json(res, 200, { csrf: session.csrf, version: SERVICE_VERSION, protocolVersion: PROTOCOL_VERSION, features: { supportBundle: options.supportBundle !== undefined, updateCheck: options.updateCheck !== undefined } });
         case '/api/status': return json(res, 200, buildStatus(context(), { fullId: url.searchParams.get('fullId') === '1' }));
         case '/api/policy': return json(res, 200, policyDocument());
-        case '/api/storage': return json(res, 200, { ...(options.storage ? await options.storage.refresh() : emptyStorageStatus(options.control.view.policy?.storage ?? defaultResourcePolicy().storage)), note: 'Opaque chunks move directly between authorized applications and an explicitly enabled TLS listener. The Coordinator carries metadata only. There is no file browser.' });
-        case '/api/settings': { const gathered = await gatherSettings(options.env, options.stateDir, clock(), options.jobSlots); return json(res, 200, { ...gathered.settings, ...(gathered.localProblem ? { localStateProblem: gathered.localProblem } : {}), ...(gathered.policyProblem ? { policyProblem: gathered.policyProblem } : {}) }); }
+        case '/api/storage': { const status = withCapacityPlan(options.storage ? await options.storage.refresh() : emptyStorageStatus(options.control.view.policy?.storage ?? defaultResourcePolicy().storage)); return json(res, 200, { ...status, diagnostics: [...liveStorageFindings(status), ...await storageConfigFindings(options.stateDir, options.control.view.policy ?? defaultResourcePolicy(), options.env)], note: 'Opaque chunks move directly between authorized applications and an explicitly enabled TLS listener. The Coordinator carries metadata only. There is no file browser.' }); }
+        case '/api/settings': { const gathered = await gatherSettings(options.env, options.stateDir, clock(), options.jobSlots); const view = options.control.view; const settings = view.policy && view.source ? withRunningStorageSettings(gathered.settings, { policy: view.policy, source: view.source }, options.env) : gathered.settings; return json(res, 200, { ...settings, ...(gathered.localProblem ? { localStateProblem: gathered.localProblem } : {}), ...(gathered.policyProblem ? { policyProblem: gathered.policyProblem } : {}) }); }
         case '/api/jobs': { const snapshot = options.node.snapshot; return json(res, 200, { active: snapshot.activeJobs, counters: snapshot.counters, slots: snapshot.slots, note: 'Job payloads are never shown or stored here.' }); }
         case '/api/history': return json(res, 200, { points: options.history?.points() ?? [], note: 'Permitted budgets and measured host numbers only; not per-job accounting. Kept on this machine for 24 hours.' });
         case '/api/logs': return json(res, 200, { entries: options.logs.recent(100) });
@@ -161,7 +163,7 @@ export async function startPanel(options: PanelOptions): Promise<PanelHandle> {
           if ('reset' in data) { await options.control.resetPolicy(); return json(res, 200, { ok: true }); }
           const parsed = ResourcePolicySchema.safeParse(data.policy);
           if (!parsed.success) return fail(res, 422, 'POLICY_INVALID', { issues: parsed.error.issues.slice(0, 20).map(issue => `${issue.path.join('.') || '(policy)'}: ${issue.message}`.slice(0, 200)) });
-          const result = await options.control.savePolicy(parsed.data, ctx); return json(res, 200, { ok: true, findings: result.findings, restartRequired: options.control.view.restartRequired });
+          const result = await options.control.savePolicy(parsed.data, ctx, data.allowReserveReduction === true); return json(res, 200, { ok: true, findings: result.findings, restartRequired: options.control.view.restartRequired });
         }
         case '/api/name': { const data = schema(NameBody) as z.infer<typeof NameBody> | undefined; if (!data) return invalid(); await options.control.setName(data.name ?? undefined); return json(res, 200, { ok: true }); }
         case '/api/jobslots': { const data = schema(SlotsBody) as z.infer<typeof SlotsBody> | undefined; if (!data) return invalid(); await options.control.setJobSlots(data.slots ?? undefined); return json(res, 200, { ok: true, restartRequired: options.control.view.restartRequired }); }

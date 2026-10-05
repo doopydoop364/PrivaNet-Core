@@ -226,3 +226,7 @@ These need measurements or implementation experience and are deliberately left o
 12. How should revocation interact with an in-progress transfer (fail fast, finish and discard, bounded grace)?
 13. How do we avoid duplicate accounting after retries and resumption?
 14. How can encrypted PrivaDrive chunks be verified without exposing plaintext (ciphertext hashes, possession challenges)?
+
+## Alpha.4 operator hardening
+
+See [storage operation and diagnostic reference](DIRECT_TRANSFER.md#alpha4-storage-operations), [upgrade/rollback](ALPHA4_UPGRADE.md), [real-machine validation checklist](ALPHA4_LAN_VALIDATION.md) and [actual implementation/validation status](ALPHA4_IMPLEMENTATION_STATUS.md). Capacity, listener state, exact Coordinator metadata acceptance and remote reachability are reported separately. Protocol remains 1; Phase 5 replication and repair are deferred.

@@ -1,4 +1,4 @@
-# Direct opaque chunk transfer — v0.4.0-alpha.3
+# Direct opaque chunk transfer — v0.4.0-alpha.4
 
 Alpha.3 moves chunk bytes directly between an authorized application and a storage node. The Coordinator issues placement/tickets and receives metadata/receipts; it never proxies, buffers, inspects or relays chunk bodies. Storage capacity and the TLS listener are separate opt-ins, both off by default. Local applications use this same path. Core stores opaque chunks, not files or folders. Replication, repair and possession challenges belong to Phase 5; PrivaDrive manifests, encryption and sharing remain application concerns. No NAT traversal, hole punching or relay is included.
 
@@ -26,7 +26,7 @@ Configure the existing owner policy through `privanet-node policy export/import`
 }
 ```
 
-This is a policy fragment; merge it into your exported policy. The private key must be an owner-private regular file, without a symlink. The certificate may be self-signed or privately issued, must be currently valid, and must match the private key. Certificate generation/distribution is an operator responsibility. Keep certificate files outside the generic chunk store. Use `privanet-node config check`, `settings --json`, `storage status --json` and the running node's `status`/panel to inspect configuration and live listener/activity/receipt state. No secret contents are read through the panel or bundled for support.
+This is a policy fragment; merge it into your exported policy. The private key must be an owner-private regular file, without a symlink. The certificate may be self-signed or privately issued, must be currently valid, and must match the private key. Alpha.4 can generate a node-local LAN certificate; distribution, public issuance and renewal scheduling remain operator responsibilities. Keep certificate files outside the generic chunk store. Use `privanet-node config check`, `settings --json`, `storage status --json` and the running node's `status`/panel to inspect configuration and live listener/activity/receipt state. No secret contents are read through the panel or bundled for support.
 
 Environment overrides: `PRIVANODE_TRANSFER_ENABLED` (`true`/`false`), `PRIVANODE_TRANSFER_BIND` (literal IPv4/IPv6), `PRIVANODE_TRANSFER_PORT`, `PRIVANODE_TRANSFER_ENDPOINT` (canonical HTTPS origin, no credentials/path/query/fragment), `PRIVANODE_TRANSFER_CERT_FILE`, `PRIVANODE_TRANSFER_KEY_FILE`, `PRIVANODE_TRANSFER_CONCURRENCY` (1–64), `PRIVANODE_TRANSFER_PUTS` (1–8, no greater than total concurrency). Bandwidth and monthly allowance reuse `maxBandwidthBytesPerSec` and `monthlyTransferBytes`; there is no competing transfer budget. Full attempted sizes are reserved durably before streaming, so failed attempts are conservatively charged. Corrupt allowance state refuses further transfer and is never silently reset.
 
@@ -92,3 +92,68 @@ Aggregate status reports listener state and recent Coordinator acceptance of the
 Protocol stays 1. Only requests explicitly opting into direct transfer receive endpoint fields; alpha.2 strict consumers retain their grant shapes. Older compute nodes keep existing sessions/heartbeats/jobs. A newer node against a Coordinator refusing the new storage offer withdraws services and continues compute; absent control capability never opens a trust bypass. Migration 3 adds a nullable endpoint JSON column without modifying migrations 1/2. Downgrade requires restoring an older database backup.
 
 Validation: [ALPHA3_IMPLEMENTATION_STATUS.md](ALPHA3_IMPLEMENTATION_STATUS.md) records actual results, limitations and throughput. The required three-host namespace test instruments all Coordinator plaintext request/response bodies and namespace packet counters; it asserts zero payload canaries, bounded metadata bodies and total traffic far below a single chunk. Tests establish particular behavior, not absence of vulnerabilities. An independent external security review remains outstanding.
+
+## Alpha.4 storage operations
+
+Run local commands as the **same account** and with the **same state directory** as the service. Installed Linux example: `sudo -u privanet-node env PRIVANODE_STATE_DIR=/var/lib/privanet-node /opt/privanet-node/current/bin/privanet-node ...`. Environment overrides used by systemd are not automatically inherited by a terminal; the recent daemon snapshot is authoritative for live storage state. `settings`/`policy show` describe the command's environment, so use the service environment when inspecting overrides.
+
+```sh
+privanet-node storage capacity 500GiB
+privanet-node storage reserve 100GiB
+privanet-node storage cert generate --ip 10.0.0.201
+privanet-node storage transfer bind 10.0.0.201
+privanet-node storage transfer endpoint https://10.0.0.201:4050
+privanet-node storage enable
+privanet-node storage transfer enable
+privanet-node storage status --json
+privanet-node settings --json
+privanet-node config check --json
+# From the application/operator machine, against its trusted Coordinator:
+privanet-admin storage probe NODE --json
+privanet-admin storage status --json
+```
+
+Size input accepts B, KiB, MiB, GiB and TiB (case insensitive), including decimal fractions that produce exact whole bytes, from zero through 1 TiB (the existing policy ceiling). JSON reports exact bytes. No rounding, silent unit conversion or reserve reduction. To intentionally reduce the free-space safety reserve use `storage reserve SIZE --allow-reserve-reduction`; the panel asks explicitly. CLI edits preserve unrelated policy and retain `policy.json.bak`. Invalid saved policy is not overwritten by storage commands. A policy lock or explicit environment override cannot be changed through these commands. Capacity/transfer settings apply live within the existing polling interval; no restart is needed for these controls. Certificate file contents changed in place still require a restart; generated renewal uses fresh paths and applies live.
+
+`storage disable` and `storage transfer disable` always retain committed chunks. Increasing/decreasing capacity or raising the reserve never deletes data. Below-usage capacity reports overcommit and refuses new writes; existing authorized reads/deletes work when other owner gates permit. Re-enabling opens the same store. Unfinished transfers may fail safely on disabling.
+
+The panel Contribute form provides equivalent storage quota/reserve and transfer controls; Status shows planning, listener lifecycle, exact advertisement acceptance and fixed diagnostics. Neither has a chunk browser or arbitrary filesystem-edit API. `settings`/`policy show`/`config check` expose per-setting sources: defaults, installer-file, saved policy, environment. Transfer overrides show the saved value and overriding variable; key/certificate fields report presence, never contents.
+
+### Status semantics
+
+| Field | Meaning |
+| --- | --- |
+| `enabled`, `state`, `health` | Owner storage switch and local store condition; not network reachability |
+| `observation.source`, `publishedAt` | Recent daemon snapshot, or read-only offline inspection; no future/stale snapshot is accepted |
+| `transfer.configured`, `bindAddress`, `port`, `endpoint` | Transfer configuration in the observing daemon; offline uses the command environment |
+| `transfer.listener` | DISABLED / STARTING / LISTENING / STOPPED / FAILED; UNKNOWN offline when configured |
+| `transfer.coordinatorAdvertisement`, `acceptedAt` | Recent acceptance of the exact origin/leaf identity, pending, withdrawn, rejected, unsupported or unreachable |
+| `transfer.remoteReachability` | UNKNOWN: neither bind nor metadata acceptance proves a route from another machine |
+| `networkAccessible` | Deprecated and always null; use the explicit fields |
+| `planning.overcommittedBytes` | Existing/incoming bytes over quota, retained rather than deleted |
+
+CLI snapshots are refreshed every 10 seconds and accepted for at most 35 seconds; a daemon that just stopped can briefly leave a recent snapshot. The command labels the observation and timestamp. Offline counters for live transfers are unavailable, represented by a listener UNKNOWN and no daemon claim. Live lifetime transfer counters reset with the listener process; durable receipt and Coordinator counts survive.
+
+Capacity planning uses:
+
+```text
+quota remaining = max(0, maxBytes - committedBytes - incomingBytes)
+disk headroom = max(0, filesystem free - reserveFreeBytes - unwritten reserved bytes)
+usable = min(quota remaining, disk headroom)
+```
+
+Incoming includes whole reserved writes and leftover partials. Already-written bytes are already absent from filesystem free; only **unwritten** active reservations are additionally subtracted. Owner pause/drain/schedule/battery/disk gates can reduce usable to zero. Reserve-constrained capacity is informational. Filesystem free is for the volume holding the state/store; no alternate arbitrary storage-directory setting is added.
+
+### Certificates and diagnostics
+
+`storage cert generate --ip IP [--renew]` requires OpenSSL on PATH. It creates a matching P-256 private key and one-year self-signed certificate with the IP SAN in a new versioned directory under private node state, flushes files, atomically publishes the directory, and saves certificate/key paths. It never prints secret contents. Existing configured keys require explicit `--renew`; old keys are retained, never overwritten. Windows privacy depends on the installed private state-directory ACL (real Windows service validation remains outstanding). Renewals require fresh endpoint registration and new grants; existing grants retain the old pin and fail safely. No public certificate issuance is provided.
+
+Stable diagnostic `id` codes include `STORAGE_DISABLED`, `TRANSFER_POLICY_DISABLED`, `TRANSFER_ENDPOINT_MISSING/INVALID`, `TRANSFER_CERT_MISSING/UNREADABLE/SYMLINK/INVALID/EXPIRED/NOT_YET_VALID`, `TRANSFER_KEY_MISSING/UNREADABLE/SYMLINK/PERMISSIONS/OWNERSHIP/MISMATCH`, `TRANSFER_BIND_INVALID/FAILED`, `TRANSFER_PORT_IN_USE`, `REPLAY_STATE_INVALID`, `RECEIPT_STATE_INVALID`, `STORAGE_QUOTA_EXHAUSTED`, `STORAGE_OVERCOMMITTED`, `STORAGE_RESERVE_EXHAUSTED/CONSTRAINED`, owner-blocker codes and Coordinator REJECTED/UNREACHABLE/UNSUPPORTED codes. Fixed text gives the next action. No key, ticket, holder material, challenge, token or file contents enter findings. Port conflicts are diagnosed from actual daemon bind failure; an offline command does not temporarily occupy a port to guess.
+
+`TRANSFER_ENDPOINT_BIND_DIFFERENT` is informational because a wildcard bind, DNS name or explicitly forwarded origin may legitimately differ. `TRANSFER_CERT_SAN_DIFFERENT` is informational because SDK identity is exact leaf pinning plus normal TLS validity/chain verification, not hostname discovery. Generated LAN certificates have the correct IP SAN for other operator tooling.
+
+### Explicit probe and pool summary
+
+`privanet-admin storage probe NODE` resolves a node by exact name/ID or unique prefix using the ordinary admin node registry. It requests the current online, fresh registered origin/leaf/proof, validates that node binding, performs one bounded TLS handshake with the **same shared TLS options as the SDK**, and rereads registration to detect changes. It sends no ticket, HTTP request or upload. Results distinguish `ADDRESS_FAILED`, `TCP_FAILED`, `TLS_IDENTITY_FAILED`, `ENDPOINT_INVALID`, `ENDPOINT_CHANGED` and `TLS_LISTENER_REACHABLE`. TLS success is scoped to this operator machine at that time; it is not a completed storage operation or a continuously persisted global reachability assertion. A disappeared registration refuses rather than substituting an endpoint. The Coordinator never probes origins itself.
+
+The current admin CLI opts into `/v1/admin/storage?details=1`: online storage nodes, offline nodes holding recorded chunks, raw advertised bytes, currently usable reported room minus reservations, reserved/committed bytes, per-node recorded committed/lost bytes and endpoint-registration presence. Reported room minus Coordinator reservations is conservative: in-progress local reservations may already be reflected in the reported room. Reports are hints/metadata, not possession verification. Historical offers are removed by normal cleanup; retained replica metadata still exposes offline holders. Default `/v1/admin/storage` keeps the exact alpha.3 strict summary shape for old CLI/dashboard consumers. Aggregate output has no chunk/application ID or private data. Pool byte totals use JSON numbers within the safe-integer range and exact decimal strings above it; clients should accept the exported AggregateBytesSchema union. Per-node and local-policy byte limits remain numbers.

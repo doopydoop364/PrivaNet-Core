@@ -1,5 +1,7 @@
 name: Release
 on:
+  push:
+    tags: ['v*']
   release:
     types: [published]
   # Creates the tag and release from the chosen ref when a tag cannot be pushed directly.
@@ -25,6 +27,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: npm }
       - name: Tag must match package.json version
@@ -74,6 +78,8 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
       - uses: actions/download-artifact@v4
@@ -116,6 +122,8 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: npm }
       # Trusted publishing needs npm 11.5.1 or newer.
@@ -146,6 +154,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
       - name: Install from the public registry and import

@@ -111,8 +111,10 @@ export class LocalControl {
 
   // ---- changes: each validates, writes atomically, then applies at once ----
   private assertPolicyEditable(): void { if (this.options.policyLocked) throw new PolicyError('POLICY_LOCKED_BY_ENVIRONMENT'); }
-  async savePolicy(policy: ResourcePolicy, context: { jobSlots: number; capabilities: JobType[] }): Promise<{ findings: ReturnType<typeof policyFindings> }> {
+  async savePolicy(policy: ResourcePolicy, context: { jobSlots: number; capabilities: JobType[] }, allowReserveReduction = false): Promise<{ findings: ReturnType<typeof policyFindings> }> {
     this.assertPolicyEditable();
+    if (this.resolved?.problem) throw new PolicyError(this.resolved.problem.code);
+    if (this.resolved && policy.storage.reserveFreeBytes < this.resolved.policy.storage.reserveFreeBytes && !allowReserveReduction) throw new PolicyError('POLICY_FILE_INVALID', ['Reducing the storage free-space reserve requires explicit confirmation.']);
     for (const [key, name] of Object.entries(TRANSFER_ENV)) if (this.options.transferEnv?.[name] !== undefined && JSON.stringify(policy.storage.transfer[key as keyof typeof TRANSFER_ENV]) !== JSON.stringify(this.resolved?.policy.storage.transfer[key as keyof typeof TRANSFER_ENV])) throw new PolicyError("POLICY_LOCKED_BY_ENVIRONMENT");
     const findings = policyFindings(policy, { ...context, ...(this.options.transferEnv ? { transferEnv: this.options.transferEnv } : {}) });
     if (findings.some(finding => finding.severity === 'error')) throw new PolicyError('POLICY_FILE_INVALID', findings.filter(finding => finding.severity === 'error').map(finding => finding.message));
