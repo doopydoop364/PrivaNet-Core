@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { AckSchema, JOB_TYPES, RenewResponseSchema, CapabilitiesSchema, ChallengeSchema, HealthSchema, LeaseResponseSchema, NodeSelfSchema, PROTOCOL_VERSION, SERVICE_VERSION, SessionSchema, MAX_JOB_SLOTS, TransferKeysSchema, TransferClockSchema } from '@privanet/protocol';
-import type { JobType, ServicesAdvertisement, Session, TransferKeys, TransferBinding, TransferReceipt } from '@privanet/protocol';
+import { AckSchema, JOB_TYPES, RenewResponseSchema, CapabilitiesSchema, ChallengeSchema, HealthSchema, LeaseResponseSchema, NodeControlSchema, NodeSelfSchema, PROTOCOL_VERSION, SERVICE_VERSION, SessionSchema, MAX_JOB_SLOTS, TransferKeysSchema, TransferClockSchema } from '@privanet/protocol';
+import type { JobType, NodeControl, ServicesAdvertisement, Session, TransferKeys, TransferBinding, TransferReceipt } from '@privanet/protocol';
 import { ApiError, Transport } from '@privanet/shared';
 import type { TransportOptions } from '@privanet/shared';
 import { BindingChangedError, bindCoordinator, loadIdentity, signProof } from './identity.js';
@@ -21,6 +21,8 @@ export interface NodeOptions extends TransportOptions {
   jobSlots?: number;
   /** Owner-policy resource engine. Without one the node reports no resources and gets only the Coordinator's small legacy budget. */
   engine?: ResourceEngine; handlers?: Handlers;
+  /** Applies an owner-requested coordinator control using the node's existing local policy/state machinery. */
+  remoteControl?: (control: NodeControl) => Promise<void>;
   /** Enforce the owner's bandwidth limit and monthly allowance for handlers, and account control-plane bytes. */
   transfer?: TransferMeter;
   /** Node-local resume state for checkpointable job types. */
@@ -78,6 +80,9 @@ export class PrivaNode {
   get transferNow(): number { return Date.now() + this.transferClockOffset; }
   private ticketKeyCache: TransferKeyCache | undefined;
   private readonly wakeIdle = new AbortController();
+  private controlBlockedUntil = 0;
+  private seenControlRevision = -1;
+  private appliedControlRevision = 0;
   private readonly log: NonNullable<NodeOptions['log']>;
   private identity: Identity | undefined;
   private session: Session | undefined;
@@ -205,6 +210,7 @@ export class PrivaNode {
       await this.transport.request('POST', '/v1/node/heartbeat', AckSchema, {
         protocolVersion: PROTOCOL_VERSION, daemonVersion: SERVICE_VERSION, capabilities: this.capabilities,
         jobSlots: this.effectiveSlots, currentJobs: Math.min(this.currentJobs, this.effectiveSlots), lifecycle: this.draining ? 'DRAINING' : 'ACTIVE',
+        appliedControlRevision: this.appliedControlRevision,
         ...(this.options.engine ? { resources: this.options.engine.report } : {}), ...(services ? { services } : {}),
       }, this.session.token);
       if (services) void this.ticketKeyCache?.refresh();
@@ -225,6 +231,31 @@ export class PrivaNode {
     this.advertisementFailure = undefined;
     this.registeredTransfer = endpoint ? { url: endpoint.url, certFingerprint: endpoint.certFingerprint } : undefined;
     this.lastHeartbeat = Date.now(); this.contacted();
+    await this.refreshRemoteControl();
+  }
+  private async refreshRemoteControl(): Promise<void> {
+    if (!this.options.remoteControl || !this.session || Date.now() < this.controlBlockedUntil) return;
+    try {
+      const control = await this.transport.request('GET', '/v1/node/control', NodeControlSchema, undefined, this.session.token);
+      if (control.revision === this.seenControlRevision) return;
+      this.seenControlRevision = control.revision;
+      try {
+        await this.options.remoteControl(control);
+        this.appliedControlRevision = control.revision;
+        this.lastHeartbeat = 0; // report the applied revision promptly
+        this.log({ event: 'node.remote_control_applied', code: String(control.revision) });
+      } catch {
+        this.log({ event: 'node.remote_control_rejected', code: String(control.revision) });
+      }
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        this.controlBlockedUntil = Date.now() + 3600000;
+        this.log({ event: 'node.remote_control_unsupported' });
+        return;
+      }
+      if (error instanceof ApiError && error.status === 401) this.session = undefined;
+      throw error;
+    }
   }
   /** Stop asking for work; the next heartbeat tells the Coordinator this node is draining. */
   drain(): void { this.draining = true; this.lastHeartbeat = 0; this.wakeIdle.abort(); }

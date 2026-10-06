@@ -1,7 +1,7 @@
 import { ApiError, SHELLS, Transport, completionScript, probeTransferEndpoint } from '@privanet/shared';
 import {
   AckSchema, AppCredentialSchema, CapabilitiesSchema, DisplayNameSchema, EnrollmentTokenIdSchema, EnrollmentTokenSchema, EnrollmentTokensSchema, IdSchema, InviteCreatedSchema, InviteIdSchema,
-  InvitesSchema, JoinRequestsSchema, KeyRotationSchema, NodeIdSchema, NodesSchema, ServiceListSchema, StorageDetailsSchema, StorageProbeTargetSchema, TypedCodeSchema, formatCode, normalizeCode,
+  InvitesSchema, JoinRequestsSchema, KeyRotationSchema, NodeControlSchema, NodeIdSchema, NodePresetUpdateSchema, NodeSlotsUpdateSchema, NodesSchema, ServiceListSchema, StorageDetailsSchema, StorageProbeTargetSchema, TypedCodeSchema, formatCode, normalizeCode,
 } from '@privanet/protocol';
 
 const USAGE = `Usage:
@@ -18,6 +18,8 @@ const USAGE = `Usage:
   privanet-admin nodes show NODE [--json]                  NODE is a node ID, a unique prefix of one (8+ characters) or an exact name
   privanet-admin nodes revoke NODE
   privanet-admin nodes rename NODE NAME... | nodes rename NODE --clear
+  privanet-admin nodes slots NODE SLOTS [--json]             request 1-64 slots; node saves it and gracefully restarts if needed
+  privanet-admin nodes preset NODE minimal|balanced|generous|maximum-idle [--json]
   privanet-admin application [NAME] [--services storage.chunk.v1] | revoke-application ID | rotate-application ID
   privanet-admin storage status [--json]                   storage control plane: nodes offering storage, chunk and transfer counts (aggregates only)
   privanet-admin storage probe NODE [--json]              explicit ticket-free pinned TLS handshake from this machine
@@ -72,7 +74,7 @@ function requestCode(parts) {
 const COMPLETION_TREE = {
   enrollment: { subs: ['create', 'list', 'revoke'], options: ['--expires', '--capabilities', '--label', '--all', '--json'] }, invite: { subs: ['create', 'list', 'revoke'], options: ['--expires', '--capabilities', '--label', '--all', '--json'] },
   requests: { subs: ['list'], options: ['--all', '--json'] }, approve: { options: ['--capabilities', '--label', '--json'] }, deny: { options: ['--json'] },
-  nodes: { subs: ['list', 'show', 'revoke', 'rename'], options: ['--json', '--clear'] }, application: { options: ['--services'] }, storage: { subs: ['status', 'rotate-key', 'probe'], options: ['--json'] }, 'revoke-application': {}, 'rotate-application': {}, ui: { options: ['--port'] }, completions: { subs: [...SHELLS] },
+  nodes: { subs: ['list', 'show', 'revoke', 'rename', 'slots', 'preset'], options: ['--json', '--clear'] }, application: { options: ['--services'] }, storage: { subs: ['status', 'rotate-key', 'probe'], options: ['--json'] }, 'revoke-application': {}, 'rotate-application': {}, ui: { options: ['--port'] }, completions: { subs: [...SHELLS] },
 };
 async function main() {
   // Completions need neither the Coordinator nor the administrator credential.
@@ -203,6 +205,16 @@ async function main() {
     if (!flags.clear && !name) throw new UsageError('give the new name, or --clear to remove it');
     await request('POST', `/v1/admin/nodes/${NodeIdSchema.parse(node.nodeId)}/rename`, AckSchema, { displayName: flags.clear ? null : DisplayNameSchema.parse(name) });
     if (flags.json) printJson({ ok: true }); else console.log(flags.clear ? `Node ${node.nodeId} no longer has a name.` : `Node ${node.nodeId} is now named "${name}".`);
+  } else if (operation === 'nodes' && subcommand === 'slots') {
+    const node = await resolveNode(rest[0]); const value = Number(rest[1]);
+    const input = NodeSlotsUpdateSchema.parse({ jobSlots: value });
+    const control = await request('POST', `/v1/admin/nodes/${NodeIdSchema.parse(node.nodeId)}/slots`, NodeControlSchema, input);
+    if (flags.json) printJson({ ok: true, nodeId: node.nodeId, control }); else console.log(`Requested ${input.jobSlots} slots for ${node.displayName ?? node.nodeId}; control revision ${control.revision}. The node reports when it applies it.`);
+  } else if (operation === 'nodes' && subcommand === 'preset') {
+    const node = await resolveNode(rest[0]);
+    const input = NodePresetUpdateSchema.parse({ preset: rest[1] });
+    const control = await request('POST', `/v1/admin/nodes/${NodeIdSchema.parse(node.nodeId)}/preset`, NodeControlSchema, input);
+    if (flags.json) printJson({ ok: true, nodeId: node.nodeId, control }); else console.log(`Requested preset ${input.preset} for ${node.displayName ?? node.nodeId}; control revision ${control.revision}.`);
   } else if (operation === 'application') {
     // An application that uses a fetch capability registers its identity here (product token for the User-Agent and robots.txt, plus an information URL); the Coordinator stamps it into leases.
     const identity = process.env.PRIVANET_FETCH_PRODUCT ? { fetchIdentity: { product: process.env.PRIVANET_FETCH_PRODUCT, infoUrl: process.env.PRIVANET_FETCH_INFO_URL ?? '' } } : {};

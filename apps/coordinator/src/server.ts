@@ -157,6 +157,14 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
           if (req.method === 'POST' && rename) {
             const id = NodeIdSchema.parse(rename[1]); core.renameNode(id, await body(req)); log({ event: 'node.renamed' }); send(res, 200, { ok: true }); return;
           }
+          const slots = /^\/v1\/admin\/nodes\/([^/]+)\/slots$/.exec(path);
+          if (req.method === 'POST' && slots) {
+            const id = NodeIdSchema.parse(slots[1]); send(res, 200, core.setNodeSlots(id, await body(req))); log({ event: 'node.slots_requested' }); return;
+          }
+          const preset = /^\/v1\/admin\/nodes\/([^/]+)\/preset$/.exec(path);
+          if (req.method === 'POST' && preset) {
+            const id = NodeIdSchema.parse(preset[1]); send(res, 200, core.setNodePreset(id, await body(req))); log({ event: 'node.preset_requested' }); return;
+          }
           if (req.method === 'GET' && path === '/v1/admin/storage') { send(res, 200, core.storage.summary(new URL(req.url ?? '/', 'http://localhost').searchParams.get('details') === '1')); return; }
           const probe = /^\/v1\/admin\/storage\/nodes\/(node_[a-f0-9]{64})\/endpoint$/.exec(path);
           if (req.method === 'GET' && probe) { send(res, 200, core.storage.probeTarget(probe[1]!)); return; }
@@ -180,6 +188,7 @@ export function createCoordinatorServer(core: Coordinator, options: ServerOption
         } else if (path.startsWith('/v1/node/')) {
           const node = core.authenticateNode(token);
           if (req.method === 'GET' && path === '/v1/node/self') { send(res, 200, core.nodeSelf(node)); return; }
+          if (req.method === 'GET' && path === '/v1/node/control') { send(res, 200, core.nodeControl(node)); return; }
           // Public verification keys for tickets, on an authenticated node route (the session response is parsed strictly by older nodes, so it cannot grow). An older Coordinator answers 404, which a node treats as "storage unavailable".
           if (req.method === 'GET' && path === '/v1/node/transfer-clock') { send(res, 200, core.storage.transferClock(core.store.coordinatorId)); return; }
           if (req.method === 'GET' && path === '/v1/node/transfer-keys') { send(res, 200, core.storage.transferKeys(core.store.coordinatorId)); return; }

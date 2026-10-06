@@ -2,7 +2,7 @@ import { createHmac, createPublicKey, randomBytes, randomUUID, timingSafeEqual, 
 import {
   AppCreateSchema, CompleteSchema, EnrollmentStartSchema, EnrollmentTokenRequestSchema,
   FailureSchema, GoodbyeSchema, HeartbeatSchema, InviteChallengeRequestSchema, InviteRequestSchema, JOB_TYPES, JoinApprovalSchema, JoinChallengeRequestSchema, JoinRequestSchema,
-  JoinStatusRequestSchema, JobSchema, NodeRenameSchema, PROTOCOL_VERSION, ProofSchema, ReleaseSchema, RenewSchema, SERVICE_VERSION, SubmitSchema, CODE_ALPHABET, CODE_LENGTH,
+  JoinStatusRequestSchema, JobSchema, NodeControlSchema, NodePresetUpdateSchema, NodeRenameSchema, NodeSlotsUpdateSchema, PROTOCOL_VERSION, ProofSchema, ReleaseSchema, RenewSchema, SERVICE_VERSION, SubmitSchema, CODE_ALPHABET, CODE_LENGTH,
   formatCode, normalizeCode, requiresClientIdentity,
 } from '@privanet/protocol';
 import type { Challenge, EnrollmentTokenInfo, EnrollmentTokenStatus, InviteInfo, InviteStatus, Job, JobError, JobType, JoinRequestInfo, Lease, NodeView, Session } from '@privanet/protocol';
@@ -353,7 +353,8 @@ export class Coordinator {
     return this.store.listNodes().map(node => ({ nodeId: node.nodeId, protocolVersion: node.protocolVersion,
       daemonVersion: node.daemonVersion, capabilities: node.capabilities, lastHeartbeatAt: node.lastHeartbeatAt,
       currentJobs: node.currentJobs, jobSlots: node.jobSlots, status: this.status(node),
-      ...(node.resources ? { resources: node.resources } : {}),
+      ...(node.resources ? { resources: node.resources } : {}), ...(node.control ? { control: node.control } : {}),
+      ...(node.appliedControlRevision !== undefined ? { appliedControlRevision: node.appliedControlRevision } : {}),
       ...(node.displayName ? { displayName: node.displayName } : {}), enrolledAt: node.enrolledAt, ...(node.revokedAt !== undefined ? { revokedAt: node.revokedAt } : {}) }));
   }
   /** Names a node for the administrator's lists (`null` removes the name). A renamed node keeps its identity and credentials; a revoked one can still be renamed. */
@@ -365,6 +366,19 @@ export class Coordinator {
       this.store.saveNode(request.displayName === null ? renamed : { ...renamed, displayName: request.displayName });
     });
   }
+  /** Desired owner control for an authenticated node. Older nodes never request this route. */
+  nodeControl(node: NodeRecord) { return NodeControlSchema.parse(node.control ?? { revision: 0 }); }
+  private updateNodeControl(id: string, change: { jobSlots?: number; preset?: 'minimal' | 'balanced' | 'generous' | 'maximum-idle' }) {
+    return this.store.transaction(() => {
+      const node = this.store.getNode(id); if (!node || node.revoked) reject(404, 'NOT_FOUND');
+      const previous = NodeControlSchema.parse(node.control ?? { revision: 0 });
+      if (previous.revision >= Number.MAX_SAFE_INTEGER) reject(409, 'CONTROL_REVISION_EXHAUSTED');
+      const control = NodeControlSchema.parse({ ...previous, ...change, revision: previous.revision + 1 });
+      this.store.saveNode({ ...node, control }); return control;
+    });
+  }
+  setNodeSlots(id: string, input: unknown) { const request = NodeSlotsUpdateSchema.parse(input); return this.updateNodeControl(id, request); }
+  setNodePreset(id: string, input: unknown) { const request = NodePresetUpdateSchema.parse(input); return this.updateNodeControl(id, request); }
   /** What a node may learn about itself with its own session. */
   nodeSelf(node: NodeRecord) {
     return { nodeId: node.nodeId, ...(node.displayName ? { displayName: node.displayName } : {}), enrolledAt: node.enrolledAt, capabilities: node.capabilities,

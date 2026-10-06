@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const PROTOCOL_VERSION = 1 as const;
-export const SERVICE_VERSION = '0.4.0-alpha.4';
+export const SERVICE_VERSION = '0.4.0-alpha.5';
 export const MAX_BODY_BYTES = 32 * 1024;
 export const ProtocolSchema = z.literal(PROTOCOL_VERSION);
 export const IdSchema = z.uuid();
@@ -318,10 +318,21 @@ export const LifecycleSchema = z.enum(['ACTIVE', 'DRAINING']);
 // Additive within protocol 1: both fields are optional, so nodes that predate them keep working.
 /** Most concurrent jobs one node may run. A node advertises how many it will run; owner limits still bound them (the scheduler reserves the estimates of running jobs against the reported budget). */
 export const MAX_JOB_SLOTS = 64;
+/** Friendly owner resource presets that may be requested through the coordinator control plane. */
+export const NodePresetSchema = z.enum(['minimal', 'balanced', 'generous', 'maximum-idle']);
+export const NodeControlSchema = z.strictObject({
+  revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  jobSlots: z.number().int().min(1).max(MAX_JOB_SLOTS).optional(),
+  preset: NodePresetSchema.optional(),
+});
+export const NodeSlotsUpdateSchema = z.strictObject({ jobSlots: z.number().int().min(1).max(MAX_JOB_SLOTS) });
+export const NodePresetUpdateSchema = z.strictObject({ preset: NodePresetSchema });
 export const HeartbeatSchema = z.strictObject({
   protocolVersion: ProtocolSchema, daemonVersion: VersionSchema, capabilities: CapabilitiesSchema,
   jobSlots: z.number().int().min(1).max(MAX_JOB_SLOTS), currentJobs: z.number().int().min(0).max(MAX_JOB_SLOTS),
   lifecycle: LifecycleSchema.optional(), resources: ResourceReportSchema.optional(),
+  /** Additive within protocol 1 (0.4.0-alpha.5): last coordinator control revision this node successfully applied. */
+  appliedControlRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   /** Additive within protocol 1 (0.4.0-alpha.2): the services this node offers right now. Absent means none. */
   services: ServicesAdvertisementSchema.optional(),
 });
@@ -339,6 +350,8 @@ export const NodeViewSchema = z.strictObject({
   nodeId: NodeIdSchema, capabilities: CapabilitiesSchema, daemonVersion: VersionSchema,
   protocolVersion: ProtocolSchema, lastHeartbeatAt: TimeSchema.nullable(), status: NodeStatusSchema,
   currentJobs: z.number().int().min(0).max(MAX_JOB_SLOTS), jobSlots: z.number().int().min(1).max(MAX_JOB_SLOTS), resources: ResourceReportSchema.optional(),
+  /** Additive within protocol 1 (0.4.0-alpha.5): desired owner control plus the revision actually reported by the node. */
+  control: NodeControlSchema.optional(), appliedControlRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   // Additive within protocol 1 (Remote Node Onboarding): absent on a record written before it, and from an older Coordinator.
   displayName: DisplayNameSchema.optional(), enrolledAt: TimeSchema.optional(), revokedAt: TimeSchema.optional(),
 });
@@ -381,6 +394,8 @@ export const CompleteSchema = z.strictObject({ leaseId: IdSchema, result: z.unkn
 export const FailureSchema = z.strictObject({ leaseId: IdSchema, error: JobErrorSchema });
 export const CapabilitiesResponseSchema = z.strictObject({ capabilities: z.array(z.strictObject({ capability: JobTypeSchema, onlineNodes: z.number().int().nonnegative() })).max(JOB_TYPE_IDS.length) });
 export type NodeView = z.infer<typeof NodeViewSchema>;
+export type NodeControl = z.infer<typeof NodeControlSchema>;
+export type NodePreset = z.infer<typeof NodePresetSchema>;
 export type EnrollmentTokenInfo = z.infer<typeof EnrollmentTokenInfoSchema>;
 export type EnrollmentTokenStatus = z.infer<typeof EnrollmentTokenStatusSchema>;
 export type InviteInfo = z.infer<typeof InviteInfoSchema>;
