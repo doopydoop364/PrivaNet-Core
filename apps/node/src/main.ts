@@ -10,7 +10,7 @@ import { defaultHandlers } from './handlers.js';
 import { createFetchHandler } from './fetch/handler.js';
 import { BindingChangedError } from './identity.js';
 import { ZodError } from 'zod';
-import type { NodeControl, ServicesAdvertisement } from '@privanet/protocol';
+import type { ServicesAdvertisement } from '@privanet/protocol';
 import { readFileSync } from 'node:fs';
 import { runEnroll, runJoin } from './enroll-cli.js';
 import { runDoctor } from './doctor.js';
@@ -76,19 +76,12 @@ async function main() {
   const slots = jobSlotsChoice(config.jobSlots, process.env.PRIVANODE_JOB_SLOTS !== undefined, earlyLocal.kind === 'error' ? undefined : earlyLocal.state.jobSlots);
   // The storage offer is read at every heartbeat from the store itself (declared before `storage` so the node can ask it; it is only called once the node runs).
   const offer: { current: () => ServicesAdvertisement | undefined } = { current: () => undefined };
-  let remoteControlHandler: ((desired: NodeControl) => Promise<void>) | undefined;
-  let requestRestart = () => undefined;
-  const node = new PrivaNode({ ...config, jobSlots: slots.value, handlers, engine, transfer, checkpoints, log, services: () => offer.current(), remoteControl: desired => remoteControlHandler ? remoteControlHandler(desired) : Promise.resolve() });
+  const node = new PrivaNode({ ...config, jobSlots: slots.value, handlers, engine, transfer, checkpoints, log, services: () => offer.current() });
   const history = new ResourceHistory(config.stateDir);
   // Capacity and the direct TLS listener are separate explicit opt-ins, sharing one ChunkStore.
   const storage = new StorageService({ stateDir: config.stateDir, policy: () => control.view.policy ?? resolved.policy, inputs: { draining: () => node.snapshot.draining, engine }, log, direct: { node, meter: transfer, env: process.env } });
   offer.current = () => { const advertisement = storage.advertisement(); return advertisement ? { 'storage.chunk.v1': advertisement } : undefined; };
   const control = new LocalControl({ stateDir: config.stateDir, envPolicyFile: process.env.PRIVANODE_POLICY_FILE, node, engine, transfer, history, log, jobSlots: { running: slots.value, fromEnvironment: slots.source === 'environment' }, transferEnv: process.env, policyLocked: process.env.PRIVANODE_POLICY_LOCKED === 'true', onPolicy: policy => { void storage.apply(policy).catch(() => log({ event: "storage.unavailable", code: "TRANSFER_CONFIG_INVALID" })); }, onChange: () => { void publish(); } });
-  remoteControlHandler = async desired => {
-    if (desired.preset !== undefined && control.view.preset !== desired.preset) await control.choosePreset(desired.preset, { jobSlots: slots.value, capabilities: config.capabilities });
-    if (desired.jobSlots !== undefined && control.view.jobSlots.saved !== desired.jobSlots) await control.setJobSlots(desired.jobSlots);
-    if (control.view.restartRequired.includes('job slots')) queueMicrotask(() => requestRestart());
-  };
   const runtimePolicy = () => ({ policy: control.view.policy ?? resolved.policy, source: control.view.source ?? resolved.source, ...(control.view.policyProblem ? { problem: control.view.policyProblem } : {}) });
   // The snapshot `privanet-node status` reads: private, replaced atomically, no secrets (see status-document.ts).
   const publish = async () => {
@@ -106,9 +99,8 @@ async function main() {
     if (abort.signal.aborted) { node.abortNow(); return; }
     log({ event: 'node.draining' }); node.drain(); abort.abort(); forced = setTimeout(() => node.abortNow(), drainTimeoutMs); forced.unref();
   };
-  requestRestart = () => { restartRequested = true; stop(); };
   /** The only privileged actions the local panel may trigger (named operations, never commands). */
-  const actions = { drainAndStop: () => stop(), restart: () => requestRestart() };
+  const actions = { drainAndStop: () => stop(), restart: () => { restartRequested = true; stop(); } };
   // The local control panel: loopback only, signed in with the token in the state directory (see panel.ts). A port that is taken never stops the node.
   let panel: PanelHandle | undefined;
   if (process.env.PRIVANODE_PANEL !== 'off') {

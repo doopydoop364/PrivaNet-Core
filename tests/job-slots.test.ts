@@ -7,8 +7,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PrivaNode } from '@privanet/node/daemon';
-import { Coordinator } from '@privanet/coordinator/service';
-import { fixture } from './helpers.js';
 import { ResourceEngine } from '@privanet/node/resource-engine';
 import { defaultResourcePolicy } from '@privanet/node/resource-policy';
 import { LocalControl } from '@privanet/node/local-control';
@@ -68,16 +66,4 @@ test('the real node starts with the saved job slots, and PRIVANODE_JOB_SLOTS ove
   };
   assert.equal(await start({}), 3, 'the saved choice applies at start');
   assert.equal(await start({ PRIVANODE_JOB_SLOTS: '2' }), 2, 'an explicit environment setting takes priority');
-});
-
-
-test('coordinator node control revisions are persisted, typed and exposed to the node', t => {
-  const f = fixture(); t.after(() => f.store.close()); const enrolled = f.enroll();
-  const id = enrolled.session.nodeId;
-  assert.deepEqual(f.core.nodeControl(f.store.getNode(id)!), { revision: 0 });
-  assert.deepEqual(f.core.setNodeSlots(id, { jobSlots: 6 }), { revision: 1, jobSlots: 6 });
-  assert.deepEqual(f.core.setNodePreset(id, { preset: 'generous' }), { revision: 2, jobSlots: 6, preset: 'generous' });
-  const view = f.core.listNodes()[0]; assert.equal(view?.control?.revision, 2); assert.equal(view?.control?.jobSlots, 6); assert.equal(view?.control?.preset, 'generous');
-  assert.throws(() => f.core.setNodeSlots(id, { jobSlots: 65 }));
-  assert.throws(() => f.core.setNodePreset(id, { preset: 'root' }));
 });
