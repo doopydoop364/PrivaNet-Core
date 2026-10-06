@@ -5,6 +5,7 @@ import os
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DASHBOARD_URL = os.environ.get(
@@ -45,6 +46,84 @@ def number(value):
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def core_version():
+    """Deployed Core release: the package.json beside bin/ in the release the /opt/privanet link points at (or None)."""
+    try:
+        value = json.loads((Path(__file__).resolve().parent.parent / "package.json").read_text()).get("version")
+        return value if isinstance(value, str) and len(value) <= 64 else None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def ratio(part, whole):
+    return part / whole if whole else None
+
+
+def by_queue(rows):
+    return {str(row.get("queue")): row for row in rows or [] if isinstance(row, dict)}
+
+
+def build_summary(generated_at, source_status, status, operational, concentration):
+    """Compact, monitoring-oriented view derived ONLY from fields PrivaSearch already maintains (O(1) counters or its
+    cached /status sections). Nothing is recounted here; a missing source section yields null, never a guess."""
+    source_status = source_status or {}
+    operational = operational if isinstance(operational, dict) else None
+    concentration = concentration if isinstance(concentration, dict) else None
+    source_ms = source_status.get("generatedAtMs")
+    summary = {
+        "generated_at": generated_at,
+        "source_generated_at_ms": source_ms,
+        "source_age_sec": round((datetime.now(timezone.utc).timestamp() * 1000 - source_ms) / 1000, 1) if isinstance(source_ms, (int, float)) else None,
+        "versions": {"core": core_version(), "privasearch": source_status.get("version"), "schema": source_status.get("schemaVersion")},
+        "totals": {key: status[key] for key in ("pending", "done", "failed", "in_flight", "blocked")},
+        "documents": {"total": status["documents"], "indexed": status["indexed"], "duplicates": status["duplicates"], "duplicate_rate": ratio(status["duplicates"], status["documents"])},
+        "queues": None, "throughput": None, "failures": None, "retries": None, "zero_yield": None,
+        "suppressed": None, "concentration": None, "search_quality": None,
+    }
+    if operational is None:
+        return summary
+    queues = by_queue(operational.get("queues"))
+    summary["queues"] = {name: {
+        "pending": number(row.get("pending")), "in_flight": number(row.get("inFlight")), "failed": number(row.get("failed")),
+        "url_due": number(row.get("urlDue")), "retrying": number(row.get("retrying")), "oldest_pending_ms": number(row.get("oldestPendingMs")),
+    } for name, row in queues.items()}
+    rows = (operational.get("throughput") or {}).get("rows") or []
+    summary["throughput"] = {
+        "window": (operational.get("throughput") or {}).get("window"),
+        "fetched": sum(number(row.get("fetched")) for row in rows), "answers": sum(number(row.get("answers")) for row in rows),
+        "fetched_per_minute": sum(float(row.get("fetchedPerMinute") or 0) for row in rows),
+        "by_queue": {str(row.get("queue")): {"fetched": number(row.get("fetched")), "answers": number(row.get("answers"))} for row in rows},
+    }
+    outcomes, errors = {}, {}
+    for row in operational.get("outcomes") or []:
+        n = number(row.get("n"))
+        outcomes[str(row.get("outcome"))] = outcomes.get(str(row.get("outcome")), 0) + n
+        if row.get("error"):
+            key = "%s/%s" % (row.get("outcome"), row.get("error"))
+            errors[key] = errors.get(key, 0) + n
+    answered = sum(outcomes.values())
+    summary["failures"] = {"since_ms": operational.get("metricsSinceMs"), "answers": answered, "fetched": outcomes.get("FETCHED", 0), "fetched_rate": ratio(outcomes.get("FETCHED", 0), answered),
+                           "by_outcome": outcomes, "by_error": errors}
+    summary["retries"] = {key: sum(number(row.get(field)) for row in queues.values()) for key, field in (
+        ("pending_retrying", "retrying"), ("under_1h", "retryUnderHour"), ("1h_to_1d", "retryHourToDay"), ("over_1d", "retryOverDay"), ("age_unknown", "retryAgeUnknown"))}
+    zero = operational.get("zeroYieldTotals") or {}
+    low = operational.get("lowYieldTotals") or {}
+    summary["zero_yield"] = {"domains": number(zero.get("domains")), "pending": number(zero.get("pending")), "pending_share": ratio(number(zero.get("pending")), status["pending"]),
+                             "low_yield_domains": number(low.get("domains")), "low_yield_pending": number(low.get("pending")), "low_yield_pending_share": ratio(number(low.get("pending")), status["pending"])}
+    suppressed = operational.get("suppressed")
+    summary["suppressed"] = {"cooldown_domains": number(suppressed.get("cooldownDomains")), "cooldown_pending": number(suppressed.get("cooldownPending")), "backed_off_hosts": number(suppressed.get("backedOffHosts"))} if isinstance(suppressed, dict) else None
+    quality = operational.get("quality") or {}
+    fetched = number(quality.get("fetched"))
+    summary["search_quality"] = {"sampled_fetches": fetched, "useful": number(quality.get("useful")), "useful_rate": ratio(number(quality.get("useful")), fetched),
+                                 "duplicate_rate": ratio(number(quality.get("duplicates")), fetched), "low_value_rate": ratio(number(quality.get("lowValue")), fetched), "error_rate": ratio(number(quality.get("errors")), fetched),
+                                 "note": "Useful yield is an indexing proxy, not judged search relevance."}
+    if concentration is not None:
+        pending, families = concentration.get("pending") or {}, (concentration.get("families") or {}).get("pending") or {}
+        summary["concentration"] = {"pending_top1": pending.get("top1"), "pending_top5": pending.get("top5"), "effective_domains": pending.get("effectiveDomains"),
+                                    "family_top1": families.get("top1"), "effective_families": families.get("effectiveDomains"), "warnings": concentration.get("warnings") or []}
+    return summary
 
 
 def build_roundup():
@@ -116,9 +195,11 @@ def build_roundup():
     if domains and sampled_urls:
         top_host_share = domains[0]["frontier_total"] / sampled_urls
 
+    generated_at = now()
     return {
         "schema_version": 1,
-        "generated_at": now(),
+        "generated_at": generated_at,
+        "summary": build_summary(generated_at, source_status, status, frontier.get("operational"), frontier.get("concentration")),
         "status": status,
         "health": health,
         "quality": {

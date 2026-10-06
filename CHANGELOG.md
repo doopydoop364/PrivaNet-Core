@@ -7,6 +7,12 @@ Protocol compatibility notes are in [docs/protocol.md](docs/protocol.md).
 
 ## [Unreleased]
 
+### Added
+- Roundup API `summary` section: compact monitoring view (generated_at, deployed Core and PrivaSearch versions, schema, totals, failure/retry distribution, zero-yield and suppressed counts, concentration, quality indicators) derived only from forwarded PrivaSearch fields; null for a legacy source.
+- `docs/PRODUCTION_AUDIT.md`: production-validation runbook and the limits of the code-level audit.
+
+## [Unreleased]
+
 ## [0.4.0-alpha.4] - 2026-10-05
 
 Phase 4 storage hardening and operator experience; protocol remains 1. Release candidate, not published by this implementation task. Includes the alpha.3.1 crawler diagnostics and roundup forwarding fixes below.
